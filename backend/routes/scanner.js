@@ -1,0 +1,401 @@
+import { Router } from 'express';
+import { fetchFullBatch, fetchFull, fetchWeekly } from '../lib/yahoo.js';
+import { enrichTicker } from '../lib/news.js';
+import { fetchNextEarnings, evaluateEarningsRisk } from '../lib/earnings.js';
+import { reviewTrade } from '../utils/reviewer.js';
+import {
+  analyzeSignals, generateTradeSetup, calculateSMA,
+  TIME_SPANS, getTimespanKey, getExitWindow, generateAnalystNotes
+} from '../utils/signals.js';
+import { getEntryTiming } from '../utils/market.js';
+
+// Determine broad market regime from SPY's trend
+async function getMarketRegime() {
+  try {
+    const spy = await fetchFull('SPY', '6mo');
+    const closes = spy.candles.map(c => c.close);
+    const price  = spy.quote.price;
+    const sma50  = calculateSMA(closes, 50);
+    const sma200 = calculateSMA(closes, 200);
+    if (sma50 && sma200) {
+      if (price > sma50 && sma50 > sma200) return 'BULLISH';
+      if (price < sma50 && sma50 < sma200) return 'BEARISH';
+    }
+    return 'NEUTRAL';
+  } catch { return 'NEUTRAL'; }
+}
+
+// Fetch current VIX value for market volatility context
+async function getVIX() {
+  try {
+    const { quote } = await fetchFull('^VIX', '1d');
+    return quote.price;
+  } catch { return null; }
+}
+
+// Determine weekly trend for a ticker — UP / DOWN / NEUTRAL
+async function getWeeklyTrend(ticker) {
+  try {
+    const candles = await fetchWeekly(ticker);
+    if (candles.length < 21) return 'NEUTRAL';
+    const closes = candles.map(c => c.close);
+    const price = closes[closes.length - 1];
+    const sma20w = calculateSMA(closes, 20);  // ~5 months
+    if (!sma20w) return 'NEUTRAL';
+    // Also check if SMA is rising or falling
+    const closesEarlier = closes.slice(0, -4);
+    const sma20wEarlier = calculateSMA(closesEarlier, 20);
+    if (!sma20wEarlier) return 'NEUTRAL';
+    const slopeUp = sma20w > sma20wEarlier;
+    if (price > sma20w && slopeUp) return 'UP';
+    if (price < sma20w && !slopeUp) return 'DOWN';
+    return 'NEUTRAL';
+  } catch { return 'NEUTRAL'; }
+}
+
+const router = Router();
+
+const WATCHLIST = [
+  // Mega cap tech (highest liquidity, cleanest charts)
+  'AAPL','MSFT','NVDA','META','GOOGL','AMZN','TSLA',
+  // Semis (volatile, swing-friendly)
+  'AMD','INTC','QCOM','MU','SMCI','ARM','AVGO','TSM','LRCX','AMAT','KLAC',
+  // Software / cloud
+  'ORCL','CRM','ADBE','NOW','SNOW','CRWD','PANW','DDOG','NET','ZS',
+  // Finance
+  'JPM','GS','BAC','MS','WFC','C','V','MA','BX',
+  // Energy
+  'XOM','CVX','OXY','HAL','SLB','EOG',
+  // Healthcare
+  'LLY','UNH','JNJ','MRK','PFE','ABBV','MRNA','AMGN',
+  // Consumer
+  'WMT','COST','NKE','SBUX','MCD','DIS','NFLX','HD','LOW',
+  // Industrials
+  'BA','CAT','GE','RTX','LMT','DE',
+  // Crypto / fintech / momentum
+  'MSTR','COIN','MARA','RIOT','HOOD','SOFI','PLTR','RKLB',
+  // Index & sector ETFs
+  'SPY','QQQ','IWM','DIA','XLF','XLE','XLK','XLV','XLI','XBI',
+  // Commodity ETFs
+  'GLD','SLV','USO','GDX',
+  // Inverse hedges
+  'SQQQ','SOXS'
+];
+
+const SECTOR_MAP = {
+  AAPL:'Technology', MSFT:'Technology', NVDA:'Technology', META:'Comm. Services',
+  GOOGL:'Comm. Services', AMZN:'Cons. Discretionary', TSLA:'Cons. Discretionary',
+  AMD:'Technology', INTC:'Technology', QCOM:'Technology', MU:'Technology',
+  SMCI:'Technology', ARM:'Technology', AVGO:'Technology',
+  JPM:'Financials', GS:'Financials', BAC:'Financials', MS:'Financials', WFC:'Financials',
+  XOM:'Energy', CVX:'Energy', OXY:'Energy', HAL:'Energy',
+  LLY:'Healthcare', UNH:'Healthcare', MRNA:'Healthcare', PFE:'Healthcare', ABBV:'Healthcare',
+  WMT:'Cons. Staples', COST:'Cons. Staples', NKE:'Cons. Discretionary', SBUX:'Cons. Discretionary',
+  SPY:'ETF', QQQ:'ETF', IWM:'ETF',
+  MSTR:'Technology', COIN:'Financials', RKLB:'Industrials', PLTR:'Technology', HOOD:'Financials',
+  GLD:'ETF / Commodities', SLV:'ETF / Commodities', USO:'ETF / Energy', GDX:'ETF / Mining'
+};
+
+// Adapt raw Yahoo data to the shape analyzeSignals expects
+function adaptQuote(raw) {
+  return {
+    regularMarketPrice:      raw.price,
+    regularMarketChange:     raw.change,
+    regularMarketChangePercent: raw.changePercent,
+    regularMarketVolume:     raw.volume,
+    averageDailyVolume3Month: raw.averageDailyVolume3Month,
+    fiftyTwoWeekHigh:        raw.fiftyTwoWeekHigh,
+    fiftyTwoWeekLow:         raw.fiftyTwoWeekLow,
+    fullExchangeName:        raw.exchangeName,
+    longName:                raw.longName,
+    marketState:             raw.marketState,
+    sector:                  null
+  };
+}
+
+function buildCard(ticker, raw, quote, setup, signalData, historical) {
+  const price = raw.price;
+  const { direction, entry, entryLow, entryHigh, tp, sl, rrRatio, probability, confirming, confidence } = setup;
+  const tpPct = parseFloat(Math.abs((tp - entry) / entry * 100).toFixed(1));
+  const slPct = parseFloat(Math.abs((sl - entry) / entry * 100).toFixed(1));
+  const tsKey = getTimespanKey(setup.atr, price);
+
+  // ── Entry validity status ───────────────────────────────────────────
+  // For LONG: zone is between entryLow and entryHigh; bad if price >> entryHigh
+  // For SHORT: zone is between entryLow and entryHigh; bad if price << entryLow
+  let entryStatus = 'IN_ZONE';
+  let entryStatusText = 'Price is in the entry zone — ready to enter';
+  if (direction === 'LONG') {
+    if (price > entryHigh * 1.015) {
+      entryStatus = 'MISSED';
+      entryStatusText = `Price drifted ${((price - entryHigh) / entryHigh * 100).toFixed(1)}% above zone — wait for pullback`;
+    } else if (price > entryHigh) {
+      entryStatus = 'ABOVE_ZONE';
+      entryStatusText = 'Just above zone — wait for small dip';
+    } else if (price < entryLow * 0.985) {
+      entryStatus = 'BELOW_ZONE';
+      entryStatusText = `Price ${((entryLow - price) / entryLow * 100).toFixed(1)}% below zone — even better entry available`;
+    }
+  } else {
+    if (price < entryLow * 0.985) {
+      entryStatus = 'MISSED';
+      entryStatusText = `Price drifted ${((entryLow - price) / entryLow * 100).toFixed(1)}% below zone — wait for bounce`;
+    } else if (price < entryLow) {
+      entryStatus = 'BELOW_ZONE';
+      entryStatusText = 'Just below zone — wait for small bounce';
+    } else if (price > entryHigh * 1.015) {
+      entryStatus = 'ABOVE_ZONE';
+      entryStatusText = `Price ${((price - entryHigh) / entryHigh * 100).toFixed(1)}% above zone — even better short entry available`;
+    }
+  }
+
+  // ── Volume context ──────────────────────────────────────────────────
+  const volRatio = raw.averageDailyVolume3Month && raw.volume
+    ? raw.volume / raw.averageDailyVolume3Month
+    : null;
+
+  // Sparkline = last 20 daily closes
+  const sparkline = (historical || []).slice(-20).map(c => c.close);
+
+  return {
+    ticker,
+    name:        raw.longName || ticker,
+    exchange:    raw.exchangeName || 'NYSE',
+    sector:      SECTOR_MAP[ticker] || 'N/A',
+    direction, probability, confirming, confidence,
+    price, entry, entryLow, entryHigh, entryStatus, entryStatusText,
+    tp, tpPct, sl, slPct, rrRatio, volRatio,
+    timeSpan:    TIME_SPANS[tsKey].label,
+    exitWindow:  getExitWindow(tsKey),
+    signals:     setup.signals,
+    warnings:    setup.warnings,
+    analystNotes: generateAnalystNotes(direction, ticker, setup.signals, signalData.rsi, setup.atr, price),
+    rsi:         signalData.rsi ? Math.round(signalData.rsi) : null,
+    changePercent: raw.changePercent,
+    sparkline,
+    isTopPick:   false, // set later
+    hardCoverDate: null,
+    timestamp:   new Date().toISOString()
+  };
+}
+
+function sortTrades(arr) {
+  return arr.sort((a, b) => {
+    // 1. HIGH probability first
+    if (a.probability !== b.probability) return a.probability === 'HIGH' ? -1 : 1;
+    // 2. Higher confidence score
+    if (b.confidence !== a.confidence) return b.confidence - a.confidence;
+    // 3. Better R:R as final tiebreaker
+    return b.rrRatio - a.rrRatio;
+  });
+}
+
+router.get('/scan', async (req, res) => {
+  try {
+    const tickerList = req.query.tickers
+      ? req.query.tickers.split(',').map(t => t.trim().toUpperCase())
+      : WATCHLIST.slice(0, 40); // scan top 40 — uses cache so subsequent runs are fast
+
+    // Fetch macro context first
+    const [marketRegime, vix] = await Promise.all([getMarketRegime(), getVIX()]);
+
+    // Single call per ticker: quote + 3mo candles
+    const fullMap = await fetchFullBatch(tickerList);
+
+    const trades = { enterNow: [], waitForBounce: [], carryForward: [] };
+
+    for (const ticker of tickerList) {
+      const entry = fullMap[ticker];
+      if (!entry || entry.error) continue;
+
+      const raw        = entry.quote;
+      const historical = entry.candles;
+      if (!raw.price || historical.length < 30) continue;  // Need 30+ for 200 SMA
+
+      const quote = adaptQuote(raw);
+      const signalData = analyzeSignals(quote, historical, marketRegime);
+      const setup      = generateTradeSetup(quote, historical, signalData);
+      if (!setup) continue;
+
+      // Regime filter is now a confidence-boost signal (added in analyzeSignals),
+      // not a hard reject — we still allow counter-trend setups if they are strong.
+
+      const card = buildCard(ticker, raw, quote, setup, signalData, historical);
+      // Stash for the reviewer pass (stripped before sending to client)
+      card._historical = historical;
+      card._signalData = signalData;
+      const chg  = raw.changePercent || 0;
+      const hasGap = setup.warnings.some(w => w.text?.includes('Gap-up'));
+
+      if (hasGap || (chg < -4 && setup.direction === 'SHORT')) {
+        trades.waitForBounce.push(card);
+      } else if (Math.abs(chg) > 2 && setup.probability === 'HIGH') {
+        trades.enterNow.push(card);
+      } else {
+        trades.carryForward.push(card);
+      }
+    }
+
+    trades.enterNow      = sortTrades(trades.enterNow).slice(0, 6);
+    trades.waitForBounce = sortTrades(trades.waitForBounce).slice(0, 4);
+    trades.carryForward  = sortTrades(trades.carryForward).slice(0, 6);
+
+    // ── Enrich ONLY the most important cards (saves API calls) ─────────────
+    const priorityCards = [
+      ...trades.enterNow,
+      ...trades.waitForBounce.slice(0, 2),
+      ...trades.carryForward.slice(0, 2)
+    ];
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+    for (let i = 0; i < priorityCards.length; i++) {
+      const card = priorityCards[i];
+      try {
+        const [enrichment, earningsData] = await Promise.all([
+          enrichTicker(card.ticker),
+          fetchNextEarnings(card.ticker)
+        ]);
+        card.news      = enrichment.news || [];
+        card.sentiment = enrichment.sentiment || null;
+        card.earnings  = evaluateEarningsRisk(earningsData);
+      } catch {
+        card.news = []; card.sentiment = null; card.earnings = null;
+      }
+      if (i < priorityCards.length - 1) await sleep(250);
+    }
+    // Cards that didn't get enriched get empty defaults
+    [...trades.enterNow, ...trades.waitForBounce, ...trades.carryForward].forEach(c => {
+      if (c.news === undefined) c.news = [];
+      if (c.sentiment === undefined) c.sentiment = null;
+    });
+
+    // ── Fetch weekly trends in parallel for the surviving candidates ───
+    const reviewCandidates = [...trades.enterNow, ...trades.waitForBounce, ...trades.carryForward];
+    const weeklyTrendMap = {};
+    // Limit to top 12 to control rate-limit
+    const topForWeekly = reviewCandidates.slice(0, 12);
+    await Promise.allSettled(topForWeekly.map(async (c) => {
+      weeklyTrendMap[c.ticker] = await getWeeklyTrend(c.ticker);
+    }));
+
+    // ── REVIEWER PASS: stress-test each card, drop REJECTs ─────────────
+    const filterCategory = (cards) => {
+      const kept = [];
+      for (const card of cards) {
+        const review = reviewTrade(card, card._historical, card._signalData, {
+          vix,
+          weeklyTrend: weeklyTrendMap[card.ticker] || null
+        });
+        // Strip internal fields before sending
+        delete card._historical;
+        delete card._signalData;
+        card.review = review;
+        card.weeklyTrend = weeklyTrendMap[card.ticker] || null;
+
+        if (review.verdict === 'REJECT') continue;  // Drop bad trades entirely
+        kept.push(card);
+      }
+      return kept;
+    };
+    trades.enterNow      = filterCategory(trades.enterNow);
+    trades.waitForBounce = filterCategory(trades.waitForBounce);
+    trades.carryForward  = filterCategory(trades.carryForward);
+
+    // ── STRICTER ENTER-NOW GATE ────────────────────────────────────────
+    // Only PASS-verdict, HIGH-prob trades stay in ENTER NOW.
+    // Anything else gets demoted to CARRY FORWARD.
+    const demoted = [];
+    trades.enterNow = trades.enterNow.filter(card => {
+      const isEliteSetup = card.probability === 'HIGH' &&
+                           card.review?.verdict === 'PASS' &&
+                           card.rrRatio >= 2.0;
+      if (!isEliteSetup) {
+        demoted.push(card);
+        return false;
+      }
+      return true;
+    });
+    trades.carryForward = [...trades.carryForward, ...demoted]
+      .sort((a, b) => (b.confidence || 0) - (a.confidence || 0))
+      .slice(0, 6);
+
+    // Build the entry timing context once
+    const entryTiming = getEntryTiming();
+
+    // Mark the single best trade across all categories as TOP PICK
+    // Only consider PASS verdict trades for TOP PICK (no caution flags)
+    const allCards = [...trades.enterNow, ...trades.waitForBounce, ...trades.carryForward];
+    const passOnly = allCards.filter(c => c.review?.verdict === 'PASS');
+    const pool = passOnly.length ? passOnly : allCards;
+    if (pool.length) {
+      const top = pool.reduce((best, c) =>
+        (!best || c.confidence > best.confidence ||
+         (c.confidence === best.confidence && c.rrRatio > best.rrRatio)) ? c : best, null);
+      if (top) top.isTopPick = true;
+    }
+
+    res.json({
+      trades,
+      topPick: allCards.find(c => c.isTopPick) || null,
+      marketRegime,
+      vix,
+      vixRegime: vix == null ? null : vix > 30 ? 'EXTREME' : vix > 22 ? 'ELEVATED' : vix > 15 ? 'NORMAL' : 'LOW',
+      entryTiming,
+      scannedCount: tickerList.length,
+      passedFilter: allCards.length,
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Scanner error:', err);
+    res.status(500).json({ error: 'Scan failed', details: err.message });
+  }
+});
+
+router.get('/movers', async (req, res) => {
+  try {
+    const { fetchBatch } = await import('../lib/yahoo.js');
+    const quotesMap = await fetchBatch(WATCHLIST.slice(0, 20));
+    const quotes = Object.values(quotesMap)
+      .filter(q => !q.error && q.price)
+      .map(q => ({ ticker: q.symbol || q.ticker, price: q.price, change: q.change, changePercent: q.changePercent, name: q.longName }));
+    const sorted = [...quotes].sort((a, b) => b.changePercent - a.changePercent);
+    res.json({ gainers: sorted.slice(0, 5), losers: sorted.slice(-5).reverse(), timestamp: new Date().toISOString() });
+  } catch (err) {
+    res.status(500).json({ error: 'Movers fetch failed', details: err.message });
+  }
+});
+
+router.get('/watchlist', (req, res) => res.json({ tickers: WATCHLIST }));
+
+// GET /api/scanner/extended-movers — pre-market / post-market biggest moves
+router.get('/extended-movers', async (req, res) => {
+  try {
+    const { fetchBatch } = await import('../lib/yahoo.js');
+    const quotesMap = await fetchBatch(WATCHLIST.slice(0, 40));
+
+    const movers = [];
+    for (const [ticker, q] of Object.entries(quotesMap)) {
+      if (q.error) continue;
+      const regClose = q.price;
+      const pre  = q.preMarketPrice;
+      const post = q.postMarketPrice;
+      if (pre && regClose) {
+        const pct = ((pre - regClose) / regClose) * 100;
+        if (Math.abs(pct) >= 0.8) movers.push({ ticker, name: q.longName, session: 'pre',  price: pre,  regClose, pct });
+      } else if (post && regClose) {
+        const pct = ((post - regClose) / regClose) * 100;
+        if (Math.abs(pct) >= 0.8) movers.push({ ticker, name: q.longName, session: 'post', price: post, regClose, pct });
+      }
+    }
+
+    movers.sort((a, b) => Math.abs(b.pct) - Math.abs(a.pct));
+    res.json({
+      gainers: movers.filter(m => m.pct > 0).slice(0, 5),
+      losers:  movers.filter(m => m.pct < 0).slice(0, 5),
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Extended movers fetch failed', details: err.message });
+  }
+});
+
+export default router;

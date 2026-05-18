@@ -1,0 +1,92 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  background-color: #080808;
+  color: #e8e8e8;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, monospace;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* Scrollbars */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: #0f0f0f; }
+::-webkit-scrollbar-thumb { background: #2a2a2a; border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: #3a3a3a; }
+
+/* Ticker tape */
+.ticker-wrap { overflow: hidden; white-space: nowrap; }
+.ticker-inner { display: inline-flex; animation: ticker 90s linear infinite; }
+.ticker-inner:hover { animation-play-state: paused; }
+
+@keyframes ticker {
+  0%   { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+
+/* Live pulse dot */
+@keyframes live-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); box-shadow: 0 0 0 0 rgba(0,255,136,0.6); }
+  50%       { opacity: 0.7; transform: scale(0.85); box-shadow: 0 0 0 4px rgba(0,255,136,0); }
+}
+.live-dot { animation: live-pulse 1.8s ease-in-out infinite; }
+
+/* Warning pulse */
+@keyframes warn-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255,51,85,0.5); }
+  50%       { box-shadow: 0 0 0 6px rgba(255,51,85,0); }
+}
+.warn-pulse { animation: warn-pulse 1.2s ease-in-out infinite; }
+
+/* Card hover lift */
+.trade-card {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.trade-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+}
+
+/* Vertical text for direction badge */
+.vertical-text {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  transform: rotate(180deg);
+  letter-spacing: 0.15em;
+}
+
+/* Number tabular alignment */
+.tabular-nums { font-variant-numeric: tabular-nums; }
+
+/* Glow effects */
+.glow-green { text-shadow: 0 0 8px rgba(0,255,136,0.5); }
+.glow-red   { text-shadow: 0 0 8px rgba(255,51,85,0.5); }
+.glow-blue  { text-shadow: 0 0 8px rgba(34,153,255,0.5); }
+
+/* Section separator */
+.section-line {
+  border-top: 1px solid #1a1a1a;
+}
+
+/* Signal pill */
+.signal-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  font-size: 10px;
+  line-height: 1.4;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* Fade in animation */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.fade-in { animation: fadeIn 0.35s ease-out; }
