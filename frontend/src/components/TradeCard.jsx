@@ -215,8 +215,12 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
         {trade.confidence != null && (
           <div className="mb-3">
             <div className="flex items-center justify-between mb-1">
-              <span className="text-[9px] uppercase tracking-widest text-[#444] font-mono">Confidence Score</span>
-              <span className="text-[9px] text-[#555] font-mono">{trade.confidence >= 80 ? 'Very High' : trade.confidence >= 65 ? 'High' : 'Moderate'}</span>
+              <span className="text-[9px] uppercase tracking-widest text-[#444] font-mono">
+                {trade.tradeStyle === 'sameDay' ? 'Same-Day Execution Probability' : 'Confidence Score'}
+              </span>
+              <span className="text-[9px] text-[#555] font-mono">
+                {trade.confidence >= 80 ? 'Very High' : trade.confidence >= 65 ? 'High' : trade.confidence >= 50 ? 'Moderate' : 'Low'}
+              </span>
             </div>
             <ConfidenceBar value={trade.confidence} />
           </div>

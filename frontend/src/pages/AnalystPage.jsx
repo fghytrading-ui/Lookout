@@ -431,8 +431,11 @@ export default function AnalystPage() {
                   <div className="font-mono font-bold text-red-400 text-sm tabular-nums">${data.setup.sl?.toFixed(2)}</div>
                 </div>
                 <div>
-                  <div className="text-[9px] uppercase tracking-widest text-[#444] font-mono">Confidence</div>
-                  <div className="font-mono font-bold text-sm">{data.setup.confidence}%</div>
+                  <div className="text-[9px] uppercase tracking-widest text-[#444] font-mono">Same-Day Probability</div>
+                  <div className={`font-mono font-bold text-sm ${
+                    data.setup.confidence >= 75 ? 'text-green-400' :
+                    data.setup.confidence >= 60 ? 'text-amber-400' : 'text-orange-400'
+                  }`}>{data.setup.confidence}%</div>
                 </div>
               </div>
 

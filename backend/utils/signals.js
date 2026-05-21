@@ -542,17 +542,61 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
   if (rrRatio < minRR) return null;                 // Min R:R — math must still be positive
   if (rrRatio > 6.0) return null;                   // Unrealistically wide
 
-  // ── Confidence score 0–100 ──────────────────────────────────────────
+  // ── CONFIDENCE = "Same-Day Execution Probability" (0–99) ────────────
+  // Calibrated for intraday execution when tradeStyle='sameDay'
   let confidence = 50;
-  confidence += confirming * 6;                     // each confirming signal +6
-  confidence -= opposing * 8;                       // each opposing signal -8
-  if (rrRatio >= 3)    confidence += 8;
-  if (rrRatio >= 2.5)  confidence += 4;
-  if (probability === 'HIGH') confidence += 10;
-  // Trend alignment bonus
-  if (direction === 'LONG' && sma20 && sma50 && price > sma20 && sma20 > sma50)  confidence += 6;
-  if (direction === 'SHORT' && sma20 && sma50 && price < sma20 && sma20 < sma50) confidence += 6;
-  confidence = Math.max(30, Math.min(99, Math.round(confidence)));
+
+  // 1. Setup quality (technical signals)
+  confidence += confirming * 5;                     // each confirming +5
+  confidence -= opposing * 7;                       // each opposing -7
+  if (probability === 'HIGH') confidence += 8;
+  if (rrRatio >= 2.5) confidence += 5;
+  if (rrRatio >= 2.0) confidence += 2;
+
+  // 2. Trend alignment (helps any trade)
+  if (direction === 'LONG'  && sma20 && sma50 && price > sma20 && sma20 > sma50) confidence += 5;
+  if (direction === 'SHORT' && sma20 && sma50 && price < sma20 && sma20 < sma50) confidence += 5;
+
+  // ── SAME-DAY SPECIFIC ADJUSTMENTS ──
+  if (tradeStyle === 'sameDay') {
+    // a) TP proximity — closer TP = higher chance of hitting within session
+    const tpDistATR = Math.abs(tp - entry) / atr;
+    if (tpDistATR < 0.8)      confidence += 10;  // very reachable in hours
+    else if (tpDistATR < 1.2) confidence += 5;   // reachable in session
+    else if (tpDistATR < 1.6) confidence += 0;   // borderline
+    else                       confidence -= 8;   // unlikely intraday
+
+    // b) Today's intraday momentum alignment
+    const chg = quote.regularMarketChangePercent || 0;
+    if (direction === 'LONG') {
+      if (chg > 1.5)  confidence += 10;  // strong same-direction move today
+      else if (chg > 0.3) confidence += 5;
+      else if (chg < -1.5) confidence -= 12; // bad — moving against you
+    } else {
+      if (chg < -1.5) confidence += 10;
+      else if (chg < -0.3) confidence += 5;
+      else if (chg > 1.5)  confidence -= 12;
+    }
+
+    // c) TODAY's volume conviction (not just average)
+    const vol = quote.regularMarketVolume;
+    const avgVol = quote.averageDailyVolume3Month;
+    if (vol && avgVol) {
+      const vr = vol / avgVol;
+      if (vr > 1.5)      confidence += 8;   // institutional participation
+      else if (vr > 1.0) confidence += 3;
+      else if (vr < 0.5) confidence -= 10;  // weak volume kills intraday moves
+    }
+
+    // d) Confirmation candle strength
+    const conf = checkConfirmationCandle(historical, direction);
+    if (conf.confirmed && conf.type?.includes('strong')) confidence += 8;
+    else if (conf.confirmed && conf.type?.includes('bounce')) confidence += 5;
+    else if (conf.confirmed) confidence += 2;
+    else                      confidence -= 15;  // no confirmation = no edge intraday
+  }
+
+  confidence = Math.max(15, Math.min(95, Math.round(confidence)));
 
   // Build a REACHABLE entry zone — wide enough to actually fill, tight enough to stay disciplined
   //   • Width scales with stock volatility (0.3 × ATR)
