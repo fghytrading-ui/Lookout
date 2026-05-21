@@ -9,13 +9,32 @@ function elapsed(since) {
   return `${hrs}h ${mins % 60}m`;
 }
 
-function PositionRow({ pos, livePrice, onRemove }) {
+function PositionRow({ pos, livePrice, onRemove, onUpdate }) {
   const [timer, setTimer] = useState(elapsed(pos.enteredAt));
+  const [editing, setEditing] = useState(false);
+  const [editForm, setEditForm] = useState({
+    entry: pos.entry, tp: pos.tp, sl: pos.sl, shares: pos.shares
+  });
 
   useEffect(() => {
     const t = setInterval(() => setTimer(elapsed(pos.enteredAt)), 1000);
     return () => clearInterval(t);
   }, [pos.enteredAt]);
+
+  const startEdit = () => {
+    setEditForm({ entry: pos.entry, tp: pos.tp, sl: pos.sl, shares: pos.shares });
+    setEditing(true);
+  };
+  const cancelEdit = () => setEditing(false);
+  const saveEdit = () => {
+    const e = parseFloat(editForm.entry);
+    const t = parseFloat(editForm.tp);
+    const s = parseFloat(editForm.sl);
+    const sh = parseFloat(editForm.shares);
+    if ([e, t, s, sh].some(isNaN)) { alert('All fields must be valid numbers'); return; }
+    onUpdate(pos.id, { entry: e, tp: t, sl: s, shares: sh });
+    setEditing(false);
+  };
 
   const price = livePrice?.price ?? null;
   const isLong = pos.direction === 'LONG';
@@ -113,12 +132,65 @@ function PositionRow({ pos, livePrice, onRemove }) {
         </div>
       </div>
 
-      <button
-        onClick={() => onRemove(pos.id)}
-        className="w-full text-[10px] text-[#333] hover:text-red-400 font-mono border border-[#1a1a1a] hover:border-red-500/30 rounded py-1.5 transition-colors"
-      >
-        ✕ Close / Remove Position
-      </button>
+      {/* Edit form (inline) */}
+      {editing && (
+        <div className="bg-[#0a0a0a] border border-amber-500/30 rounded p-3 mb-2">
+          <div className="text-[10px] uppercase tracking-widest text-amber-400 font-mono mb-2">Edit Position</div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-2">
+            <div>
+              <label className="text-[9px] text-[#555] font-mono">Entry $</label>
+              <input type="number" step="0.01" value={editForm.entry}
+                onChange={e => setEditForm({...editForm, entry: e.target.value})}
+                className="w-full bg-[#0e0e0e] border border-[#2a2a2a] rounded px-2 py-1.5 text-xs font-mono text-green-300" />
+            </div>
+            <div>
+              <label className="text-[9px] text-[#555] font-mono">Take Profit $</label>
+              <input type="number" step="0.01" value={editForm.tp}
+                onChange={e => setEditForm({...editForm, tp: e.target.value})}
+                className="w-full bg-[#0e0e0e] border border-[#2a2a2a] rounded px-2 py-1.5 text-xs font-mono text-blue-300" />
+            </div>
+            <div>
+              <label className="text-[9px] text-[#555] font-mono">Stop Loss $</label>
+              <input type="number" step="0.01" value={editForm.sl}
+                onChange={e => setEditForm({...editForm, sl: e.target.value})}
+                className="w-full bg-[#0e0e0e] border border-[#2a2a2a] rounded px-2 py-1.5 text-xs font-mono text-red-300" />
+            </div>
+            <div>
+              <label className="text-[9px] text-[#555] font-mono">Shares</label>
+              <input type="number" step="1" value={editForm.shares}
+                onChange={e => setEditForm({...editForm, shares: e.target.value})}
+                className="w-full bg-[#0e0e0e] border border-[#2a2a2a] rounded px-2 py-1.5 text-xs font-mono text-[#ccc]" />
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={saveEdit}
+              className="flex-1 text-[10px] font-mono font-bold bg-green-500/15 hover:bg-green-500/25 border border-green-500/40 text-green-300 rounded py-1.5">
+              ✓ Save Changes
+            </button>
+            <button onClick={cancelEdit}
+              className="flex-1 text-[10px] font-mono bg-[#1a1a1a] hover:bg-[#222] border border-[#2a2a2a] text-[#888] rounded py-1.5">
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Action buttons */}
+      <div className="flex gap-2">
+        <button
+          onClick={startEdit}
+          disabled={editing}
+          className="flex-1 text-[10px] text-[#555] hover:text-amber-400 font-mono border border-[#1a1a1a] hover:border-amber-500/30 rounded py-1.5 transition-colors disabled:opacity-40"
+        >
+          ✏ Edit Entry / TP / SL
+        </button>
+        <button
+          onClick={() => onRemove(pos.id)}
+          className="flex-1 text-[10px] text-[#333] hover:text-red-400 font-mono border border-[#1a1a1a] hover:border-red-500/30 rounded py-1.5 transition-colors"
+        >
+          ✕ Close / Remove Position
+        </button>
+      </div>
     </div>
   );
 }
@@ -166,8 +238,23 @@ function AddPositionForm({ onAdd }) {
   );
 }
 
+// localStorage helpers — persist positions across browser refreshes
+const POS_KEY = 'lookout-open-positions';
+export function loadPositions() {
+  try { return JSON.parse(localStorage.getItem(POS_KEY) || '[]'); } catch { return []; }
+}
+function savePositions(positions) {
+  try { localStorage.setItem(POS_KEY, JSON.stringify(positions)); } catch {}
+}
+
 export default function PositionTracker({ positions, setPositions, livePrices, onCloseTrade }) {
+  // Sync to localStorage on every change
+  useEffect(() => { savePositions(positions); }, [positions]);
+
   const addPosition = (pos) => setPositions(p => [pos, ...p]);
+  const updatePosition = (id, updates) => {
+    setPositions(p => p.map(x => x.id === id ? { ...x, ...updates } : x));
+  };
   const removePosition = (id) => {
     const pos = positions.find(p => p.id === id);
     if (pos && onCloseTrade) {
@@ -212,6 +299,7 @@ export default function PositionTracker({ positions, setPositions, livePrices, o
                 pos={pos}
                 livePrice={livePrices[pos.ticker]}
                 onRemove={removePosition}
+                onUpdate={updatePosition}
               />
             ))}
           </div>

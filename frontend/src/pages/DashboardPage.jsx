@@ -6,7 +6,7 @@ import TradeSection from '../components/TradeSection.jsx';
 import EconomicCalendar from '../components/EconomicCalendar.jsx';
 import TonightsCatalyst from '../components/TonightsCatalyst.jsx';
 import SummaryStrip from '../components/SummaryStrip.jsx';
-import PositionTracker from '../components/PositionTracker.jsx';
+import PositionTracker, { loadPositions } from '../components/PositionTracker.jsx';
 import LoadingState from '../components/LoadingState.jsx';
 import RiskControls from '../components/RiskControls.jsx';
 import PreMarketMovers from '../components/PreMarketMovers.jsx';
@@ -132,7 +132,7 @@ export default function DashboardPage({ market = 'stocks', title = null }) {
   const [calendarEvents, setCalendarEvents] = useState([]);
   const [catalysts, setCatalysts]         = useState([]);
   const [macroContext, setMacroContext]    = useState([]);
-  const [positions, setPositions]         = useState([]);
+  const [positions, setPositions]         = useState(() => loadPositions());
   const [scanStats, setScanStats]         = useState({});
   const [loading, setLoading]             = useState(true);
   const [scanning, setScanning]           = useState(false);
