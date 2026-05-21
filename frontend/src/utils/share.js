@@ -56,6 +56,7 @@ export function formatTradeText(trade, opts = {}) {
 
   lines.push(`${dirEmoji} ${trade.ticker} ${trade.direction} — Project Look Out`);
   if (trade.name) lines.push(`${trade.name}`);
+  if (trade.setupType) lines.push(`${trade.setupType.label} · ${trade.setupType.idealHold} · ${trade.setupType.historicalWinRate}% historical`);
   lines.push('');
 
   if (trade.price != null) {
@@ -72,7 +73,11 @@ export function formatTradeText(trade, opts = {}) {
 
   if (trade.tp != null) {
     const tpPct = trade.tpPct != null ? trade.tpPct : (Math.abs((trade.tp - trade.entry) / trade.entry) * 100).toFixed(1);
-    lines.push(`🎯 Take Profit: $${trade.tp.toFixed(2)}  (${trade.direction === 'LONG' ? '+' : '-'}${tpPct}%)`);
+    lines.push(`🎯 TP1 (Safe): $${trade.tp.toFixed(2)}  (${trade.direction === 'LONG' ? '+' : '-'}${tpPct}%)  R:R ${trade.rrRatio}:1`);
+  }
+  if (trade.tp2 != null) {
+    const tp2Pct = trade.tp2Pct != null ? trade.tp2Pct : (Math.abs((trade.tp2 - trade.entry) / trade.entry) * 100).toFixed(1);
+    lines.push(`🚀 TP2 (Extended): $${trade.tp2.toFixed(2)}  (${trade.direction === 'LONG' ? '+' : '-'}${tp2Pct}%)  R:R ${trade.rrRatio2}:1`);
   }
   if (trade.sl != null) {
     const slPct = trade.slPct != null ? trade.slPct : (Math.abs((trade.sl - trade.entry) / trade.entry) * 100).toFixed(1);
@@ -128,7 +133,11 @@ export function formatAnalystText(data) {
   if (data.setup) {
     lines.push(`Setup (${data.setup.direction}):`);
     lines.push(`  Entry zone: $${data.setup.entryLow?.toFixed(2)} – $${data.setup.entryHigh?.toFixed(2)}`);
-    lines.push(`  Target: $${data.setup.tp?.toFixed(2)}  Stop: $${data.setup.sl?.toFixed(2)}  R:R ${data.setup.rrRatio}:1`);
+    lines.push(`  TP1 (Safe):     $${data.setup.tp?.toFixed(2)}  R:R ${data.setup.rrRatio}:1`);
+    if (data.setup.tp2 != null) {
+      lines.push(`  TP2 (Extended): $${data.setup.tp2.toFixed(2)}  R:R ${data.setup.rrRatio2}:1`);
+    }
+    lines.push(`  Stop Loss:      $${data.setup.sl?.toFixed(2)}`);
     lines.push('');
   }
 

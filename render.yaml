@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: project-lookout
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    autoDeploy: true
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3001
+      - key: FINNHUB_API_KEY
+        sync: false   # User adds via Render dashboard (not in git)

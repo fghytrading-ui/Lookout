@@ -1,5 +1,10 @@
 node_modules/
 dist/
 .env
+.env.local
+**/.env
 /tmp/
 *.log
+backend/public/
+backend/.cache/
+.DS_Store

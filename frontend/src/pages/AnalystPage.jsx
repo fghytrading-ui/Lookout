@@ -78,32 +78,32 @@ export default function AnalystPage() {
   const verdictStyle = data ? (VERDICT_STYLES[data.verdict] || VERDICT_STYLES.WAIT) : null;
 
   return (
-    <div className="max-w-[1200px] mx-auto px-4 py-5">
+    <div className="max-w-[1200px] mx-auto px-2 sm:px-4 py-3 sm:py-5">
       <div className="mb-5">
         <div className="flex items-center gap-3 mb-1 flex-wrap">
           <h1 className="text-2xl font-condensed font-bold tracking-widest text-cyan-400">🔍 STOCK ANALYST</h1>
-          <span className="text-[10px] font-mono font-bold px-2 py-1 rounded border border-purple-500/40 bg-purple-500/10 text-purple-300 tracking-widest">
-            🛡 INDEPENDENCE MODE
+          <span className="text-[10px] font-mono font-bold px-2 py-1 rounded border border-cyan-500/40 bg-cyan-500/10 text-cyan-300 tracking-widest">
+            ⚖ BALANCED MODE
           </span>
         </div>
-        <p className="text-[11px] text-[#444] font-mono">Skeptical by default — only flashes BUY/SELL when sources strongly agree. Defaults to HOLD/WAIT.</p>
+        <p className="text-[11px] text-[#444] font-mono">Decisive when conviction is there — flashes BUY/SELL when sources agree. Still rejects clearly bad setups.</p>
       </div>
 
       {/* Search input */}
       <form onSubmit={handleSubmit} className="mb-5">
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-col sm:flex-row">
           <input
             type="text"
             value={ticker}
             onChange={e => setTicker(e.target.value.toUpperCase())}
             placeholder="Enter ticker (e.g. AAPL, NVDA, TSLA)…"
-            className="flex-1 bg-[#0a0a0a] border border-[#2a2a2a] focus:border-cyan-500/50 focus:outline-none rounded px-4 py-3 text-lg font-condensed tracking-wider text-[#eee]"
+            className="flex-1 bg-[#0a0a0a] border border-[#2a2a2a] focus:border-cyan-500/50 focus:outline-none rounded px-4 py-3 text-base sm:text-lg font-condensed tracking-wider text-[#eee] w-full"
             autoFocus
           />
           <button
             type="submit"
             disabled={loading || !ticker.trim()}
-            className="px-6 py-3 bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/40 hover:border-cyan-500/70 text-cyan-300 rounded font-mono font-bold tracking-wider disabled:opacity-40"
+            className="px-6 py-3 bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/40 hover:border-cyan-500/70 text-cyan-300 rounded font-mono font-bold tracking-wider disabled:opacity-40 w-full sm:w-auto"
           >
             {loading ? 'ANALYZING…' : 'ANALYZE'}
           </button>
@@ -164,6 +164,114 @@ export default function AnalystPage() {
             <Sparkline data={data.sparkline} direction={data.verdictTone === 'bullish' ? 'LONG' : data.verdictTone === 'bearish' ? 'SHORT' : null} width={300} height={36} />
           </div>
 
+          {/* ── TRADE GRADE (top-level synthesis) ────────────────────────────── */}
+          {data.tradeGrade && data.tradeGrade.grade !== '—' && (
+            <div className={`rounded-lg p-5 border-2 ${
+              data.tradeGrade.color === 'green'  ? 'bg-green-500/10 border-green-500/40' :
+              data.tradeGrade.color === 'amber'  ? 'bg-amber-500/10 border-amber-500/40' :
+              data.tradeGrade.color === 'orange' ? 'bg-orange-500/10 border-orange-500/40' :
+                                                    'bg-red-500/10 border-red-500/40'
+            }`}>
+              <div className="flex items-start justify-between mb-3 flex-wrap gap-3">
+                <div>
+                  <div className="text-[10px] uppercase tracking-widest text-[#666] font-mono mb-1">📋 Overall Trade Grade</div>
+                  <div className={`text-6xl font-condensed font-bold tracking-wider leading-none ${
+                    data.tradeGrade.color === 'green'  ? 'text-green-300' :
+                    data.tradeGrade.color === 'amber'  ? 'text-amber-300' :
+                    data.tradeGrade.color === 'orange' ? 'text-orange-300' :
+                                                          'text-red-300'
+                  }`}>{data.tradeGrade.grade}</div>
+                  <div className="text-[13px] font-mono text-[#bbb] mt-1">{data.tradeGrade.label} · {data.tradeGrade.score}/100</div>
+                </div>
+              </div>
+              {/* Breakdown bars */}
+              <div className="space-y-1.5 mt-3">
+                {data.tradeGrade.breakdown.map((b, i) => (
+                  <div key={i} className="flex items-center gap-2 text-[11px] font-mono">
+                    <span className="text-[#888] w-32 flex-shrink-0">{b.factor}</span>
+                    <div className="flex-1 h-2 bg-[#1a1a1a] rounded overflow-hidden">
+                      <div className="h-full bg-cyan-500/60" style={{ width: `${(b.points / b.max) * 100}%` }} />
+                    </div>
+                    <span className="text-[#666] tabular-nums text-right w-14">{b.points}/{b.max}</span>
+                    <span className="text-[#555] flex-1 hidden md:block truncate">{b.detail}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* ── PERFORMANCE METRICS (YTD/MTD/WTD + beta) ────────────────────── */}
+          {data.performance && (
+            <div className="bg-[#0e0e0e] border border-[#1f1f1f] rounded p-4">
+              <div className="text-[10px] uppercase tracking-widest text-[#555] font-mono mb-3">📈 Performance Context</div>
+              <div className="grid grid-cols-3 md:grid-cols-6 gap-3 text-[11px] font-mono">
+                {data.performance.wtd != null && (
+                  <div><div className="text-[#555]">Week</div><div className={`text-sm font-bold tabular-nums ${data.performance.wtd >= 0 ? 'text-green-400' : 'text-red-400'}`}>{data.performance.wtd >= 0 ? '+' : ''}{data.performance.wtd}%</div></div>
+                )}
+                {data.performance.mtd != null && (
+                  <div><div className="text-[#555]">Month</div><div className={`text-sm font-bold tabular-nums ${data.performance.mtd >= 0 ? 'text-green-400' : 'text-red-400'}`}>{data.performance.mtd >= 0 ? '+' : ''}{data.performance.mtd}%</div></div>
+                )}
+                {data.performance.ytd != null && (
+                  <div><div className="text-[#555]">YTD</div><div className={`text-sm font-bold tabular-nums ${data.performance.ytd >= 0 ? 'text-green-400' : 'text-red-400'}`}>{data.performance.ytd >= 0 ? '+' : ''}{data.performance.ytd}%</div></div>
+                )}
+                {data.performance.yr1 != null && (
+                  <div><div className="text-[#555]">1 Year</div><div className={`text-sm font-bold tabular-nums ${data.performance.yr1 >= 0 ? 'text-green-400' : 'text-red-400'}`}>{data.performance.yr1 >= 0 ? '+' : ''}{data.performance.yr1}%</div></div>
+                )}
+                {data.performance.avgRangePct != null && (
+                  <div><div className="text-[#555]">Daily Range</div><div className="text-sm font-bold tabular-nums text-[#ccc]">{data.performance.avgRangePct}%</div></div>
+                )}
+                {data.performance.beta != null && (
+                  <div><div className="text-[#555]">Beta vs SPY</div><div className={`text-sm font-bold tabular-nums ${data.performance.beta > 1.3 ? 'text-amber-400' : data.performance.beta < 0.7 ? 'text-blue-400' : 'text-[#ccc]'}`}>{data.performance.beta}</div></div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* ── MULTI-TIMEFRAME ALIGNMENT ───────────────────────────────────── */}
+          {data.mtfTrends && (
+            <div className={`rounded p-5 border ${
+              data.mtfAlignment?.aligned >= 3 ? 'bg-green-500/8 border-green-500/30' :
+              data.mtfAlignment?.aligned >= 2 ? 'bg-amber-500/8 border-amber-500/30' :
+                                                  'bg-[#0e0e0e] border-[#1f1f1f]'
+            }`}>
+              <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                <div>
+                  <div className="text-[10px] uppercase tracking-widest text-[#555] font-mono">⏱ Multi-Timeframe Alignment</div>
+                  <div className="text-[10px] text-[#444] font-mono mt-0.5">
+                    {data.mtfAlignment ? `${data.mtfAlignment.aligned}/4 timeframes agree — ${data.mtfAlignment.label}` : 'Trend snapshot'}
+                  </div>
+                </div>
+                {data.mtfAlignment && (
+                  <span className={`text-xl font-condensed font-bold tracking-wider ${
+                    data.mtfAlignment.aligned >= 3 ? 'text-green-400' :
+                    data.mtfAlignment.aligned >= 2 ? 'text-amber-400' : 'text-red-400'
+                  }`}>{data.mtfAlignment.score}%</span>
+                )}
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                {['h4','daily','weekly','monthly'].map(tf => {
+                  const trend = data.mtfTrends[tf];
+                  const labels = { h4: '4-Hour', daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly' };
+                  return (
+                    <div key={tf} className={`rounded p-2.5 border ${
+                      trend === 'UP'   ? 'bg-green-500/8 border-green-500/25' :
+                      trend === 'DOWN' ? 'bg-red-500/8 border-red-500/25' :
+                                          'bg-[#1a1a1a] border-[#252525]'
+                    }`}>
+                      <div className="text-[9px] text-[#555] uppercase tracking-widest font-mono mb-1">{labels[tf]}</div>
+                      <div className={`text-sm font-mono font-bold ${
+                        trend === 'UP'   ? 'text-green-400' :
+                        trend === 'DOWN' ? 'text-red-400' : 'text-[#777]'
+                      }`}>
+                        {trend === 'UP' && '↑ '}{trend === 'DOWN' && '↓ '}{trend}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {/* ── SECTOR CONTEXT (small badge near top) ───────────────────────── */}
           {data.sectorContext && (
             <div className={`rounded p-3 border text-[12px] font-mono ${
@@ -174,6 +282,30 @@ export default function AnalystPage() {
               <span className="text-[9px] uppercase tracking-widest opacity-60 mr-2">Sector ({data.sectorContext.sectorETF}):</span>
               {data.sectorContext.text}
               <span className="text-[10px] opacity-60 ml-2">· Today {data.sectorContext.stockDay >= 0 ? '+' : ''}{data.sectorContext.stockDay}% vs sector {data.sectorContext.sectorDay >= 0 ? '+' : ''}{data.sectorContext.sectorDay}%</span>
+            </div>
+          )}
+
+          {/* ── SETUP TYPE — what KIND of swing trade this is ─────────────── */}
+          {data.setupType && (
+            <div className="bg-cyan-500/5 border-2 border-cyan-500/30 rounded-lg p-4">
+              <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+                <span className="text-lg font-condensed font-bold tracking-wider text-cyan-300">{data.setupType.label}</span>
+                <div className="flex items-center gap-3 text-[11px] font-mono">
+                  <span><span className="text-[#555]">Win rate:</span> <span className={`font-bold ${
+                    data.setupType.historicalWinRate >= 60 ? 'text-green-400' :
+                    data.setupType.historicalWinRate >= 50 ? 'text-amber-400' : 'text-orange-400'
+                  }`}>{data.setupType.historicalWinRate}%</span></span>
+                  <span><span className="text-[#555]">Hold:</span> <span className="text-[#ccc]">{data.setupType.idealHold}</span></span>
+                  <span><span className="text-[#555]">Risk:</span> <span className={`font-bold ${
+                    data.setupType.risk === 'high' ? 'text-red-400' :
+                    data.setupType.risk?.includes('high') ? 'text-orange-400' :
+                    'text-amber-400'
+                  }`}>{data.setupType.risk}</span></span>
+                </div>
+              </div>
+              <p className="text-[12px] text-[#ccc] font-mono leading-relaxed mb-2">{data.setupType.description}</p>
+              <p className="text-[11px] text-[#888] font-mono leading-relaxed mb-2">{data.setupType.reasoning}</p>
+              <p className="text-[11px] text-cyan-200/80 font-mono italic">💡 {data.setupType.action}</p>
             </div>
           )}
 
@@ -277,24 +409,174 @@ export default function AnalystPage() {
           {data.setup && (
             <div className="bg-[#0e0e0e] border border-[#1f1f1f] rounded p-4">
               <div className="text-[10px] uppercase tracking-widest text-[#555] font-mono mb-3">💡 Recommended Trade Setup ({data.setup.direction})</div>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-3">
                 <div>
                   <div className="text-[9px] uppercase tracking-widest text-[#444] font-mono">Entry Zone</div>
                   <div className="font-mono font-bold text-green-400 text-sm tabular-nums">${data.setup.entryLow?.toFixed(2)}–${data.setup.entryHigh?.toFixed(2)}</div>
                 </div>
                 <div>
-                  <div className="text-[9px] uppercase tracking-widest text-[#444] font-mono">Take Profit</div>
+                  <div className="text-[9px] uppercase tracking-widest text-[#444] font-mono">TP1 — Safe</div>
                   <div className="font-mono font-bold text-blue-400 text-sm tabular-nums">${data.setup.tp?.toFixed(2)}</div>
+                  <div className="text-[9px] text-blue-500/60 font-mono">R:R {data.setup.rrRatio}:1</div>
                 </div>
+                {data.setup.tp2 != null && (
+                  <div>
+                    <div className="text-[9px] uppercase tracking-widest text-[#444] font-mono">TP2 — Extended</div>
+                    <div className="font-mono font-bold text-cyan-400 text-sm tabular-nums">${data.setup.tp2?.toFixed(2)}</div>
+                    <div className="text-[9px] text-cyan-500/60 font-mono">R:R {data.setup.rrRatio2}:1</div>
+                  </div>
+                )}
                 <div>
                   <div className="text-[9px] uppercase tracking-widest text-[#444] font-mono">Stop Loss</div>
                   <div className="font-mono font-bold text-red-400 text-sm tabular-nums">${data.setup.sl?.toFixed(2)}</div>
                 </div>
                 <div>
-                  <div className="text-[9px] uppercase tracking-widest text-[#444] font-mono">R:R · Confidence</div>
-                  <div className="font-mono font-bold text-sm">{data.setup.rrRatio}:1 · {data.setup.confidence}%</div>
+                  <div className="text-[9px] uppercase tracking-widest text-[#444] font-mono">Confidence</div>
+                  <div className="font-mono font-bold text-sm">{data.setup.confidence}%</div>
                 </div>
               </div>
+
+              {data.setup.trendStrengthLabel && (
+                <div className="text-[11px] font-mono mb-2 flex items-center gap-2 flex-wrap">
+                  <span className="text-[#555]">Trend strength:</span>
+                  <span className={`font-bold px-2 py-0.5 rounded border ${
+                    data.setup.trendStrength >= 2.5 ? 'bg-green-500/15 border-green-500/40 text-green-300' :
+                    data.setup.trendStrength >= 1.5 ? 'bg-green-500/10 border-green-500/30 text-green-400' :
+                    data.setup.trendStrength >= 0.5 ? 'bg-amber-500/10 border-amber-500/30 text-amber-400' :
+                                                       'bg-red-500/10 border-red-500/30 text-red-400'
+                  }`}>{data.setup.trendStrengthLabel}</span>
+                  <span className="text-[10px] text-[#666]">→ {data.setup.trendStrengthLabel === 'Very Strong' || data.setup.trendStrengthLabel === 'Strong' ? 'TPs scaled wider (let it run)' : 'TPs scaled tighter (cautious)'}</span>
+                </div>
+              )}
+              {data.setup.tp2 != null && (
+                <div className="text-[11px] text-[#888] font-mono mb-3 italic">
+                  💡 Pro tip: scale out 50–70% of position at <span className="text-blue-400">TP1</span> (lock in safe profit), let the remainder run to <span className="text-cyan-400">TP2</span> for extended gains. Move SL to break-even after TP1 hits.
+                </div>
+              )}
+
+              {/* Time horizon row */}
+              <div className="pt-3 border-t border-[#1a1a1a] grid grid-cols-1 md:grid-cols-3 gap-3 text-[11px] font-mono">
+                {data.setup.timeSpan && (
+                  <div>
+                    <span className="text-[#555]">Hold duration: </span>
+                    <span className="text-[#ccc] font-bold">⏱ {data.setup.timeSpan}</span>
+                  </div>
+                )}
+                {data.setup.exitWindow && (
+                  <div>
+                    <span className="text-[#555]">Target exit: </span>
+                    <span className="text-[#ccc] font-bold">📅 {data.setup.exitWindow}</span>
+                  </div>
+                )}
+                {data.setup.expectedDays && (
+                  <div>
+                    <span className="text-[#555]">Realistic reach: </span>
+                    <span className="text-cyan-400 font-bold">~{data.setup.expectedDays} day{data.setup.expectedDays !== 1 ? 's' : ''}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* ── WALL STREET CONSENSUS (independent cross-check) ─────────────── */}
+          {data.wallStreet && data.wallStreet.analystCount > 0 && (
+            <div className="bg-[#0e0e0e] border border-[#1f1f1f] rounded p-5">
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <div className="text-[10px] uppercase tracking-widest text-[#555] font-mono">🏛 Wall Street Consensus</div>
+                  <div className="text-[10px] text-[#444] font-mono mt-0.5">{data.wallStreet.analystCount} analysts covering · independent cross-check</div>
+                </div>
+                {data.wallStreet.recommendationLabel && (
+                  <span className={`text-sm font-mono font-bold tracking-widest px-3 py-1 rounded border ${
+                    data.wallStreet.recommendationLabel.includes('BUY')  ? 'bg-green-500/10 border-green-500/30 text-green-300' :
+                    data.wallStreet.recommendationLabel.includes('SELL') ? 'bg-red-500/10 border-red-500/30 text-red-300' :
+                                                                            'bg-amber-500/10 border-amber-500/30 text-amber-300'
+                  }`}>{data.wallStreet.recommendationLabel}</span>
+                )}
+              </div>
+              <div className="grid grid-cols-3 gap-3 mb-3 text-[11px] font-mono">
+                {data.wallStreet.targetLow != null && (
+                  <div className="bg-red-500/8 border border-red-500/20 rounded p-2">
+                    <div className="text-[9px] uppercase text-red-500/60">Low Target</div>
+                    <div className="text-red-400 font-bold tabular-nums">${data.wallStreet.targetLow.toFixed(2)}</div>
+                    <div className="text-[9px] text-red-500/50">{((data.wallStreet.targetLow - data.price) / data.price * 100).toFixed(1)}%</div>
+                  </div>
+                )}
+                {data.wallStreet.targetMean != null && (
+                  <div className="bg-blue-500/8 border border-blue-500/20 rounded p-2">
+                    <div className="text-[9px] uppercase text-blue-500/60">Mean Target</div>
+                    <div className="text-blue-400 font-bold tabular-nums">${data.wallStreet.targetMean.toFixed(2)}</div>
+                    <div className="text-[9px] text-blue-500/50">{((data.wallStreet.targetMean - data.price) / data.price * 100 >= 0 ? '+' : '')}{((data.wallStreet.targetMean - data.price) / data.price * 100).toFixed(1)}%</div>
+                  </div>
+                )}
+                {data.wallStreet.targetHigh != null && (
+                  <div className="bg-green-500/8 border border-green-500/20 rounded p-2">
+                    <div className="text-[9px] uppercase text-green-500/60">High Target</div>
+                    <div className="text-green-400 font-bold tabular-nums">${data.wallStreet.targetHigh.toFixed(2)}</div>
+                    <div className="text-[9px] text-green-500/50">+{((data.wallStreet.targetHigh - data.price) / data.price * 100).toFixed(1)}%</div>
+                  </div>
+                )}
+              </div>
+              <div className="text-[10px] font-mono text-[#555]">
+                Ratings split:{' '}
+                <span className="text-green-400">Strong Buy {data.wallStreet.strongBuy}</span> ·{' '}
+                <span className="text-green-500/70">Buy {data.wallStreet.buy}</span> ·{' '}
+                <span className="text-amber-400">Hold {data.wallStreet.hold}</span> ·{' '}
+                <span className="text-red-500/70">Sell {data.wallStreet.sell}</span> ·{' '}
+                <span className="text-red-400">Strong Sell {data.wallStreet.strongSell}</span>
+              </div>
+            </div>
+          )}
+
+          {/* ── BACKTEST VALIDATION (historical win rate) ──────────────────── */}
+          {data.backtest && (
+            <div className={`rounded p-5 border ${
+              data.backtest.winRate >= 65 ? 'bg-green-500/8 border-green-500/30' :
+              data.backtest.winRate >= 50 ? 'bg-amber-500/8 border-amber-500/30' :
+              data.backtest.winRate != null ? 'bg-red-500/8 border-red-500/30' :
+                                                'bg-[#0e0e0e] border-[#1f1f1f]'
+            }`}>
+              <div className="flex items-center justify-between mb-2">
+                <div>
+                  <div className="text-[10px] uppercase tracking-widest font-mono text-[#888]">📊 Backtest — Historical Performance on {data.ticker}</div>
+                  <div className="text-[10px] text-[#444] font-mono mt-0.5">This exact setup pattern simulated over the last 6 months</div>
+                </div>
+                {data.backtest.winRate != null && (
+                  <div className={`text-2xl font-condensed font-bold tracking-wider ${
+                    data.backtest.winRate >= 65 ? 'text-green-400' :
+                    data.backtest.winRate >= 50 ? 'text-amber-400' : 'text-red-400'
+                  }`}>{data.backtest.winRate}% WIN</div>
+                )}
+              </div>
+              <p className="text-[12px] font-mono text-[#aaa] mb-2">{data.backtest.message}</p>
+              {data.backtest.sampleSize > 0 && (
+                <>
+                  <div className="text-[10px] font-mono text-[#555] flex gap-4 flex-wrap">
+                    <span>Sample size: <span className="text-[#aaa]">{data.backtest.sampleSize}</span></span>
+                    <span>✓ Wins: <span className="text-green-400">{data.backtest.wins}</span></span>
+                    <span>✗ Losses: <span className="text-red-400">{data.backtest.losses}</span></span>
+                    {data.backtest.timeouts > 0 && <span>⏱ Timeouts: <span className="text-amber-400">{data.backtest.timeouts}</span></span>}
+                    <span>Confidence: <span className="text-[#aaa]">{data.backtest.confidence}</span></span>
+                  </div>
+                  {data.backtest.recentMatches?.length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-[#1a1a1a]">
+                      <div className="text-[9px] uppercase tracking-widest text-[#444] font-mono mb-2">Most recent historical matches:</div>
+                      <ul className="space-y-1">
+                        {data.backtest.recentMatches.map((m, i) => (
+                          <li key={i} className="text-[11px] font-mono flex items-center gap-2">
+                            <span className={`w-12 text-center text-[9px] font-bold px-1.5 py-0.5 rounded ${
+                              m.result === 'WIN'  ? 'bg-green-500/20 text-green-300' :
+                              m.result === 'LOSS' ? 'bg-red-500/20 text-red-300' :
+                                                     'bg-amber-500/20 text-amber-300'
+                            }`}>{m.result === 'WIN' ? '✓ WIN' : m.result === 'LOSS' ? '✗ LOSS' : '— TIME'}</span>
+                            <span className="text-[#888]">Setup detected {m.date}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </>
+              )}
             </div>
           )}
 

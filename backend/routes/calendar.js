@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { fetchLiveEconomicEvents } from '../lib/economicCalendarLive.js';
 
 const router = Router();
 
@@ -72,11 +73,22 @@ function getTonightsCatalysts(events) {
     }));
 }
 
-router.get('/events', (req, res) => {
-  const events    = getEconomicEvents();
+router.get('/events', async (req, res) => {
+  // Try live Forex Factory data first
+  const liveEvents = await fetchLiveEconomicEvents();
+  const events = liveEvents && liveEvents.length ? liveEvents : getEconomicEvents();
+  const isLive = !!(liveEvents && liveEvents.length);
+
   const macro     = getMacroContext();
   const catalysts = getTonightsCatalysts(events);
-  res.json({ events, macro, catalysts, timestamp: new Date().toISOString() });
+  res.json({
+    events,
+    macro,
+    catalysts,
+    source: isLive ? 'live' : 'template',
+    isLive,
+    timestamp: new Date().toISOString()
+  });
 });
 
 router.get('/macro', (req, res) => {

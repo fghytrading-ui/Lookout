@@ -5,8 +5,10 @@ const HEADERS = {
   'Accept': 'application/rss+xml, application/xml, text/xml, */*'
 };
 
+import { registerCache } from './persistentCache.js';
 const cache = new Map();
 const CACHE_TTL = 10 * 60 * 1000; // 10 min — news doesn't change every minute
+registerCache('news', cache);
 
 function cacheGet(k) {
   const e = cache.get(k);

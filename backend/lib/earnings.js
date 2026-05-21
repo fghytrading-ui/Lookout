@@ -5,9 +5,11 @@ const HEADERS = {
   'Accept': 'application/json, text/plain, */*'
 };
 
+import { registerCache } from './persistentCache.js';
 // Cache earnings dates for 24 hours — they don't change
 const cache = new Map();
 const TTL = 24 * 60 * 60 * 1000;
+registerCache('earnings', cache);
 
 // Yahoo's chart endpoint includes `earningsTimestamp` in meta when available
 // This is the most reliable free way to get next-earnings date

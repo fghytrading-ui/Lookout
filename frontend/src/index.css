@@ -90,3 +90,22 @@ html, body {
   to   { opacity: 1; transform: translateY(0); }
 }
 .fade-in { animation: fadeIn 0.35s ease-out; }
+
+/* Hidden scrollbars (for mobile nav tab scroll) */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* Mobile-specific: prevent horizontal page scroll */
+@media (max-width: 640px) {
+  body { overflow-x: hidden; }
+  /* Slightly tighter card padding on phones */
+  .trade-card .p-4 { padding: 0.875rem; }
+  /* Make sure number columns stay readable */
+  table { font-size: 11px; }
+}
+
+/* Touch-friendly tap targets on mobile */
+@media (max-width: 640px) {
+  button, a { min-height: 36px; }
+  input, select { font-size: 16px !important; } /* prevents iOS zoom */
+}

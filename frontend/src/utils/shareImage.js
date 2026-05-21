@@ -123,27 +123,38 @@ export async function captureTradeShareImage(trade, entryTiming, filename) {
       </div>
     </div>
 
-    <!-- Levels: Entry / TP / SL -->
-    <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; margin-bottom:16px;">
-      <div style="background:${C.greenBg}; border:2px solid ${C.greenBd}; border-radius:10px; padding:18px;">
-        <div style="font-family:${F.sans}; font-size:10px; color:${C.green}; letter-spacing:2px; margin-bottom:8px; font-weight:700;">ENTRY ZONE</div>
-        <div style="font-family:${F.mono}; font-size:18px; font-weight:700; color:${C.green}; line-height:1.3;">
+    <!-- Levels: Entry / TP1 / TP2 / SL -->
+    <div style="display:grid; grid-template-columns:1fr 1fr ${trade.tp2 != null ? '1fr ' : ''}1fr; gap:10px; margin-bottom:16px;">
+      <div style="background:${C.greenBg}; border:2px solid ${C.greenBd}; border-radius:10px; padding:14px;">
+        <div style="font-family:${F.sans}; font-size:10px; color:${C.green}; letter-spacing:2px; margin-bottom:6px; font-weight:700;">ENTRY ZONE</div>
+        <div style="font-family:${F.mono}; font-size:15px; font-weight:700; color:${C.green}; line-height:1.3;">
           $${trade.entryLow?.toFixed(2) ?? trade.entry?.toFixed(2)}
           <span style="color:${C.textMute}; margin:0 4px;">–</span>
           $${trade.entryHigh?.toFixed(2) ?? trade.entry?.toFixed(2)}
         </div>
       </div>
-      <div style="background:${C.blueBg}; border:2px solid ${C.blueBd}; border-radius:10px; padding:18px;">
-        <div style="font-family:${F.sans}; font-size:10px; color:${C.blue}; letter-spacing:2px; margin-bottom:8px; font-weight:700;">TAKE PROFIT</div>
-        <div style="font-family:${F.mono}; font-size:24px; font-weight:700; color:${C.blue}; line-height:1;">$${trade.tp?.toFixed(2) ?? '—'}</div>
-        ${trade.tpPct != null ? `<div style="font-family:${F.mono}; font-size:13px; color:${C.blue}; margin-top:4px; font-weight:600;">+${trade.tpPct}%</div>` : ''}
+      <div style="background:${C.blueBg}; border:2px solid ${C.blueBd}; border-radius:10px; padding:14px;">
+        <div style="font-family:${F.sans}; font-size:10px; color:${C.blue}; letter-spacing:2px; margin-bottom:6px; font-weight:700;">TP1 — SAFE</div>
+        <div style="font-family:${F.mono}; font-size:20px; font-weight:700; color:${C.blue}; line-height:1;">$${trade.tp?.toFixed(2) ?? '—'}</div>
+        ${trade.tpPct != null ? `<div style="font-family:${F.mono}; font-size:12px; color:${C.blue}; margin-top:4px; font-weight:600;">+${trade.tpPct}% · R:R ${trade.rrRatio}:1</div>` : ''}
       </div>
-      <div style="background:${C.redBg}; border:2px solid ${C.redBd}; border-radius:10px; padding:18px;">
-        <div style="font-family:${F.sans}; font-size:10px; color:${C.red}; letter-spacing:2px; margin-bottom:8px; font-weight:700;">STOP LOSS</div>
-        <div style="font-family:${F.mono}; font-size:24px; font-weight:700; color:${C.red}; line-height:1;">$${trade.sl?.toFixed(2) ?? '—'}</div>
-        ${trade.slPct != null ? `<div style="font-family:${F.mono}; font-size:13px; color:${C.red}; margin-top:4px; font-weight:600;">−${trade.slPct}%</div>` : ''}
+      ${trade.tp2 != null ? `
+      <div style="background:${C.cyanBg}; border:2px solid ${C.cyanBd}; border-radius:10px; padding:14px;">
+        <div style="font-family:${F.sans}; font-size:10px; color:${C.cyan}; letter-spacing:2px; margin-bottom:6px; font-weight:700;">TP2 — EXTENDED</div>
+        <div style="font-family:${F.mono}; font-size:20px; font-weight:700; color:${C.cyan}; line-height:1;">$${trade.tp2?.toFixed(2)}</div>
+        <div style="font-family:${F.mono}; font-size:12px; color:${C.cyan}; margin-top:4px; font-weight:600;">+${trade.tp2Pct}% · R:R ${trade.rrRatio2}:1</div>
+      </div>` : ''}
+      <div style="background:${C.redBg}; border:2px solid ${C.redBd}; border-radius:10px; padding:14px;">
+        <div style="font-family:${F.sans}; font-size:10px; color:${C.red}; letter-spacing:2px; margin-bottom:6px; font-weight:700;">STOP LOSS</div>
+        <div style="font-family:${F.mono}; font-size:20px; font-weight:700; color:${C.red}; line-height:1;">$${trade.sl?.toFixed(2) ?? '—'}</div>
+        ${trade.slPct != null ? `<div style="font-family:${F.mono}; font-size:12px; color:${C.red}; margin-top:4px; font-weight:600;">−${trade.slPct}%</div>` : ''}
       </div>
     </div>
+
+    ${trade.tp2 != null ? `
+    <div style="font-size:11px; color:${C.textDim}; font-style:italic; margin-bottom:14px; padding:8px 12px; background:${C.page}; border-radius:6px;">
+      💡 Scale out: 50–70% at TP1 (lock safe profit) · let runners reach TP2 · trail SL to entry after TP1 hits
+    </div>` : ''}
 
     <!-- Stats row -->
     <div style="background:${C.page}; border:1px solid ${C.border}; border-radius:10px; padding:16px; display:flex; justify-content:space-between; margin-bottom:16px;">

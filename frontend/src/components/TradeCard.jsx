@@ -174,7 +174,7 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
       <div className="ml-7 p-4">
 
         {/* Header row */}
-        <div className="flex items-start justify-between gap-2 mb-3">
+        <div className="flex items-start justify-between gap-2 mb-3 flex-wrap sm:flex-nowrap">
           <div>
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-2xl font-bold font-condensed tracking-wider">{trade.ticker}</span>
@@ -261,28 +261,100 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
         )}
 
         {/* Levels grid */}
-        <div className="grid grid-cols-3 gap-2 mb-3">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
           <LevelBox label="Entry" value={trade.entry} rangeLow={trade.entryLow} rangeHigh={trade.entryHigh} colorClass="bg-green-500/8 border-green-500/20" />
-          <LevelBox label="Take Profit" value={trade.tp}    pct={trade.tpPct} colorClass="bg-blue-500/8 border-blue-500/20" />
-          <LevelBox label="Stop Loss"   value={trade.sl}    pct={trade.slPct} colorClass="bg-red-500/8 border-red-500/20" />
+          <LevelBox label="TP1 — Safe" value={trade.tp}  pct={trade.tpPct}  colorClass="bg-blue-500/8 border-blue-500/20" />
+          {trade.tp2 != null && (
+            <LevelBox label="TP2 — Extended" value={trade.tp2} pct={trade.tp2Pct} colorClass="bg-cyan-500/8 border-cyan-500/30" />
+          )}
+          <LevelBox label="Stop Loss" value={trade.sl} pct={trade.slPct} colorClass="bg-red-500/8 border-red-500/20" />
         </div>
 
-        {/* Time / exit window row */}
-        <div className="flex flex-wrap gap-x-5 gap-y-1 mb-3 text-[11px] font-mono">
-          <div>
-            <span className="text-[#3a3a3a]">Hold: </span>
-            <span className="text-[#aaa]">{trade.timeSpan}</span>
+        {/* TP scaling hint */}
+        {trade.tp2 != null && (
+          <div className="text-[10px] text-[#666] font-mono mb-2 italic">
+            💡 Scale out: take 50–70% at <span className="text-blue-400">TP1</span> ({trade.rrRatio}:1), let runners go to <span className="text-cyan-400">TP2</span> ({trade.rrRatio2}:1)
           </div>
-          <div>
-            <span className="text-[#3a3a3a]">Target exit: </span>
-            <span className="text-[#aaa]">{trade.exitWindow}</span>
-          </div>
-          {trade.hardCoverDate && (
-            <div className="text-amber-400">
-              ⚠ Cover before: {trade.hardCoverDate}
+        )}
+
+        {/* Same-day timing block — clear entry & exit windows */}
+        {trade.tradeStyle === 'sameDay' && trade.intradayTiming && (
+          <div className="bg-amber-500/10 border border-amber-500/40 rounded-lg p-3 mb-3">
+            <div className="flex items-center justify-between mb-2 flex-wrap gap-1">
+              <span className="text-[11px] font-mono font-bold text-amber-300 tracking-wider">⏰ DAY TRADE — INTRADAY ONLY</span>
+              <span className="text-[9px] font-mono text-amber-400/70">No overnight risk</span>
             </div>
-          )}
-        </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-[11px] font-mono">
+              <div className="bg-green-500/10 border border-green-500/25 rounded p-2">
+                <div className="text-[9px] uppercase tracking-widest text-green-500/70 mb-1">✓ Enter Between</div>
+                <div className="text-green-300 font-bold tabular-nums">{trade.intradayTiming.entryFrom} – {trade.intradayTiming.entryUntil}</div>
+                <div className="text-[9px] text-green-500/60 mt-0.5">Best: {trade.intradayTiming.bestEntryWindow}</div>
+              </div>
+              <div className="bg-cyan-500/10 border border-cyan-500/25 rounded p-2">
+                <div className="text-[9px] uppercase tracking-widest text-cyan-500/70 mb-1">⏱ Typical Hold</div>
+                <div className="text-cyan-300 font-bold tabular-nums">
+                  {trade.expectedHours ? `~${trade.expectedHours} hours` : 'Same session'}
+                </div>
+                <div className="text-[9px] text-cyan-500/60 mt-0.5">to reach TP1</div>
+              </div>
+              <div className="bg-red-500/10 border border-red-500/25 rounded p-2">
+                <div className="text-[9px] uppercase tracking-widest text-red-500/70 mb-1">⚠ Must Exit By</div>
+                <div className="text-red-300 font-bold tabular-nums">{trade.intradayTiming.mustExitBy}</div>
+                <div className="text-[9px] text-red-500/60 mt-0.5">Avoid: {trade.intradayTiming.avoidWindow}</div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Swing time row (only shows if NOT same-day mode) */}
+        {trade.tradeStyle !== 'sameDay' && (
+          <div className="flex flex-wrap gap-x-5 gap-y-1 mb-3 text-[11px] font-mono">
+            <div>
+              <span className="text-[#3a3a3a]">Hold: </span>
+              <span className="text-[#aaa]">{trade.timeSpan}</span>
+            </div>
+            <div>
+              <span className="text-[#3a3a3a]">Target exit: </span>
+              <span className="text-[#aaa]">{trade.exitWindow}</span>
+            </div>
+            {trade.expectedDays && (
+              <div>
+                <span className="text-[#3a3a3a]">Realistic reach: </span>
+                <span className="text-cyan-400/80">~{trade.expectedDays} day{trade.expectedDays !== 1 ? 's' : ''}</span>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Confirmation candle — has today's bar confirmed the direction? */}
+        {trade.confirmation && (
+          <div className={`text-[11px] font-mono px-2.5 py-1.5 rounded mb-2 border flex items-center gap-2 ${
+            !trade.confirmation.confirmed       ? 'bg-amber-500/10 border-amber-500/30 text-amber-300' :
+            trade.confirmation.type?.includes('strong') ? 'bg-green-500/10 border-green-500/30 text-green-300' :
+                                                  'bg-blue-500/10 border-blue-500/30 text-blue-300'
+          }`}>
+            <span>{trade.confirmation.confirmed ? '✓' : '⏳'}</span>
+            <span>{trade.confirmation.confirmed ? 'Candle confirms direction' : 'Waiting for confirming candle'}</span>
+            <span className="opacity-70 ml-auto">— {trade.confirmation.reasoning}</span>
+          </div>
+        )}
+
+        {/* Setup type tag — WHAT KIND of swing trade this is */}
+        {trade.setupType && (
+          <div className="bg-[#0a0a0a] border border-cyan-500/20 rounded p-2.5 mb-2">
+            <div className="flex items-center justify-between mb-1 flex-wrap gap-1">
+              <span className="text-[12px] font-mono font-bold text-cyan-300">{trade.setupType.label}</span>
+              <span className="text-[9px] font-mono text-[#666]">
+                Historical win rate: <span className={`font-bold ${
+                  trade.setupType.historicalWinRate >= 60 ? 'text-green-400' :
+                  trade.setupType.historicalWinRate >= 50 ? 'text-amber-400' : 'text-orange-400'
+                }`}>{trade.setupType.historicalWinRate}%</span>
+                <span className="text-[#444] ml-1">· {trade.setupType.idealHold}</span>
+              </span>
+            </div>
+            <p className="text-[10px] text-[#888] font-mono leading-snug">{trade.setupType.description}</p>
+          </div>
+        )}
 
         {/* Earnings risk warning */}
         {trade.earnings && trade.earnings.status !== 'OK' && (

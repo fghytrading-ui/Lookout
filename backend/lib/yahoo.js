@@ -1,8 +1,10 @@
 import axios from 'axios';
+import { registerCache } from './persistentCache.js';
 
 // ── In-memory cache (avoids re-fetching within TTL) ───────────────────────
 const cache = new Map();
 const CACHE_TTL_MS = 8_000; // 8 seconds — supports 10-second client polling
+registerCache('yahoo-quotes', cache);
 
 function cacheGet(key) {
   const entry = cache.get(key);

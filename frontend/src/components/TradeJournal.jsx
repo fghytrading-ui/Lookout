@@ -139,7 +139,7 @@ export default function TradeJournal({ refreshKey }) {
 
             {/* Trade history table */}
             <div className="overflow-x-auto">
-              <table className="w-full">
+              <table className="w-full min-w-[680px]">
                 <thead>
                   <tr className="border-b border-[#1a1a1a]">
                     <th className="text-left py-2 px-2 text-[9px] uppercase tracking-widest text-[#333] font-mono">Ticker</th>

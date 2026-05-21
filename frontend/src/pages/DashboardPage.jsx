@@ -11,8 +11,16 @@ import LoadingState from '../components/LoadingState.jsx';
 import RiskControls from '../components/RiskControls.jsx';
 import PreMarketMovers from '../components/PreMarketMovers.jsx';
 import TradeJournal, { logTradeClose } from '../components/TradeJournal.jsx';
+import { evaluateRiskGuard, getTodaysPnL, loadGuardSettings } from '../utils/riskGuard.js';
+import LearningInsights from '../components/LearningInsights.jsx';
+import ForexSessionBar from '../components/ForexSessionBar.jsx';
+import CurrencyStrengthMeter from '../components/CurrencyStrengthMeter.jsx';
+import CommodityScheduleBar from '../components/CommodityScheduleBar.jsx';
 
-const TICKER_TAPE = ['AAPL','MSFT','NVDA','TSLA','META','GOOGL','AMZN','AMD','SPY','QQQ','GLD','BTC-USD','ETH-USD','CL=F','JPM','COIN','PLTR','MSTR','IWM','SMCI'];
+// Default ticker tape (stocks)
+const DEFAULT_TAPE = ['AAPL','MSFT','NVDA','TSLA','META','GOOGL','AMZN','AMD','SPY','QQQ','GLD','BTC-USD','ETH-USD','CL=F','JPM','COIN','PLTR','MSTR','IWM','SMCI'];
+const FOREX_TAPE      = ['EURUSD=X','GBPUSD=X','USDJPY=X','USDCHF=X','AUDUSD=X','NZDUSD=X','USDCAD=X','EURGBP=X','EURJPY=X','GBPJPY=X','USDCNY=X','USDMXN=X','BTC-USD','ETH-USD','SOL-USD','XRP-USD','DX-Y.NYB','^TNX'];
+const COMMODITIES_TAPE = ['GC=F','SI=F','CL=F','BZ=F','NG=F','HG=F','PL=F','PA=F','ZC=F','ZS=F','ZW=F','KC=F','SB=F','GLD','SLV','USO','UNG','DBA','GDX'];
 
 // Refresh intervals — 10-second polling during ANY live session
 const INTERVAL_LIVE        = 10_000;   // 10s prices during market open / pre / post
@@ -109,7 +117,15 @@ function enrichTrades(trades, livePrices, hasLiveData) {
     });
 }
 
-export default function DashboardPage() {
+export default function DashboardPage({ market = 'stocks', title = null }) {
+  const TICKER_TAPE = market === 'forex' ? FOREX_TAPE
+                    : market === 'commodities' ? COMMODITIES_TAPE
+                    : DEFAULT_TAPE;
+  const PAGE_TITLE = title || (
+    market === 'forex' ? '💱 FOREX SCANNER' :
+    market === 'commodities' ? '🛢 COMMODITIES SCANNER' :
+    null
+  );
   const [marketStatus, setMarketStatus]   = useState(null);
   const [trades, setTrades]               = useState({ enterNow: [], waitForBounce: [], carryForward: [] });
   const [tickerPrices, setTickerPrices]   = useState({});
@@ -129,6 +145,8 @@ export default function DashboardPage() {
   const [secondsToNextScan, setSecondsToNextScan] = useState(null);
   const [extendedMovers, setExtendedMovers] = useState(null);
   const [journalRefreshKey, setJournalRefreshKey] = useState(0);
+  const [forexContext, setForexContext]     = useState(null);    // sessions, strength, DXY
+  const [commodContext, setCommodContext]   = useState(null);    // schedule, DXY, drivers
 
   const marketStatusRef = useRef(null);
   const prevTickersRef  = useRef(new Set());
@@ -156,17 +174,33 @@ export default function DashboardPage() {
     } catch {}
   }, [soundEnabled]);
 
-  // "Take this trade" handler — adds to position tracker
+  // "Take this trade" handler — adds to position tracker (with risk guard check)
   const handleTakeTrade = useCallback((setup) => {
+    // Build sector map from current trades so guard can detect concentration
+    const allTrades = [...(trades.enterNow || []), ...(trades.waitForBounce || []), ...(trades.carryForward || [])];
+    const sectorMap = {};
+    allTrades.forEach(t => { if (t.ticker && t.sector) sectorMap[t.ticker] = t.sector; });
+    const candidateSector = allTrades.find(t => t.ticker === setup.ticker)?.sector;
+
+    const guard = evaluateRiskGuard(positions, accountSize, setup.ticker, candidateSector, sectorMap);
+
+    if (guard.blocked) {
+      alert('⛔ Trade blocked by risk guard:\n\n' + guard.issues.filter(i => i.severity === 'block').map(i => '• ' + i.text).join('\n'));
+      return;
+    }
+    if (guard.issues.some(i => i.severity === 'warn')) {
+      const warnings = guard.issues.filter(i => i.severity === 'warn').map(i => '• ' + i.text).join('\n');
+      if (!confirm('⚠ Risk warning:\n\n' + warnings + '\n\nProceed anyway?')) return;
+    }
+
     setPositions(prev => [
       { id: Date.now(), ...setup, enteredAt: Date.now() },
       ...prev
     ]);
-    // Scroll to position tracker
     setTimeout(() => {
       document.querySelector('[data-section="position-tracker"]')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }, 100);
-  }, []);
+  }, [positions, accountSize, trades]);
 
   // ── Fetch helpers ─────────────────────────────────────────────────────────
 
@@ -186,12 +220,12 @@ export default function DashboardPage() {
       const d = await r.json();
       setTickerPrices(d);
     } catch { /* silently fail */ }
-  }, []);
+  }, [TICKER_TAPE]);
 
   const fetchScan = useCallback(async () => {
     try {
       setScanning(true);
-      const r = await fetch('/api/scanner/scan');
+      const r = await fetch(`/api/scanner/scan?market=${market}`);
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const d = await r.json();
       const nextTrades = d.trades || { enterNow: [], waitForBounce: [], carryForward: [] };
@@ -237,7 +271,8 @@ export default function DashboardPage() {
         passedFilter: d.passedFilter,
         vix: d.vix,
         vixRegime: d.vixRegime,
-        marketRegime: d.marketRegime
+        marketRegime: d.marketRegime,
+        choppiness: d.choppiness
       });
       setLastUpdated(new Date());
       lastScanTimeRef.current = Date.now();
@@ -251,7 +286,7 @@ export default function DashboardPage() {
     } finally {
       setScanning(false);
     }
-  }, []);
+  }, [market, fetchTickerPrices, playAlertBeep]);
 
   const fetchCalendar = useCallback(async () => {
     try {
@@ -261,6 +296,22 @@ export default function DashboardPage() {
       setCatalysts(d.catalysts || []);
       setMacroContext(d.macro || []);
     } catch { /* silently fail */ }
+  }, []);
+
+  const fetchForexContext = useCallback(async () => {
+    try {
+      const r = await fetch('/api/forex/context');
+      const d = await r.json();
+      setForexContext(d);
+    } catch { /* silent */ }
+  }, []);
+
+  const fetchCommodContext = useCallback(async () => {
+    try {
+      const r = await fetch('/api/commodities/context');
+      const d = await r.json();
+      setCommodContext(d);
+    } catch { /* silent */ }
   }, []);
 
   const fetchExtendedMovers = useCallback(async () => {
@@ -277,7 +328,10 @@ export default function DashboardPage() {
     const init = async () => {
       setLoading(true);
       await fetchMarketStatus();
-      await Promise.allSettled([fetchTickerPrices(), fetchScan(), fetchCalendar(), fetchExtendedMovers()]);
+      const initTasks = [fetchTickerPrices(), fetchScan(), fetchCalendar(), fetchExtendedMovers()];
+      if (market === 'forex') initTasks.push(fetchForexContext());
+      if (market === 'commodities') initTasks.push(fetchCommodContext());
+      await Promise.allSettled(initTasks);
       setLoading(false);
     };
     init();
@@ -311,6 +365,18 @@ export default function DashboardPage() {
     const timer = setInterval(fetchExtendedMovers, 60_000);
     return () => clearInterval(timer);
   }, [marketStatus?.session, fetchExtendedMovers]);
+
+  // ── Refresh forex / commodities context every 60s ───────────────────────
+  useEffect(() => {
+    if (market === 'forex') {
+      const t = setInterval(fetchForexContext, 60_000);
+      return () => clearInterval(t);
+    }
+    if (market === 'commodities') {
+      const t = setInterval(fetchCommodContext, 300_000); // 5min — schedule changes slowly
+      return () => clearInterval(t);
+    }
+  }, [market, fetchForexContext, fetchCommodContext]);
 
   // ── Countdown to next scan (1-second tick) ───────────────────────────────
 
@@ -351,9 +417,33 @@ export default function DashboardPage() {
   return (
     <div className="pb-14">
 
+      {/* ── Page title (for Forex / Commodities) ───────────────────────── */}
+      {PAGE_TITLE && (
+        <div className="px-4 pt-3">
+          <h1 className="text-2xl font-condensed font-bold tracking-widest text-cyan-400">{PAGE_TITLE}</h1>
+          <p className="text-[11px] text-[#444] font-mono">
+            {market === 'forex' && 'Market-specific: 24/5 hours · Sessions · Currency strength · Pip-based stops'}
+            {market === 'commodities' && 'Market-specific: Inventory reports · DXY correlation · Seasonal patterns'}
+          </p>
+        </div>
+      )}
+
+      {/* ── Forex-specific top sections ──────────────────────────────────── */}
+      {market === 'forex' && forexContext && (
+        <>
+          <ForexSessionBar session={forexContext.session} />
+          <CurrencyStrengthMeter strength={forexContext.currencyStrength} dxy={forexContext.dxy} />
+        </>
+      )}
+
+      {/* ── Commodities-specific top sections ────────────────────────────── */}
+      {market === 'commodities' && commodContext && (
+        <CommodityScheduleBar schedule={commodContext.schedule} dxy={commodContext.dxy} />
+      )}
+
       {/* ── Sub-header bar with controls ───────────────────────────────── */}
       <header className="sticky top-[52px] z-40 bg-[#080808]/95 backdrop-blur border-b border-[#151515]">
-        <div className="flex items-center justify-end px-4 py-2 gap-3 flex-wrap">
+        <div className="flex items-center sm:justify-end px-3 sm:px-4 py-2 gap-2 sm:gap-3 flex-wrap">
           <div className="flex items-center gap-3">
             <MarketStatus status={marketStatus} lastUpdated={lastUpdated} scanning={scanning} />
             <button
@@ -423,6 +513,51 @@ export default function DashboardPage() {
         </div>
       )}
 
+      {/* ── Daily P&L / Risk guard banner ──────────────────────────────── */}
+      {(() => {
+        const { pnl, count } = getTodaysPnL();
+        const settings = loadGuardSettings();
+        const limit = -accountSize * (settings.dailyLossLimitPct / 100);
+        if (count === 0) return null;
+        const pct = (pnl / accountSize) * 100;
+        const breached = pnl <= limit;
+        const warning  = pnl <= limit * 0.7;
+        return (
+          <div className={`mx-4 mt-2 p-2 rounded text-[11px] font-mono border flex items-center justify-between gap-3 ${
+            breached ? 'bg-red-500/15 border-red-500/40 text-red-300 warn-pulse' :
+            warning  ? 'bg-amber-500/10 border-amber-500/30 text-amber-300' :
+                       'bg-[#0a0a0a] border-[#1a1a1a] text-[#666]'
+          }`}>
+            <span>
+              {breached && '🛑 '}
+              Today's P&L: <strong className={pnl >= 0 ? 'text-green-400' : 'text-red-400'}>{pnl >= 0 ? '+' : ''}${pnl.toFixed(0)} ({pct >= 0 ? '+' : ''}{pct.toFixed(2)}%)</strong>
+              {' · '}{count} trade{count !== 1 ? 's' : ''} closed today
+            </span>
+            {breached && <strong>DAILY LOSS LIMIT HIT — NEW TRADES BLOCKED</strong>}
+            {warning && !breached && <strong>Approaching limit (${limit.toFixed(0)})</strong>}
+          </div>
+        );
+      })()}
+
+      {/* ── Market regime banner (choppy / trending) ────────────────────── */}
+      {scanStats.choppiness?.regime && scanStats.choppiness.regime !== 'unknown' && (
+        <div className={`mx-4 mt-2 p-3 rounded text-[11px] font-mono border flex items-center justify-between gap-3 flex-wrap ${
+          scanStats.choppiness.regime === 'STRONG_TREND' ? 'bg-green-500/10 border-green-500/40 text-green-300' :
+          scanStats.choppiness.regime === 'TRENDING'     ? 'bg-green-500/8  border-green-500/30 text-green-400' :
+          scanStats.choppiness.regime === 'MIXED'        ? 'bg-amber-500/10 border-amber-500/40 text-amber-300' :
+          scanStats.choppiness.regime === 'CHOPPY'       ? 'bg-red-500/10   border-red-500/40   text-red-300' :
+                                                            'bg-[#0a0a0a] border-[#1a1a1a] text-[#666]'
+        }`}>
+          <div>
+            <span className="font-bold">📈 Market: {scanStats.choppiness.label}</span>
+            <span className="opacity-80 ml-2">· {scanStats.choppiness.advice}</span>
+          </div>
+          <span className="text-[10px] opacity-70">
+            Efficiency {(scanStats.choppiness.efficiency * 100).toFixed(0)}% · SPY 10d {scanStats.choppiness.netMovePct >= 0 ? '+' : ''}{scanStats.choppiness.netMovePct}%
+          </span>
+        </div>
+      )}
+
       {/* ── Data transparency disclaimer ───────────────────────────────── */}
       <div className="mx-4 mt-2 p-2 bg-[#0a0a0a] border border-[#1a1a1a] rounded text-[10px] text-[#444] font-mono leading-relaxed">
         <span className="text-[#666]">ℹ Data integrity:</span> Prices are sourced from Yahoo Finance — may be delayed up to 15 minutes for some tickers. <b className="text-amber-400/80">Always verify the live bid/ask on TradingView or your broker before entering.</b> This dashboard filters candidates — it does not guarantee any outcome. Combine with your own analysis.
@@ -436,7 +571,7 @@ export default function DashboardPage() {
       )}
 
       {/* ── Main content ───────────────────────────────────────────────── */}
-      <main className="max-w-[1600px] mx-auto px-4 pt-5">
+      <main className="max-w-[1600px] mx-auto px-2 sm:px-4 pt-3 sm:pt-5">
         {loading ? (
           <LoadingState />
         ) : (
@@ -478,7 +613,7 @@ export default function DashboardPage() {
               const liveCarry  = enrichTrades(trades.carryForward  || [], tickerPrices, hasLiveData);
               const commonProps = {
                 newTickers, accountSize, riskPct,
-                entryTiming: marketStatus?.entryTiming,
+                entryTiming: market === 'forex' ? forexContext?.entryTiming : marketStatus?.entryTiming,
                 onTakeTrade: handleTakeTrade
               };
               return (
@@ -505,6 +640,9 @@ export default function DashboardPage() {
                 setJournalRefreshKey(k => k + 1);
               }}
             />
+
+            {/* PERSONALIZED LEARNING INSIGHTS */}
+            <LearningInsights refreshKey={journalRefreshKey} />
 
             {/* TRADE JOURNAL */}
             <TradeJournal refreshKey={journalRefreshKey} />

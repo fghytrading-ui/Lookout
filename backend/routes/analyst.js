@@ -2,7 +2,13 @@ import { Router } from 'express';
 import { fetchFull, fetchWeekly } from '../lib/yahoo.js';
 import { enrichTicker } from '../lib/news.js';
 import { fetchNextEarnings, evaluateEarningsRisk } from '../lib/earnings.js';
-import { analyzeSignals, generateTradeSetup, calculateSMA, calculateMACD } from '../utils/signals.js';
+import { backtestSetup } from '../lib/backtest.js';
+import { fetchWallStreetConsensus } from '../lib/wallStreet.js';
+import { getMultiTimeframeTrends, scoreTimeframeAlignment } from '../lib/multiTimeframe.js';
+import { classifySetup } from '../lib/setupClassifier.js';
+import { computeTradeGrade } from '../lib/tradeGrade.js';
+import { getPerformanceMetrics } from '../lib/performanceMetrics.js';
+import { analyzeSignals, generateTradeSetup, calculateSMA, calculateMACD, TIME_SPANS, getTimespanKey, getExitWindow } from '../utils/signals.js';
 import { reviewTrade } from '../utils/reviewer.js';
 
 const router = Router();
@@ -466,19 +472,18 @@ function generateBestPlay({ setup, review, weeklyTrend, reliability, price, verd
       timeframe: 'After earnings + 1 day'
     };
   }
-  // Independence Mode: stricter no-trade threshold
-  if (reliability.score < 60) {
+  if (reliability.score < 45) {
     return {
       headline: '⏳ NO TRADE — WAIT',
-      action: `Reliability ${reliability.score}/100. Independence Mode requires ≥ 60 just to consider, and ≥ 75 to actually trade. Stay in cash.`,
+      action: `Reliability ${reliability.score}/100. Too many conflicting signals. Wait for cleaner conditions.`,
       timeframe: 'Re-check in 1–2 days'
     };
   }
-  if (reliability.score < 70) {
+  if (reliability.score < 55) {
     return {
-      headline: '👀 WATCH ONLY — DO NOT ENTER',
-      action: `Reliability ${reliability.score}/100. Setup exists but borderline. Wait for ≥ 75 before placing capital.`,
-      timeframe: 'Monitor for 1–3 days'
+      headline: '👀 WATCH — small position only',
+      action: `Reliability ${reliability.score}/100. Borderline. If you take it, size at ¼ position.`,
+      timeframe: '1–3 days'
     };
   }
 
@@ -516,8 +521,8 @@ function generateBestPlay({ setup, review, weeklyTrend, reliability, price, verd
   return {
     headline, action,
     timeframe: '3–10 trading days',
-    sizing: reliability.score >= 85 ? 'Full position (1% risk)' :
-            reliability.score >= 75 ? 'Half position (0.5% risk)' :
+    sizing: reliability.score >= 75 ? 'Full position (1% risk)' :
+            reliability.score >= 60 ? 'Half position (0.5% risk)' :
             'Quarter position (0.25% risk)'
   };
 }
@@ -539,51 +544,44 @@ function deriveVerdict(setup, review, weeklyTrend, reliability) {
   const direction = setup.direction;
   const score = reliability?.score || 0;
 
-  // ── INDEPENDENCE MODE THRESHOLDS (much stricter than dashboard) ──
-  // STRONG BUY/SELL requires near-unanimous confirmation
-  if (isPass && isHighProb && setup.rrRatio >= 2.5 && score >= 85) {
+  // ── BALANCED THRESHOLDS — gives BUY/SELL more readily, still safe ──
+  // STRONG BUY/SELL: high confluence
+  if (isPass && isHighProb && setup.rrRatio >= 2.2 && score >= 75) {
     return {
       action: direction === 'LONG' ? 'STRONG BUY' : 'STRONG SELL',
       tone: direction === 'LONG' ? 'bullish' : 'bearish',
-      detail: `Reliability ${score}/100 · ${setup.confirming} signals aligned · R:R ${setup.rrRatio}:1 · cleared every stress test. Rare A+ setup.`
+      detail: `Reliability ${score}/100 · ${setup.confirming} signals aligned · R:R ${setup.rrRatio}:1 · cleared every stress test.`
     };
   }
 
-  // BUY/SELL requires strong confluence (≥ 75/100)
-  if (isPass && score >= 75) {
+  // BUY/SELL: solid confluence (≥ 60 reliability, was 75)
+  if (isPass && score >= 60) {
     return {
       action: direction === 'LONG' ? 'BUY' : 'SELL',
       tone: direction === 'LONG' ? 'bullish' : 'bearish',
-      detail: `Reliability ${score}/100 · sources align on direction · R:R ${setup.rrRatio}:1. Trade with discipline.`
+      detail: `Reliability ${score}/100 · sources support direction · R:R ${setup.rrRatio}:1. Take with discipline.`
     };
   }
 
-  // HOLD when reliability is moderate (60-74) — wait for stronger confirmation
-  if (isPass && score >= 60) {
+  // BUY/SELL with caveats: CAUTION review but decent reliability
+  if (review.verdict === 'CAUTION' && score >= 55 && setup.rrRatio >= 1.8) {
+    return {
+      action: direction === 'LONG' ? 'BUY' : 'SELL',
+      tone: direction === 'LONG' ? 'bullish' : 'bearish',
+      detail: `Reliability ${score}/100 with one caveat: ${review.issues[0]?.text || 'minor warning'}. Smaller size advised.`
+    };
+  }
+
+  // HOLD: middling reliability
+  if (score >= 45) {
     return {
       action: 'HOLD',
       tone: 'neutral',
-      detail: `Reliability only ${score}/100 — some sources disagree. Wait for higher confluence before entering.`
+      detail: `Reliability ${score}/100 — borderline. Wait for stronger confluence or smaller position.`
     };
   }
 
-  // CAUTION on review or low reliability = HOLD / WAIT (no trade)
-  if (review.verdict === 'CAUTION') {
-    return {
-      action: 'HOLD',
-      tone: 'neutral',
-      detail: `Reviewer flagged caution: ${review.issues[0]?.text || 'multiple risk factors'}. Independence Mode defaults to no-trade.`
-    };
-  }
-  if (score < 50) {
-    return {
-      action: 'WAIT',
-      tone: 'neutral',
-      detail: `Reliability ${score}/100 — too many sources conflict. Independence Mode: stay in cash.`
-    };
-  }
-
-  return { action: 'WAIT', tone: 'neutral', detail: 'Insufficient conviction for a trade. Wait for cleaner setup.' };
+  return { action: 'WAIT', tone: 'neutral', detail: `Reliability ${score}/100 — too many conflicts. Wait for a cleaner setup.` };
 }
 
 // Realistic price targets — bullish/bearish scenarios using REACHABLE targets
@@ -655,12 +653,14 @@ router.get('/:ticker', async (req, res) => {
   const ticker = req.params.ticker.toUpperCase();
   try {
     // Parallel fetch of all data sources
-    const [full, weeklyTrend, news, earningsRaw, vix] = await Promise.all([
+    const [full, weeklyTrend, news, earningsRaw, vix, wallStreet, fullForBacktest] = await Promise.all([
       fetchFull(ticker, '3mo'),
       getWeeklyTrend(ticker),
       enrichTicker(ticker),
       fetchNextEarnings(ticker),
-      getVIX()
+      getVIX(),
+      fetchWallStreetConsensus(ticker),
+      fetchFull(ticker, '6mo')   // 6 months of candles for backtest
     ]);
 
     if (!full.candles || full.candles.length < 30) {
@@ -671,7 +671,7 @@ router.get('/:ticker', async (req, res) => {
     const candles = full.candles;
     const quote = adaptQuote(raw);
     const signalData = analyzeSignals(quote, candles, null);
-    const setup = generateTradeSetup(quote, candles, signalData);
+    const setup = generateTradeSetup(quote, candles, signalData, { tradeStyle: 'sameDay' });
 
     // Build a synthetic card so reviewer can score it
     const card = {
@@ -713,6 +713,29 @@ router.get('/:ticker', async (req, res) => {
     const invalidation = setup ? generateInvalidationTriggers(setup, signalData, keyLevels) : [];
     const sectorContext = await getSectorContext(ticker, fetchFull);
 
+    // Backtest: run only if we have a setup direction
+    const backtest = setup ? backtestSetup(fullForBacktest.candles, setup.direction) : null;
+
+    // Classify setup type
+    const setupType = setup ? classifySetup(quote, candles, { ...signalData, direction: setup.direction }) : null;
+
+    // Multi-timeframe alignment (4h / daily / weekly / monthly)
+    let mtfTrends = null, mtfAlignment = null;
+    try {
+      mtfTrends = await getMultiTimeframeTrends(ticker);
+      if (setup) mtfAlignment = scoreTimeframeAlignment(mtfTrends, setup.direction);
+    } catch {}
+
+    // Performance metrics — YTD/MTD/WTD + beta
+    let performance = null;
+    try { performance = await getPerformanceMetrics(ticker, candles); } catch {}
+
+    // Trade quality grade (synthesis of everything)
+    const tradeGrade = computeTradeGrade({
+      setup, review, reliability, mtfAlignment, backtest,
+      weeklyTrend, sentiment: news.sentiment
+    });
+
     res.json({
       ticker,
       name: raw.longName,
@@ -740,6 +763,13 @@ router.get('/:ticker', async (req, res) => {
       bullsBears,
       invalidation,
       sectorContext,
+      backtest,
+      wallStreet,
+      mtfTrends,
+      mtfAlignment,
+      performance,
+      tradeGrade,
+      setupType,
 
       vix,
       targets,
@@ -749,12 +779,20 @@ router.get('/:ticker', async (req, res) => {
         entryHigh: setup.entryHigh,
         entry: setup.entry,
         tp: setup.tp,
+        tp2: setup.tp2,
         sl: setup.sl,
         rrRatio: setup.rrRatio,
+        rrRatio2: setup.rrRatio2,
         probability: setup.probability,
         confidence: setup.confidence,
         confirming: setup.confirming,
-        signals: setup.signals
+        signals: setup.signals,
+        expectedDays: setup.expectedDays,
+        expectedDays2: setup.expectedDays2,
+        trendStrength: setup.trendStrength,
+        trendStrengthLabel: setup.trendStrengthLabel,
+        timeSpan: TIME_SPANS[getTimespanKey(setup.atr, raw.price)].label,
+        exitWindow: getExitWindow(getTimespanKey(setup.atr, raw.price))
       } : null,
 
       review,

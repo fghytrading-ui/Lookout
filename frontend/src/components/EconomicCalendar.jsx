@@ -22,9 +22,16 @@ function EventRow({ event }) {
         <span className="text-[11px] font-mono text-[#888]">{event.time}</span>
       </td>
       <td className="px-3 py-2.5">
-        <span className={`text-[11px] font-mono font-medium ${isToday ? 'text-[#ccc]' : 'text-[#999]'}`}>
-          {event.name}
-        </span>
+        <div className="flex items-center gap-2">
+          {event.country && (
+            <span className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded bg-[#1a1a1a] text-[#888] border border-[#252525]">
+              {event.country}
+            </span>
+          )}
+          <span className={`text-[11px] font-mono font-medium ${isToday ? 'text-[#ccc]' : 'text-[#999]'}`}>
+            {event.name}
+          </span>
+        </div>
       </td>
       <td className="px-3 py-2.5 text-center">
         <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${cfg.bg} ${cfg.border} ${cfg.text} font-mono`}>
@@ -41,7 +48,7 @@ function EventRow({ event }) {
   );
 }
 
-export default function EconomicCalendar({ events }) {
+export default function EconomicCalendar({ events, isLive }) {
   const highCount = events.filter(e => e.impact === 'high').length;
 
   return (
@@ -52,11 +59,19 @@ export default function EconomicCalendar({ events }) {
           <h2 className="text-sm font-bold tracking-widest font-condensed text-purple-400">THIS WEEK'S CALENDAR</h2>
           <p className="text-[10px] text-[#444] font-mono mt-0.5">Economic events with expected vs previous — next 7 trading days</p>
         </div>
-        {highCount > 0 && (
-          <span className="text-[10px] font-mono px-2 py-0.5 rounded border border-red-500/25 text-red-400 bg-red-500/10">
-            {highCount} HIGH IMPACT
-          </span>
-        )}
+        <div className="flex items-center gap-2">
+          {isLive && (
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded border border-green-500/40 text-green-300 bg-green-500/10 flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-green-400 live-dot" />
+              LIVE
+            </span>
+          )}
+          {highCount > 0 && (
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded border border-red-500/25 text-red-400 bg-red-500/10">
+              {highCount} HIGH IMPACT
+            </span>
+          )}
+        </div>
       </div>
 
       <div className="border border-t-0 border-purple-500/20 rounded-b overflow-hidden">
@@ -66,7 +81,7 @@ export default function EconomicCalendar({ events }) {
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full">
+            <table className="w-full min-w-[640px]">
               <thead>
                 <tr className="border-b border-[#1a1a1a] bg-[#0a0a0a]">
                   <th className="px-3 py-2 text-left text-[9px] uppercase tracking-widest text-[#333] font-mono">Date</th>

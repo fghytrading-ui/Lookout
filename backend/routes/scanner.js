@@ -1,5 +1,7 @@
 import { Router } from 'express';
 import { fetchFullBatch, fetchFull, fetchWeekly } from '../lib/yahoo.js';
+import { classifySetup } from '../lib/setupClassifier.js';
+import { getMarketChoppiness } from '../lib/marketChoppiness.js';
 import { enrichTicker } from '../lib/news.js';
 import { fetchNextEarnings, evaluateEarningsRisk } from '../lib/earnings.js';
 import { reviewTrade } from '../utils/reviewer.js';
@@ -54,6 +56,80 @@ async function getWeeklyTrend(ticker) {
 }
 
 const router = Router();
+
+// Major forex pairs (Yahoo format)
+const FOREX_WATCHLIST = [
+  'EURUSD=X', 'GBPUSD=X', 'USDJPY=X', 'USDCHF=X', 'AUDUSD=X', 'NZDUSD=X', 'USDCAD=X',
+  'EURGBP=X', 'EURJPY=X', 'GBPJPY=X', 'EURCHF=X', 'AUDJPY=X', 'CADJPY=X',
+  'USDCNY=X', 'USDMXN=X', 'USDZAR=X', 'USDTRY=X',
+  'BTC-USD', 'ETH-USD', 'SOL-USD', 'XRP-USD'
+];
+
+// Commodities & futures (Yahoo format)
+const COMMODITIES_WATCHLIST = [
+  // Precious metals
+  'GC=F', 'SI=F', 'PL=F', 'PA=F',
+  // Industrial metals
+  'HG=F',
+  // Energy
+  'CL=F', 'BZ=F', 'NG=F', 'HO=F', 'RB=F',
+  // Agriculture
+  'ZC=F', 'ZS=F', 'ZW=F', 'KC=F', 'SB=F', 'CC=F', 'CT=F', 'OJ=F',
+  // ETF proxies (more reliable data)
+  'GLD', 'SLV', 'USO', 'UNG', 'DBA', 'GDX', 'PPLT', 'CPER'
+];
+
+// Display names for non-stock symbols
+const FOREX_NAMES = {
+  'EURUSD=X': 'Euro / US Dollar',
+  'GBPUSD=X': 'British Pound / US Dollar',
+  'USDJPY=X': 'US Dollar / Japanese Yen',
+  'USDCHF=X': 'US Dollar / Swiss Franc',
+  'AUDUSD=X': 'Australian Dollar / US Dollar',
+  'NZDUSD=X': 'New Zealand Dollar / US Dollar',
+  'USDCAD=X': 'US Dollar / Canadian Dollar',
+  'EURGBP=X': 'Euro / British Pound',
+  'EURJPY=X': 'Euro / Japanese Yen',
+  'GBPJPY=X': 'British Pound / Japanese Yen',
+  'EURCHF=X': 'Euro / Swiss Franc',
+  'AUDJPY=X': 'Australian Dollar / Japanese Yen',
+  'CADJPY=X': 'Canadian Dollar / Japanese Yen',
+  'USDCNY=X': 'US Dollar / Chinese Yuan',
+  'USDMXN=X': 'US Dollar / Mexican Peso',
+  'USDZAR=X': 'US Dollar / South African Rand',
+  'USDTRY=X': 'US Dollar / Turkish Lira',
+  'BTC-USD': 'Bitcoin',
+  'ETH-USD': 'Ethereum',
+  'SOL-USD': 'Solana',
+  'XRP-USD': 'Ripple'
+};
+const COMMODITIES_NAMES = {
+  'GC=F': 'Gold Futures', 'SI=F': 'Silver Futures', 'PL=F': 'Platinum Futures', 'PA=F': 'Palladium Futures',
+  'HG=F': 'Copper Futures',
+  'CL=F': 'WTI Crude Oil', 'BZ=F': 'Brent Crude Oil', 'NG=F': 'Natural Gas', 'HO=F': 'Heating Oil', 'RB=F': 'RBOB Gasoline',
+  'ZC=F': 'Corn Futures', 'ZS=F': 'Soybean Futures', 'ZW=F': 'Wheat Futures',
+  'KC=F': 'Coffee Futures', 'SB=F': 'Sugar Futures', 'CC=F': 'Cocoa Futures', 'CT=F': 'Cotton Futures', 'OJ=F': 'Orange Juice Futures',
+  'GLD': 'SPDR Gold Trust ETF', 'SLV': 'iShares Silver Trust', 'USO': 'United States Oil Fund',
+  'UNG': 'United States Natural Gas Fund', 'DBA': 'Invesco DB Agriculture', 'GDX': 'VanEck Gold Miners',
+  'PPLT': 'abrdn Platinum ETF', 'CPER': 'United States Copper Index'
+};
+const FOREX_CATEGORIES = {
+  'EURUSD=X':'Major','GBPUSD=X':'Major','USDJPY=X':'Major','USDCHF=X':'Major',
+  'AUDUSD=X':'Major','NZDUSD=X':'Major','USDCAD=X':'Major',
+  'EURGBP=X':'Cross','EURJPY=X':'Cross','GBPJPY=X':'Cross','EURCHF=X':'Cross','AUDJPY=X':'Cross','CADJPY=X':'Cross',
+  'USDCNY=X':'Emerging','USDMXN=X':'Emerging','USDZAR=X':'Emerging','USDTRY=X':'Emerging',
+  'BTC-USD':'Crypto','ETH-USD':'Crypto','SOL-USD':'Crypto','XRP-USD':'Crypto'
+};
+const COMMODITIES_CATEGORIES = {
+  'GC=F':'Precious Metal','SI=F':'Precious Metal','PL=F':'Precious Metal','PA=F':'Precious Metal',
+  'HG=F':'Industrial Metal',
+  'CL=F':'Energy','BZ=F':'Energy','NG=F':'Energy','HO=F':'Energy','RB=F':'Energy',
+  'ZC=F':'Grain','ZS=F':'Grain','ZW=F':'Grain',
+  'KC=F':'Soft','SB=F':'Soft','CC=F':'Soft','CT=F':'Soft','OJ=F':'Soft',
+  'GLD':'ETF / Precious Metal','SLV':'ETF / Precious Metal','USO':'ETF / Energy',
+  'UNG':'ETF / Energy','DBA':'ETF / Agriculture','GDX':'ETF / Mining',
+  'PPLT':'ETF / Precious Metal','CPER':'ETF / Industrial Metal'
+};
 
 const WATCHLIST = [
   // Mega cap tech (highest liquidity, cleanest charts)
@@ -113,11 +189,12 @@ function adaptQuote(raw) {
   };
 }
 
-function buildCard(ticker, raw, quote, setup, signalData, historical) {
+function buildCard(ticker, raw, quote, setup, signalData, historical, market = 'stocks') {
   const price = raw.price;
-  const { direction, entry, entryLow, entryHigh, tp, sl, rrRatio, probability, confirming, confidence } = setup;
-  const tpPct = parseFloat(Math.abs((tp - entry) / entry * 100).toFixed(1));
-  const slPct = parseFloat(Math.abs((sl - entry) / entry * 100).toFixed(1));
+  const { direction, entry, entryLow, entryHigh, tp, tp2, sl, rrRatio, rrRatio2, probability, confirming, confidence, expectedDays, expectedDays2, expectedHours, expectedHours2, trendStrength, trendStrengthLabel, confirmation, tradeStyle } = setup;
+  const tpPct  = parseFloat(Math.abs((tp - entry)  / entry * 100).toFixed(1));
+  const tp2Pct = tp2 != null ? parseFloat(Math.abs((tp2 - entry) / entry * 100).toFixed(1)) : null;
+  const slPct  = parseFloat(Math.abs((sl - entry)  / entry * 100).toFixed(1));
   const tsKey = getTimespanKey(setup.atr, price);
 
   // ── Entry validity status ───────────────────────────────────────────
@@ -157,16 +234,40 @@ function buildCard(ticker, raw, quote, setup, signalData, historical) {
   // Sparkline = last 20 daily closes
   const sparkline = (historical || []).slice(-20).map(c => c.close);
 
+  // Choose name + category based on market
+  const customName = market === 'forex' ? FOREX_NAMES[ticker]
+                   : market === 'commodities' ? COMMODITIES_NAMES[ticker]
+                   : null;
+  const category = market === 'forex' ? FOREX_CATEGORIES[ticker]
+                 : market === 'commodities' ? COMMODITIES_CATEGORIES[ticker]
+                 : SECTOR_MAP[ticker] || 'N/A';
+
   return {
     ticker,
-    name:        raw.longName || ticker,
-    exchange:    raw.exchangeName || 'NYSE',
-    sector:      SECTOR_MAP[ticker] || 'N/A',
+    name:        customName || raw.longName || ticker,
+    exchange:    raw.exchangeName || (market === 'forex' ? 'FX' : market === 'commodities' ? 'CME' : 'NYSE'),
+    sector:      category,
     direction, probability, confirming, confidence,
     price, entry, entryLow, entryHigh, entryStatus, entryStatusText,
-    tp, tpPct, sl, slPct, rrRatio, volRatio,
-    timeSpan:    TIME_SPANS[tsKey].label,
-    exitWindow:  getExitWindow(tsKey),
+    tp, tpPct, tp2, tp2Pct,
+    sl, slPct,
+    timeSpan: tradeStyle === 'sameDay' ? 'Intraday — Same Day' : TIME_SPANS[tsKey].label,
+    exitWindow: tradeStyle === 'sameDay' ? 'Before market close (9pm UK)' : getExitWindow(tsKey),
+    // Intraday-specific timing windows (UK time)
+    intradayTiming: tradeStyle === 'sameDay' ? {
+      entryFrom: '2:30 PM UK',       // US market open
+      entryUntil: '7:00 PM UK',      // 2 hours before close — don't enter late
+      mustExitBy: '9:00 PM UK',      // US market close
+      totalSession: '6.5 hours',
+      bestEntryWindow: '2:30 – 4:30 PM UK',  // first 2 hours
+      avoidWindow: '7:00 – 9:00 PM UK'        // last 2 hours
+    } : null,
+    rrRatio, rrRatio2,
+    volRatio, expectedDays, expectedDays2,
+    expectedHours, expectedHours2,
+    trendStrength, trendStrengthLabel,
+    confirmation,
+    tradeStyle,
     signals:     setup.signals,
     warnings:    setup.warnings,
     analystNotes: generateAnalystNotes(direction, ticker, setup.signals, signalData.rsi, setup.atr, price),
@@ -192,12 +293,21 @@ function sortTrades(arr) {
 
 router.get('/scan', async (req, res) => {
   try {
+    const market = (req.query.market || 'stocks').toLowerCase();
+    const watchlist = market === 'forex' ? FOREX_WATCHLIST
+                    : market === 'commodities' ? COMMODITIES_WATCHLIST
+                    : WATCHLIST;
+
     const tickerList = req.query.tickers
       ? req.query.tickers.split(',').map(t => t.trim().toUpperCase())
-      : WATCHLIST.slice(0, 40); // scan top 40 — uses cache so subsequent runs are fast
+      : watchlist.slice(0, 40);
 
     // Fetch macro context first
-    const [marketRegime, vix] = await Promise.all([getMarketRegime(), getVIX()]);
+    const [marketRegime, vix, choppiness] = await Promise.all([
+      getMarketRegime(),
+      getVIX(),
+      getMarketChoppiness()
+    ]);
 
     // Single call per ticker: quote + 3mo candles
     const fullMap = await fetchFullBatch(tickerList);
@@ -214,13 +324,15 @@ router.get('/scan', async (req, res) => {
 
       const quote = adaptQuote(raw);
       const signalData = analyzeSignals(quote, historical, marketRegime);
-      const setup      = generateTradeSetup(quote, historical, signalData);
+      const setup      = generateTradeSetup(quote, historical, signalData, { market, tradeStyle: 'sameDay' });
       if (!setup) continue;
 
       // Regime filter is now a confidence-boost signal (added in analyzeSignals),
       // not a hard reject — we still allow counter-trend setups if they are strong.
 
-      const card = buildCard(ticker, raw, quote, setup, signalData, historical);
+      const card = buildCard(ticker, raw, quote, setup, signalData, historical, market);
+      // Classify the setup type — tells user WHAT KIND of trade this is
+      card.setupType = classifySetup(quote, historical, { ...signalData, direction: setup.direction });
       // Stash for the reviewer pass (stripped before sending to client)
       card._historical = historical;
       card._signalData = signalData;
@@ -300,23 +412,46 @@ router.get('/scan', async (req, res) => {
     trades.waitForBounce = filterCategory(trades.waitForBounce);
     trades.carryForward  = filterCategory(trades.carryForward);
 
-    // ── STRICTER ENTER-NOW GATE ────────────────────────────────────────
-    // Only PASS-verdict, HIGH-prob trades stay in ENTER NOW.
-    // Anything else gets demoted to CARRY FORWARD.
+    // ── INTELLIGENT ENTER-NOW GATE ─────────────────────────────────────
+    // Requires:
+    //   • Confirmation candle (today's bar confirms direction) — pro best practice
+    //   • Quality signals (HIGH/MED prob with PASS or strong CAUTION)
+    //   • In CHOPPY markets, raise the bar substantially
+    const isChoppy = choppiness?.regime === 'CHOPPY';
+    const isMixed  = choppiness?.regime === 'MIXED';
+
     const demoted = [];
     trades.enterNow = trades.enterNow.filter(card => {
-      const isEliteSetup = card.probability === 'HIGH' &&
-                           card.review?.verdict === 'PASS' &&
-                           card.rrRatio >= 2.0;
-      if (!isEliteSetup) {
+      const rr = card.rrRatio || 0;
+      const hasConfirmation = card.confirmation?.confirmed === true;
+      // Choppy market: only the gold-standard setups (HIGH+PASS+confirmation+R:R≥2.0)
+      if (isChoppy) {
+        const passes = card.probability === 'HIGH' && card.review?.verdict === 'PASS' && rr >= 2.0 && hasConfirmation;
+        if (passes) return true;
         demoted.push(card);
         return false;
       }
-      return true;
+      // Mixed market: tighter than normal
+      if (isMixed) {
+        const passes = (card.probability === 'HIGH' && card.review?.verdict === 'PASS' && rr >= 1.7 && hasConfirmation) ||
+                       (card.probability === 'HIGH' && card.review?.verdict === 'CAUTION' && rr >= 2.0 && hasConfirmation);
+        if (passes) return true;
+        demoted.push(card);
+        return false;
+      }
+      // Trending market: standard gates + confirmation candle
+      const isHighPass    = card.probability === 'HIGH'   && card.review?.verdict === 'PASS'    && rr >= 1.5;
+      const isHighCaution = card.probability === 'HIGH'   && card.review?.verdict === 'CAUTION' && rr >= 1.8;
+      const isMedPass     = card.probability === 'MEDIUM' && card.review?.verdict === 'PASS'    && rr >= 1.8;
+      const qualifies = (isHighPass || isHighCaution || isMedPass) && hasConfirmation;
+      if (qualifies) return true;
+      demoted.push(card);
+      return false;
     });
+    trades.enterNow = sortTrades(trades.enterNow).slice(0, 6);  // 6 best max — quality not quantity
     trades.carryForward = [...trades.carryForward, ...demoted]
       .sort((a, b) => (b.confidence || 0) - (a.confidence || 0))
-      .slice(0, 6);
+      .slice(0, 8);
 
     // Build the entry timing context once
     const entryTiming = getEntryTiming();
@@ -335,8 +470,10 @@ router.get('/scan', async (req, res) => {
 
     res.json({
       trades,
+      market,
       topPick: allCards.find(c => c.isTopPick) || null,
       marketRegime,
+      choppiness,
       vix,
       vixRegime: vix == null ? null : vix > 30 ? 'EXTREME' : vix > 22 ? 'ELEVATED' : vix > 15 ? 'NORMAL' : 'LOW',
       entryTiming,
