@@ -361,15 +361,15 @@ export default function AnalystPage() {
             </div>
           )}
 
-          {/* ── 5-DAY FORECAST CONE ─────────────────────────────────────────── */}
+          {/* ── INTRADAY FORECAST CONE ──────────────────────────────────────── */}
           {data.forecast && (
             <div className="bg-[#0e0e0e] border border-[#1f1f1f] rounded p-5">
-              <div className="text-[10px] uppercase tracking-widest text-[#555] font-mono mb-3">📊 5-Day Forecast Cone</div>
-              <div className="text-[10px] text-[#444] font-mono mb-3">Expected price range each day · widens with √days (probability cone)</div>
+              <div className="text-[10px] uppercase tracking-widest text-[#555] font-mono mb-3">📊 Intraday Forecast Cone</div>
+              <div className="text-[10px] text-[#444] font-mono mb-3">Expected price range hour-by-hour within today's session · widens with √hours</div>
               <table className="w-full">
                 <thead>
                   <tr className="border-b border-[#1a1a1a]">
-                    <th className="text-left py-2 text-[9px] uppercase tracking-widest text-[#333] font-mono">Day</th>
+                    <th className="text-left py-2 text-[9px] uppercase tracking-widest text-[#333] font-mono">Time</th>
                     <th className="text-right py-2 text-[9px] uppercase tracking-widest text-[#333] font-mono">Low Estimate</th>
                     <th className="text-right py-2 text-[9px] uppercase tracking-widest text-[#333] font-mono">Expected</th>
                     <th className="text-right py-2 text-[9px] uppercase tracking-widest text-[#333] font-mono">High Estimate</th>

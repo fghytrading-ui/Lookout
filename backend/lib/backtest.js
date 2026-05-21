@@ -15,13 +15,14 @@ function detectsShortRally(rsi, price, sma20, sma50) {
          price < sma50 && price < sma20 && rsi > 55 && sma20 < sma50;
 }
 
-// Simulate: from entry candle, did price hit TP (3 ATR) before SL (1.5 ATR) within 10 days?
+// Simulate same-day trade: did price hit TP (1.5 ATR) before SL (0.7 ATR) within 1-2 days?
+// (we use daily candles, so 1-2 daily candles = "same session" approximation)
 function simulateTrade(candles, startIdx, direction, atr) {
-  if (startIdx + 10 > candles.length) return null;
+  if (startIdx + 2 > candles.length) return null;
   const entry = candles[startIdx].close;
-  const tp = direction === 'LONG' ? entry + atr * 3   : entry - atr * 3;
-  const sl = direction === 'LONG' ? entry - atr * 1.5 : entry + atr * 1.5;
-  for (let i = startIdx + 1; i <= Math.min(startIdx + 10, candles.length - 1); i++) {
+  const tp = direction === 'LONG' ? entry + atr * 1.5 : entry - atr * 1.5;
+  const sl = direction === 'LONG' ? entry - atr * 0.7 : entry + atr * 0.7;
+  for (let i = startIdx + 1; i <= Math.min(startIdx + 2, candles.length - 1); i++) {
     const c = candles[i];
     if (direction === 'LONG') {
       if (c.low  <= sl) return 'LOSS';
@@ -31,7 +32,7 @@ function simulateTrade(candles, startIdx, direction, atr) {
       if (c.low  <= tp) return 'WIN';
     }
   }
-  return 'TIMEOUT'; // Neither hit within 10 days
+  return 'TIMEOUT'; // Neither hit within 1-2 sessions
 }
 
 // Main: run backtest for a given direction over the candle history

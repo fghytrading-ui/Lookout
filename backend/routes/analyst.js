@@ -290,15 +290,22 @@ function buildForecastCone(price, atr, sma20, candles) {
   }
   avgAbsChange /= (recent10.length - 1);
 
-  // Cone widens with √days (random-walk model)
-  const days = ['Day +1', 'Day +2', 'Day +3', 'Day +4', 'Day +5'];
-  return days.map((label, i) => {
-    const d = i + 1;
-    const trendProjection = price + trendPerDay * d;
-    const widening = atr * Math.sqrt(d);
+  // Intraday cone — hourly projections within the session (6.5 hours)
+  // ATR per hour ≈ ATR / √6.5 ≈ 0.39 × daily ATR
+  const hourlyATR = atr / Math.sqrt(6.5);
+  const hourlyTrend = trendPerDay / 6.5;
+  const slots = [
+    { label: '+1 hour', h: 1 },
+    { label: '+2 hours', h: 2 },
+    { label: '+3 hours', h: 3 },
+    { label: '+4 hours', h: 4 },
+    { label: 'By close (+6h)', h: 6 }
+  ];
+  return slots.map(({ label, h }) => {
+    const trendProjection = price + hourlyTrend * h;
+    const widening = hourlyATR * Math.sqrt(h);
     return {
-      label,
-      day: d,
+      label, day: null, hour: h,
       expected: r2(trendProjection),
       low: r2(trendProjection - widening),
       high: r2(trendProjection + widening),
@@ -520,7 +527,7 @@ function generateBestPlay({ setup, review, weeklyTrend, reliability, price, verd
 
   return {
     headline, action,
-    timeframe: '3–10 trading days',
+    timeframe: 'Same session — exit by 9pm UK',
     sizing: reliability.score >= 75 ? 'Full position (1% risk)' :
             reliability.score >= 60 ? 'Half position (0.5% risk)' :
             'Quarter position (0.25% risk)'
@@ -610,13 +617,13 @@ function priceTargets(price, atr, sma200, fiftyTwoWeekHigh, fiftyTwoWeekLow, can
     bullish: {
       price: bullishTarget,
       pct: r2((bullishTarget - price) / price * 100),
-      timeframe: '5–10 days',
+      timeframe: 'Same session',
       reasoning: bullReasoning
     },
     bearish: {
       price: bearishTarget,
       pct: r2((bearishTarget - price) / price * 100),
-      timeframe: '5–10 days',
+      timeframe: 'Same session',
       reasoning: bearReasoning
     },
     key52WeekHigh: fiftyTwoWeekHigh,
