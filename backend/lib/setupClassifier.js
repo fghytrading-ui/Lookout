@@ -52,7 +52,7 @@ export function classifySetup(quote, historical, signalData) {
         idealHold: 'Same session (~4-6 hours)',
         risk: 'medium',
         reasoning: `Stock pulled back ${pullbackPct.toFixed(1)}% from 20-day high. RSI ${rsi.toFixed(0)} is in the buy zone. Uptrend intact (price > 50 SMA > 200 SMA).`,
-        action: 'Buy the dip — let trend resume. Typical 4-7 day winner.'
+        action: 'Buy the dip — typical full-session move as trend resumes intraday.'
       };
     }
   }
@@ -114,7 +114,7 @@ export function classifySetup(quote, historical, signalData) {
       idealHold: 'Same session (~5-6 hours)',
       risk: 'medium',
       reasoning: `Price above 20 SMA, 20 above 50 (clean uptrend). RSI ${rsi.toFixed(0)} shows momentum without exhaustion.`,
-      action: 'Trail behind the trend. Most consistent setup. Let winners run.'
+      action: 'Trail behind the trend. Most consistent intraday setup — exit by close.'
     };
   }
 

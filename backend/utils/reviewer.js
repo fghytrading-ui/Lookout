@@ -125,16 +125,16 @@ export function reviewTrade(card, historical, signalData, marketContext = {}) {
     const fiveBack = historical[historical.length - 5];
     const fiveDayMove = ((price - fiveBack.close) / fiveBack.close) * 100;
     if (direction === 'LONG' && fiveDayMove > 12) {
-      issues.push({ severity: 'reject', text: `Already up ${fiveDayMove.toFixed(1)}% in 5 days — too extended for fresh long` });
+      issues.push({ severity: 'reject', text: `Already up ${fiveDayMove.toFixed(1)}% in 5 sessions — too extended for fresh long` });
     }
     if (direction === 'SHORT' && fiveDayMove < -12) {
-      issues.push({ severity: 'reject', text: `Already down ${fiveDayMove.toFixed(1)}% in 5 days — too extended for fresh short` });
+      issues.push({ severity: 'reject', text: `Already down ${fiveDayMove.toFixed(1)}% in 5 sessions — too extended for fresh short` });
     }
     if (direction === 'LONG' && fiveDayMove > 7) {
-      issues.push({ severity: 'caution', text: `Up ${fiveDayMove.toFixed(1)}% in 5 days — wait for pullback to entry zone` });
+      issues.push({ severity: 'caution', text: `Up ${fiveDayMove.toFixed(1)}% in 5 sessions — wait for pullback to entry zone` });
     }
     if (direction === 'SHORT' && fiveDayMove < -7) {
-      issues.push({ severity: 'caution', text: `Down ${fiveDayMove.toFixed(1)}% in 5 days — wait for bounce to entry zone` });
+      issues.push({ severity: 'caution', text: `Down ${fiveDayMove.toFixed(1)}% in 5 sessions — wait for bounce to entry zone` });
     }
   }
 

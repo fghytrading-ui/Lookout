@@ -471,10 +471,14 @@ export default function AnalystPage() {
                     <span className="text-[#ccc] font-bold">📅 {data.setup.exitWindow}</span>
                   </div>
                 )}
-                {data.setup.expectedDays && (
+                {(data.setup.expectedHours || data.setup.expectedDays) && (
                   <div>
                     <span className="text-[#555]">Realistic reach: </span>
-                    <span className="text-cyan-400 font-bold">~{data.setup.expectedDays} day{data.setup.expectedDays !== 1 ? 's' : ''}</span>
+                    <span className="text-cyan-400 font-bold">
+                      {data.setup.expectedHours
+                        ? `~${data.setup.expectedHours} hour${data.setup.expectedHours !== 1 ? 's' : ''}`
+                        : `~${data.setup.expectedDays} day${data.setup.expectedDays !== 1 ? 's' : ''}`}
+                    </span>
                   </div>
                 )}
               </div>
