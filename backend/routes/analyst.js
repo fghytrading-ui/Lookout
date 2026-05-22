@@ -591,27 +591,27 @@ function deriveVerdict(setup, review, weeklyTrend, reliability) {
   return { action: 'WAIT', tone: 'neutral', detail: `Reliability ${score}/100 — too many conflicts. Wait for a cleaner setup.` };
 }
 
-// Realistic price targets — bullish/bearish scenarios using REACHABLE targets
-// Take the CLOSER of (recent 20-day extreme, 3 ATR projection). Cap at ±10%.
+// INTRADAY price targets — bullish/bearish scenarios reachable WITHIN ONE SESSION.
+// Uses ~1.5 ATR (full session move) capped at ±5% (realistic intraday extreme).
 function priceTargets(price, atr, sma200, fiftyTwoWeekHigh, fiftyTwoWeekLow, candles) {
-  const recent20 = candles.slice(-20);
-  const high20 = Math.max(...recent20.map(c => c.high));
-  const low20  = Math.min(...recent20.map(c => c.low));
+  const recent5 = candles.slice(-5);
+  const high5 = Math.max(...recent5.map(c => c.high));
+  const low5  = Math.min(...recent5.map(c => c.low));
 
-  // Bullish scenario: closer of (20-day high, +3 ATR), capped at +10%
-  const bullCandidate = Math.min(high20 * 1.005, price + atr * 3);
-  const bullishTarget = r2(Math.min(bullCandidate, price * 1.10));
+  // Bullish: ~1.5 ATR up, or 5-day high if closer (intraday-reachable)
+  const bullCandidate = Math.min(high5 * 1.003, price + atr * 1.5);
+  const bullishTarget = r2(Math.min(bullCandidate, price * 1.05));
 
-  // Bearish scenario: closer of (20-day low, -3 ATR), capped at -10%
-  const bearCandidate = Math.max(low20 * 0.995, price - atr * 3);
-  const bearishTarget = r2(Math.max(bearCandidate, price * 0.90));
+  // Bearish: ~1.5 ATR down, or 5-day low if closer
+  const bearCandidate = Math.max(low5 * 0.997, price - atr * 1.5);
+  const bearishTarget = r2(Math.max(bearCandidate, price * 0.95));
 
-  const bullReasoning = bullishTarget >= high20 * 0.995
-    ? 'Test of 20-day high — established resistance'
-    : 'ATR-based projection — within typical swing range';
-  const bearReasoning = bearishTarget <= low20 * 1.005
-    ? 'Test of 20-day low — established support'
-    : 'ATR-based projection — within typical swing range';
+  const bullReasoning = bullishTarget >= high5 * 0.997
+    ? 'Test of 5-day high — recent intraday resistance'
+    : 'Intraday ATR projection — typical full-session move';
+  const bearReasoning = bearishTarget <= low5 * 1.003
+    ? 'Test of 5-day low — recent intraday support'
+    : 'Intraday ATR projection — typical full-session move';
 
   return {
     bullish: {
