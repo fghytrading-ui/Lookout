@@ -5,7 +5,7 @@ import { getMarketChoppiness } from '../lib/marketChoppiness.js';
 import { enrichTicker } from '../lib/news.js';
 import { fetchNextEarnings, evaluateEarningsRisk } from '../lib/earnings.js';
 import { reviewTrade } from '../utils/reviewer.js';
-import { getCryptoContext } from '../lib/cryptoContext.js';
+import { getCryptoContext, tickerToBinanceSymbol } from '../lib/cryptoContext.js';
 import {
   analyzeSignals, generateTradeSetup, calculateSMA,
   TIME_SPANS, getTimespanKey, getExitWindow, generateAnalystNotes
@@ -456,17 +456,35 @@ router.get('/scan', async (req, res) => {
       }));
     }
 
+    // ── Derive BTC.D direction from data we already have (BTC outperforming → BTC.D rising) ──
+    if (isCrypto && cryptoContext) {
+      const btcEntry = fullMap['BTC-USD'];
+      const btc24h = btcEntry?.quote?.changePercent;
+      const total24h = cryptoContext.global?.marketCapChange24h;
+      if (btc24h != null && total24h != null) {
+        const diff = btc24h - total24h;
+        cryptoContext.btcDominanceDirection = diff > 0.5 ? 'RISING'
+                                            : diff < -0.5 ? 'FALLING'
+                                            : 'FLAT';
+        cryptoContext.btcDominanceDelta = parseFloat(diff.toFixed(2));
+      }
+    }
+
     // ── REVIEWER PASS: stress-test each card, drop REJECTs ─────────────
     const filterCategory = (cards) => {
       const kept = [];
       for (const card of cards) {
+        const cardFunding = isCrypto && cryptoContext?.funding?.rates
+          ? cryptoContext.funding.rates[tickerToBinanceSymbol(card.ticker)] ?? null
+          : null;
         const review = reviewTrade(card, card._historical, card._signalData, {
           vix,
           weeklyTrend: weeklyTrendMap[card.ticker] || null,
           market,
           btcTrend,
           fearGreed: cryptoContext?.fearGreed?.value || null,
-          cryptoSession: cryptoContext?.session || null
+          cryptoSession: cryptoContext?.session || null,
+          funding: cardFunding
         });
         // Strip internal fields before sending
         delete card._historical;

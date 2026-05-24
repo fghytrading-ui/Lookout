@@ -30,7 +30,7 @@ export function reviewTrade(card, historical, signalData, marketContext = {}) {
 
   const { direction, price, changePercent, rsi, news, sentiment, fiftyTwoWeekHigh, fiftyTwoWeekLow, earnings, volRatio } = card;
   const { sma200, sma50, macd, atr } = signalData;
-  const { vix, weeklyTrend, market, btcTrend, fearGreed, cryptoSession } = marketContext;
+  const { vix, weeklyTrend, market, btcTrend, fearGreed, cryptoSession, funding } = marketContext;
   const isCrypto = market === 'crypto';
 
   // ── A. VIX market regime override ────────────────────────────────────
@@ -231,6 +231,22 @@ export function reviewTrade(card, historical, signalData, marketContext = {}) {
     // Low-liquidity session caution (alts especially)
     if (cryptoSession?.liquidity === 'LOW' && !isBTC) {
       issues.push({ severity: 'caution', text: `${cryptoSession.activeSession} session — low liquidity, alts prone to wicks and spreads` });
+    }
+    // Perp funding contrarian flag — crowded positioning predicts squeeze risk
+    if (funding != null) {
+      const fundingPct = (funding * 100).toFixed(3);
+      if (direction === 'LONG' && funding > 0.0005) {
+        issues.push({ severity: 'caution', text: `Funding ${fundingPct}%/8h (crowded longs) — squeeze risk against this long` });
+      }
+      if (direction === 'SHORT' && funding < -0.0003) {
+        issues.push({ severity: 'caution', text: `Funding ${fundingPct}%/8h (crowded shorts) — squeeze risk against this short` });
+      }
+      if (direction === 'LONG' && funding < -0.0002) {
+        strengths.push(`Funding ${fundingPct}%/8h — shorts are crowded, contrarian long tailwind`);
+      }
+      if (direction === 'SHORT' && funding > 0.0004) {
+        strengths.push(`Funding ${fundingPct}%/8h — longs are crowded, contrarian short tailwind`);
+      }
     }
   }
 
