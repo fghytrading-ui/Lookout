@@ -249,7 +249,7 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
   const price = quote.regularMarketPrice;
   if (!price || !atr || atr <= 0) return null;
 
-  // ── Liquidity gates (skip for forex / commodities — different price scales) ──
+  // ── Liquidity gates (skip for forex / commodities / crypto — different price scales) ──
   const market = opts.market || 'stocks';
   if (market === 'stocks') {
     if (price < 5) return null;                        // No penny stocks
@@ -261,8 +261,9 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
 
   // ── Volatility band: not too dead, not too crazy ────────────────────
   const atrPct = (atr / price) * 100;
-  if (atrPct < 0.7) return null;                     // Too quiet
-  if (atrPct > 10.0) return null;                    // Too erratic
+  const isCrypto = market === 'crypto';
+  if (atrPct < (isCrypto ? 1.5 : 0.7)) return null;  // Crypto needs more vol to matter
+  if (atrPct > (isCrypto ? 18.0 : 10.0)) return null; // Crypto can run hotter
 
   const hasSkipShort = warnings.some(w => w.type === 'skip-short');
   const bullish = signals.filter(s => s.type === 'bullish').length;
@@ -351,23 +352,38 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
   }
   const trendStrength = computeTrendStrength();
 
-  // ── TRADE STYLE: 'sameDay' (intraday) or 'swing' (multi-day) ──
+  // ── TRADE STYLE: 'sameDay' (intraday), 'crypto' (intraday 24/7), or 'swing' (multi-day) ──
   const tradeStyle = opts.tradeStyle || 'sameDay';
 
   // DYNAMIC TP multipliers based on trend strength AND trade style
-  // SAME-DAY: targets must be reachable within one session (6.5 hours)
-  //   1 trading day ≈ ATR of movement, so targets stay tight
-  // SWING: multi-day targets
+  // SAME-DAY: targets reachable within one US session (6.5 hours), tight stops
+  // CRYPTO:   24/7 intraday — wider stops (volatility eats tight ones), wider TPs
+  // SWING:    multi-day targets
   let tp1Mult, tp2Mult, slMult;
   if (tradeStyle === 'sameDay') {
-    tp1Mult = 0.65 + (trendStrength * 0.20);  // 0.65 → 1.25 × ATR (≤ same day)
-    tp2Mult = 1.15 + (trendStrength * 0.30);  // 1.15 → 2.05 × ATR (≤ next day)
-    slMult  = 0.7;                             // tight intraday stop
+    tp1Mult = 0.65 + (trendStrength * 0.20);
+    tp2Mult = 1.15 + (trendStrength * 0.30);
+    slMult  = 0.7;
+  } else if (tradeStyle === 'crypto') {
+    tp1Mult = 1.2 + (trendStrength * 0.30);   // 1.2 → 2.1 × ATR (next 4–12h)
+    tp2Mult = 2.0 + (trendStrength * 0.40);   // 2.0 → 3.2 × ATR (next session)
+    slMult  = 1.0;                             // crypto wicks — too-tight stops get hunted
   } else {
-    tp1Mult = 1.6 + (trendStrength * 0.4);    // 1.6 → 2.8 × ATR  (3–10 days)
-    tp2Mult = 2.8 + (trendStrength * 0.4);    // 2.8 → 4.0 × ATR  (8–16 days)
+    tp1Mult = 1.6 + (trendStrength * 0.4);
+    tp2Mult = 2.8 + (trendStrength * 0.4);
     slMult  = 1.4;
   }
+
+  // ── Calibration per trade style (used by SL/TP bounds, time ceilings, floors) ──
+  const CAL = {
+    sameDay: { slCapPct: 0.025, slFloorATR: 0.4, slRangeMin: 0.4, slRangeMax: 1.0,
+               maxDaysTP1: 1,  maxDaysTP2: 2,  minTP1ATR: 0.5, minTP2ATR: 0.9, minRR: 1.2 },
+    crypto:  { slCapPct: 0.045, slFloorATR: 0.6, slRangeMin: 0.6, slRangeMax: 1.5,
+               maxDaysTP1: 2,  maxDaysTP2: 4,  minTP1ATR: 0.8, minTP2ATR: 1.5, minRR: 1.3 },
+    swing:   { slCapPct: 0.04,  slFloorATR: 0.9, slRangeMin: 1.0, slRangeMax: 1.8,
+               maxDaysTP1: 10, maxDaysTP2: 16, minTP1ATR: 1.2, minTP2ATR: 2.0, minRR: 1.3 }
+  }[tradeStyle] || { slCapPct: 0.04, slFloorATR: 0.9, slRangeMin: 1.0, slRangeMax: 1.8,
+                     maxDaysTP1: 10, maxDaysTP2: 16, minTP1ATR: 1.2, minTP2ATR: 2.0, minRR: 1.3 };
 
   if (direction === 'LONG') {
     const dipFactor = (rsi && rsi > 55) ? 0.994 : 1.001;
@@ -382,13 +398,12 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
     if (supports.length > 0) {
       const supportBased = supports[0].price - atr * 0.15;
       const dist = entry - supportBased;
-      const slRangeMin = tradeStyle === 'sameDay' ? atr * 0.4 : atr * 1.0;
-      const slRangeMax = tradeStyle === 'sameDay' ? atr * 1.0 : atr * 1.8;
+      const slRangeMin = atr * CAL.slRangeMin;
+      const slRangeMax = atr * CAL.slRangeMax;
       if (dist >= slRangeMin && dist <= slRangeMax) slCandidate = supportBased;
     }
-    const slCapPct = tradeStyle === 'sameDay' ? 0.025 : 0.04; // 2.5% intraday vs 4% swing
-    sl = round(Math.max(slCandidate, entry * (1 - slCapPct)));
-    sl = round(Math.min(sl, entry - atr * (tradeStyle === 'sameDay' ? 0.4 : 0.9)));
+    sl = round(Math.max(slCandidate, entry * (1 - CAL.slCapPct)));
+    sl = round(Math.min(sl, entry - atr * CAL.slFloorATR));
 
     // ── TP1: REALISTIC ──
     // Default = trend-scaled ATR. Use resistance if within sensible range.
@@ -451,13 +466,12 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
     if (resistances.length > 0) {
       const resBased = resistances[0].price + atr * 0.15;
       const dist = resBased - entry;
-      const slRangeMin = tradeStyle === 'sameDay' ? atr * 0.4 : atr * 1.0;
-      const slRangeMax = tradeStyle === 'sameDay' ? atr * 1.0 : atr * 1.8;
+      const slRangeMin = atr * CAL.slRangeMin;
+      const slRangeMax = atr * CAL.slRangeMax;
       if (dist >= slRangeMin && dist <= slRangeMax) slCandidate = resBased;
     }
-    const slCapPct = tradeStyle === 'sameDay' ? 0.025 : 0.04;
-    sl = round(Math.min(slCandidate, entry * (1 + slCapPct)));
-    sl = round(Math.max(sl, entry + atr * (tradeStyle === 'sameDay' ? 0.4 : 0.9)));
+    sl = round(Math.min(slCandidate, entry * (1 + CAL.slCapPct)));
+    sl = round(Math.max(sl, entry + atr * CAL.slFloorATR));
 
     // TP1
     const tpDefault = entry - atr * tp1Mult;
@@ -503,8 +517,8 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
   // ── TIME CEILINGS by trade style ─────────────────────────────────────
   // SAME-DAY: targets must reach within one trading session (1 day max)
   // SWING: multi-day window
-  const MAX_DAYS_TP1 = tradeStyle === 'sameDay' ? 1  : 10;
-  const MAX_DAYS_TP2 = tradeStyle === 'sameDay' ? 2  : 16;
+  const MAX_DAYS_TP1 = CAL.maxDaysTP1;
+  const MAX_DAYS_TP2 = CAL.maxDaysTP2;
   const MAX_DIST_TP1 = atr * Math.sqrt(MAX_DAYS_TP1);
   const MAX_DIST_TP2 = atr * Math.sqrt(MAX_DAYS_TP2);
 
@@ -529,8 +543,8 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
   // ── Reject if targets are now so close they're not meaningful ──
   // Same-day: smaller targets allowed (0.5 ATR TP1, 0.9 ATR TP2)
   // Swing: bigger floors (1.2 ATR TP1, 2.0 ATR TP2)
-  const minTP1 = tradeStyle === 'sameDay' ? atr * 0.5 : atr * 1.2;
-  const minTP2 = tradeStyle === 'sameDay' ? atr * 0.9 : atr * 2.0;
+  const minTP1 = atr * CAL.minTP1ATR;
+  const minTP2 = atr * CAL.minTP2ATR;
   if (tpDistance  < minTP1) return null;
   if (tp2Distance < minTP2) return null;
 
@@ -538,7 +552,7 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
   const reward = Math.abs(tp - entry);
   if (risk <= 0) return null;
   const rrRatio = Math.round((reward / risk) * 10) / 10;
-  const minRR = (opts.tradeStyle === 'sameDay') ? 1.2 : 1.3;
+  const minRR = CAL.minRR;
   if (rrRatio < minRR) return null;                 // Min R:R — math must still be positive
   if (rrRatio > 6.0) return null;                   // Unrealistically wide
 
@@ -557,8 +571,9 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
   if (direction === 'LONG'  && sma20 && sma50 && price > sma20 && sma20 > sma50) confidence += 5;
   if (direction === 'SHORT' && sma20 && sma50 && price < sma20 && sma20 < sma50) confidence += 5;
 
-  // ── SAME-DAY SPECIFIC ADJUSTMENTS ──
-  if (tradeStyle === 'sameDay') {
+  // ── INTRADAY-SPECIFIC CONFIDENCE ADJUSTMENTS (sameDay + crypto) ──
+  const isIntraday = tradeStyle === 'sameDay' || tradeStyle === 'crypto';
+  if (isIntraday) {
     // a) TP proximity — closer TP = higher chance of hitting within session
     const tpDistATR = Math.abs(tp - entry) / atr;
     if (tpDistATR < 0.8)      confidence += 10;  // very reachable in hours
@@ -588,12 +603,13 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
       else if (vr < 0.5) confidence -= 10;  // weak volume kills intraday moves
     }
 
-    // d) Confirmation candle strength
+    // d) Confirmation candle strength — crypto is more forgiving (24/7, daily candles less meaningful)
     const conf = checkConfirmationCandle(historical, direction);
+    const penalty = tradeStyle === 'crypto' ? -8 : -15;
     if (conf.confirmed && conf.type?.includes('strong')) confidence += 8;
     else if (conf.confirmed && conf.type?.includes('bounce')) confidence += 5;
     else if (conf.confirmed) confidence += 2;
-    else                      confidence -= 15;  // no confirmation = no edge intraday
+    else                      confidence += penalty;
   }
 
   confidence = Math.max(15, Math.min(95, Math.round(confidence)));
@@ -623,8 +639,10 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
 
   // Convert expected days → expected hours for same-day trades
   // (intraday session is ~6.5 hours)
-  const expectedHours  = tradeStyle === 'sameDay' ? Math.max(1, Math.round(expectedDays  * 6.5)) : null;
-  const expectedHours2 = tradeStyle === 'sameDay' ? Math.max(2, Math.round(expectedDays2 * 6.5)) : null;
+  // Crypto trades 24h, so a "day" of expected travel is 24h not 6.5h
+  const hoursPerDay    = tradeStyle === 'crypto' ? 12 : 6.5;  // 12h ≈ active liquidity window
+  const expectedHours  = isIntraday ? Math.max(1, Math.round(expectedDays  * hoursPerDay)) : null;
+  const expectedHours2 = isIntraday ? Math.max(2, Math.round(expectedDays2 * hoursPerDay)) : null;
 
   return {
     direction, entry, entryLow, entryHigh,

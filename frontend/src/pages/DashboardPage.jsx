@@ -16,11 +16,13 @@ import LearningInsights from '../components/LearningInsights.jsx';
 import ForexSessionBar from '../components/ForexSessionBar.jsx';
 import CurrencyStrengthMeter from '../components/CurrencyStrengthMeter.jsx';
 import CommodityScheduleBar from '../components/CommodityScheduleBar.jsx';
+import CryptoContextBar from '../components/CryptoContextBar.jsx';
 
 // Default ticker tape (stocks)
 const DEFAULT_TAPE = ['AAPL','MSFT','NVDA','TSLA','META','GOOGL','AMZN','AMD','SPY','QQQ','GLD','BTC-USD','ETH-USD','CL=F','JPM','COIN','PLTR','MSTR','IWM','SMCI'];
 const FOREX_TAPE      = ['EURUSD=X','GBPUSD=X','USDJPY=X','USDCHF=X','AUDUSD=X','NZDUSD=X','USDCAD=X','EURGBP=X','EURJPY=X','GBPJPY=X','USDCNY=X','USDMXN=X','BTC-USD','ETH-USD','SOL-USD','XRP-USD','DX-Y.NYB','^TNX'];
 const COMMODITIES_TAPE = ['GC=F','SI=F','CL=F','BZ=F','NG=F','HG=F','PL=F','PA=F','ZC=F','ZS=F','ZW=F','KC=F','SB=F','GLD','SLV','USO','UNG','DBA','GDX'];
+const CRYPTO_TAPE = ['BTC-USD','ETH-USD','SOL-USD','BNB-USD','XRP-USD','ADA-USD','AVAX-USD','DOGE-USD','LINK-USD','MATIC-USD','DOT-USD','ARB-USD','OP-USD','LTC-USD','BCH-USD','SHIB-USD','NEAR-USD','APT-USD','TRX-USD','ATOM-USD'];
 
 // Refresh intervals — 10-second polling during ANY live session
 const INTERVAL_LIVE        = 10_000;   // 10s prices during market open / pre / post
@@ -120,12 +122,15 @@ function enrichTrades(trades, livePrices, hasLiveData) {
 export default function DashboardPage({ market = 'stocks', title = null }) {
   const TICKER_TAPE = market === 'forex' ? FOREX_TAPE
                     : market === 'commodities' ? COMMODITIES_TAPE
+                    : market === 'crypto' ? CRYPTO_TAPE
                     : DEFAULT_TAPE;
   const PAGE_TITLE = title || (
     market === 'forex' ? '💱 FOREX SCANNER' :
     market === 'commodities' ? '🛢 COMMODITIES SCANNER' :
+    market === 'crypto' ? '₿ CRYPTO SCANNER' :
     null
   );
+  const isCrypto = market === 'crypto';
   const [marketStatus, setMarketStatus]   = useState(null);
   const [trades, setTrades]               = useState({ enterNow: [], waitForBounce: [], carryForward: [] });
   const [tickerPrices, setTickerPrices]   = useState({});
@@ -272,7 +277,9 @@ export default function DashboardPage({ market = 'stocks', title = null }) {
         vix: d.vix,
         vixRegime: d.vixRegime,
         marketRegime: d.marketRegime,
-        choppiness: d.choppiness
+        choppiness: d.choppiness,
+        btcTrend: d.btcTrend,
+        cryptoContext: d.cryptoContext
       });
       setLastUpdated(new Date());
       lastScanTimeRef.current = Date.now();
@@ -341,7 +348,7 @@ export default function DashboardPage({ market = 'stocks', title = null }) {
 
   useEffect(() => {
     const session = marketStatus?.session;
-    const isLive = session === 'MARKET_OPEN' || session === 'PRE_MARKET' || session === 'AFTER_HOURS';
+    const isLive = isCrypto || session === 'MARKET_OPEN' || session === 'PRE_MARKET' || session === 'AFTER_HOURS';
     const interval = isLive ? INTERVAL_LIVE : INTERVAL_DARK;
     const tick = () => {
       fetchMarketStatus();
@@ -381,21 +388,21 @@ export default function DashboardPage({ market = 'stocks', title = null }) {
   // ── Countdown to next scan (1-second tick) ───────────────────────────────
 
   useEffect(() => {
-    const scanInterval = marketStatus?.isOpen ? INTERVAL_SCAN_OPEN : INTERVAL_SCAN_CLOSED;
+    const scanInterval = (isCrypto || marketStatus?.isOpen) ? INTERVAL_SCAN_OPEN : INTERVAL_SCAN_CLOSED;
     const timer = setInterval(() => {
       const remaining = Math.max(0, Math.round((lastScanTimeRef.current + scanInterval - Date.now()) / 1000));
       setSecondsToNextScan(remaining);
     }, 1000);
     return () => clearInterval(timer);
-  }, [marketStatus?.isOpen]);
+  }, [marketStatus?.isOpen, isCrypto]);
 
-  // ── Refresh scan: 90s open, 10min closed ──────────────────────────────────
+  // ── Refresh scan: 60s when live, 10min when closed (crypto is always live) ─
 
   useEffect(() => {
-    const interval = marketStatus?.isOpen ? INTERVAL_SCAN_OPEN : INTERVAL_SCAN_CLOSED;
+    const interval = (isCrypto || marketStatus?.isOpen) ? INTERVAL_SCAN_OPEN : INTERVAL_SCAN_CLOSED;
     const timer = setInterval(fetchScan, interval);
     return () => clearInterval(timer);
-  }, [marketStatus?.isOpen, fetchScan]);
+  }, [marketStatus?.isOpen, fetchScan, isCrypto]);
 
   // ── Refresh prices when positions change (get live data immediately) ───────
 
@@ -424,6 +431,7 @@ export default function DashboardPage({ market = 'stocks', title = null }) {
           <p className="text-[11px] text-[#444] font-mono">
             {market === 'forex' && 'Market-specific: 24/5 hours · Sessions · Currency strength · Pip-based stops'}
             {market === 'commodities' && 'Market-specific: Inventory reports · DXY correlation · Seasonal patterns'}
+            {market === 'crypto' && 'Market-specific: 24/7 trading · BTC trend filter · Fear & Greed · Session liquidity · Wider stops for vol'}
           </p>
         </div>
       )}
@@ -439,6 +447,11 @@ export default function DashboardPage({ market = 'stocks', title = null }) {
       {/* ── Commodities-specific top sections ────────────────────────────── */}
       {market === 'commodities' && commodContext && (
         <CommodityScheduleBar schedule={commodContext.schedule} dxy={commodContext.dxy} />
+      )}
+
+      {/* ── Crypto-specific context bar ──────────────────────────────────── */}
+      {isCrypto && (
+        <CryptoContextBar context={scanStats.cryptoContext} btcTrend={scanStats.btcTrend} />
       )}
 
       {/* ── Sub-header bar with controls ───────────────────────────────── */}
@@ -486,8 +499,8 @@ export default function DashboardPage({ market = 'stocks', title = null }) {
       {/* ── Macro alert bar ────────────────────────────────────────────── */}
       <MacroAlertBar context={macroContext} />
 
-      {/* ── Market regime + VIX status banner ──────────────────────────── */}
-      {scanStats.vix != null && (
+      {/* ── Market regime + VIX status banner (stock/forex/commodity only) ─ */}
+      {!isCrypto && scanStats.vix != null && (
         <div className={`mx-4 mt-3 p-3 rounded text-[11px] font-mono border flex items-center justify-between gap-3 flex-wrap ${
           scanStats.vixRegime === 'EXTREME'  ? 'bg-red-500/10 border-red-500/40 text-red-300' :
           scanStats.vixRegime === 'ELEVATED' ? 'bg-amber-500/10 border-amber-500/40 text-amber-300' :
@@ -539,8 +552,8 @@ export default function DashboardPage({ market = 'stocks', title = null }) {
         );
       })()}
 
-      {/* ── Market regime banner (choppy / trending) ────────────────────── */}
-      {scanStats.choppiness?.regime && scanStats.choppiness.regime !== 'unknown' && (
+      {/* ── Market regime banner (choppy / trending) — SPY-driven, hide on crypto ── */}
+      {!isCrypto && scanStats.choppiness?.regime && scanStats.choppiness.regime !== 'unknown' && (
         <div className={`mx-4 mt-2 p-3 rounded text-[11px] font-mono border flex items-center justify-between gap-3 flex-wrap ${
           scanStats.choppiness.regime === 'STRONG_TREND' ? 'bg-green-500/10 border-green-500/40 text-green-300' :
           scanStats.choppiness.regime === 'TRENDING'     ? 'bg-green-500/8  border-green-500/30 text-green-400' :
@@ -593,8 +606,8 @@ export default function DashboardPage({ market = 'stocks', title = null }) {
               <span className="text-[#1a1a1a]">·</span>
               {(() => {
                 const s = marketStatus?.session;
-                const isLive = s === 'MARKET_OPEN' || s === 'PRE_MARKET' || s === 'AFTER_HOURS';
-                const sessLabel = s === 'MARKET_OPEN' ? 'open' : s === 'PRE_MARKET' ? 'pre-market' : s === 'AFTER_HOURS' ? 'after-hours' : 'closed';
+                const isLive = isCrypto || s === 'MARKET_OPEN' || s === 'PRE_MARKET' || s === 'AFTER_HOURS';
+                const sessLabel = isCrypto ? '24/7 live' : s === 'MARKET_OPEN' ? 'open' : s === 'PRE_MARKET' ? 'pre-market' : s === 'AFTER_HOURS' ? 'after-hours' : 'closed';
                 return (
                   <>
                     <span className="text-blue-500/40">Prices refresh every {isLive ? '10' : '300'}s ({sessLabel})</span>
@@ -607,7 +620,7 @@ export default function DashboardPage({ market = 'stocks', title = null }) {
 
             {(() => {
               const session = marketStatus?.session;
-              const hasLiveData = session === 'MARKET_OPEN' || session === 'PRE_MARKET' || session === 'AFTER_HOURS';
+              const hasLiveData = isCrypto || session === 'MARKET_OPEN' || session === 'PRE_MARKET' || session === 'AFTER_HOURS';
               const liveEnter  = enrichTrades(trades.enterNow      || [], tickerPrices, hasLiveData);
               const liveBounce = enrichTrades(trades.waitForBounce || [], tickerPrices, hasLiveData);
               const liveCarry  = enrichTrades(trades.carryForward  || [], tickerPrices, hasLiveData);

@@ -30,7 +30,8 @@ export function reviewTrade(card, historical, signalData, marketContext = {}) {
 
   const { direction, price, changePercent, rsi, news, sentiment, fiftyTwoWeekHigh, fiftyTwoWeekLow, earnings, volRatio } = card;
   const { sma200, sma50, macd, atr } = signalData;
-  const { vix, weeklyTrend } = marketContext;
+  const { vix, weeklyTrend, market, btcTrend, fearGreed, cryptoSession } = marketContext;
+  const isCrypto = market === 'crypto';
 
   // ── A. VIX market regime override ────────────────────────────────────
   if (vix && vix > 25) {
@@ -56,19 +57,22 @@ export function reviewTrade(card, historical, signalData, marketContext = {}) {
     }
   }
 
-  // ── C. Today's intraday momentum conflict ────────────────────────────
+  // ── C. Today's intraday momentum conflict (crypto has wider thresholds — 3% is common) ──
   if (changePercent != null) {
-    if (direction === 'LONG' && changePercent < -1.5) {
-      issues.push({ severity: 'reject', text: `Stock is DOWN ${changePercent.toFixed(1)}% today — don't catch falling knives` });
+    const conflictThresh = isCrypto ? 4.0 : 1.5;
+    const momentumThresh = isCrypto ? 1.5 : 0.5;
+    const noun = isCrypto ? 'Coin' : 'Stock';
+    if (direction === 'LONG' && changePercent < -conflictThresh) {
+      issues.push({ severity: 'reject', text: `${noun} is DOWN ${changePercent.toFixed(1)}% today — don't catch falling knives` });
     }
-    if (direction === 'SHORT' && changePercent > 1.5) {
-      issues.push({ severity: 'reject', text: `Stock is UP ${changePercent.toFixed(1)}% today — don't short into strength` });
+    if (direction === 'SHORT' && changePercent > conflictThresh) {
+      issues.push({ severity: 'reject', text: `${noun} is UP ${changePercent.toFixed(1)}% today — don't short into strength` });
     }
-    if (direction === 'LONG' && changePercent > 0.5) {
-      strengths.push(`Stock already +${changePercent.toFixed(1)}% today — confirming momentum`);
+    if (direction === 'LONG' && changePercent > momentumThresh) {
+      strengths.push(`${noun} already +${changePercent.toFixed(1)}% today — confirming momentum`);
     }
-    if (direction === 'SHORT' && changePercent < -0.5) {
-      strengths.push(`Stock already ${changePercent.toFixed(1)}% today — confirming weakness`);
+    if (direction === 'SHORT' && changePercent < -momentumThresh) {
+      strengths.push(`${noun} already ${changePercent.toFixed(1)}% today — confirming weakness`);
     }
   }
 
@@ -120,26 +124,29 @@ export function reviewTrade(card, historical, signalData, marketContext = {}) {
     }
   }
 
-  // ── 2. Extended move warning — don't chase ───────────────────────────
+  // ── 2. Extended move warning — don't chase (crypto runs hotter) ──────
   if (historical?.length >= 5) {
     const fiveBack = historical[historical.length - 5];
     const fiveDayMove = ((price - fiveBack.close) / fiveBack.close) * 100;
-    if (direction === 'LONG' && fiveDayMove > 12) {
+    const extremeThresh = isCrypto ? 25 : 12;
+    const warnThresh    = isCrypto ? 15 : 7;
+    if (direction === 'LONG' && fiveDayMove > extremeThresh) {
       issues.push({ severity: 'reject', text: `Already up ${fiveDayMove.toFixed(1)}% in 5 sessions — too extended for fresh long` });
     }
-    if (direction === 'SHORT' && fiveDayMove < -12) {
+    if (direction === 'SHORT' && fiveDayMove < -extremeThresh) {
       issues.push({ severity: 'reject', text: `Already down ${fiveDayMove.toFixed(1)}% in 5 sessions — too extended for fresh short` });
     }
-    if (direction === 'LONG' && fiveDayMove > 7) {
+    if (direction === 'LONG' && fiveDayMove > warnThresh) {
       issues.push({ severity: 'caution', text: `Up ${fiveDayMove.toFixed(1)}% in 5 sessions — wait for pullback to entry zone` });
     }
-    if (direction === 'SHORT' && fiveDayMove < -7) {
+    if (direction === 'SHORT' && fiveDayMove < -warnThresh) {
       issues.push({ severity: 'caution', text: `Down ${fiveDayMove.toFixed(1)}% in 5 sessions — wait for bounce to entry zone` });
     }
   }
 
-  // ── 3. Today's gap risk (rejected if >5%) ────────────────────────────
-  if (Math.abs(changePercent || 0) > 5) {
+  // ── 3. Today's gap risk (crypto often moves 5% — only flag >10%) ─────
+  const gapThresh = isCrypto ? 10 : 5;
+  if (Math.abs(changePercent || 0) > gapThresh) {
     issues.push({ severity: 'caution', text: `Today's move ${changePercent.toFixed(1)}% is large — wait for stabilization` });
   }
 
@@ -179,11 +186,51 @@ export function reviewTrade(card, historical, signalData, marketContext = {}) {
     }
   }
 
-  // ── 7. Volatility sanity check ───────────────────────────────────────
+  // ── 7. Volatility sanity check (crypto baseline is higher) ────────────
   if (atr && price) {
     const atrPct = (atr / price) * 100;
-    if (atrPct > 6) {
+    const volWarn = isCrypto ? 12 : 6;
+    if (atrPct > volWarn) {
       issues.push({ severity: 'caution', text: `High volatility (${atrPct.toFixed(1)}% daily ATR) — size carefully` });
+    }
+  }
+
+  // ── 9. CRYPTO-SPECIFIC: BTC trend, Fear & Greed, session liquidity ──
+  if (isCrypto) {
+    const isBTC = card.ticker === 'BTC-USD';
+    // BTC sets the regime for every alt — fighting it is a high-loss bet
+    if (btcTrend && !isBTC) {
+      if (direction === 'LONG' && btcTrend === 'BEARISH') {
+        issues.push({ severity: 'reject', text: 'BTC trend is BEARISH — alts bleed when BTC drops; do not long alts' });
+      }
+      if (direction === 'SHORT' && btcTrend === 'BULLISH') {
+        issues.push({ severity: 'caution', text: 'BTC trend is BULLISH — shorting alts into BTC strength is high-risk' });
+      }
+      if (direction === 'LONG' && btcTrend === 'BULLISH') {
+        strengths.push('BTC trend BULLISH — macro tailwind for alts');
+      }
+      if (direction === 'SHORT' && btcTrend === 'BEARISH') {
+        strengths.push('BTC trend BEARISH — alts likely to underperform BTC');
+      }
+    }
+    // Fear & Greed extremes — contrarian flags (well-documented edge in crypto)
+    if (fearGreed != null) {
+      if (direction === 'LONG' && fearGreed > 80) {
+        issues.push({ severity: 'caution', text: `Fear & Greed at ${fearGreed} (Extreme Greed) — historically a top zone for longs` });
+      }
+      if (direction === 'SHORT' && fearGreed < 20) {
+        issues.push({ severity: 'caution', text: `Fear & Greed at ${fearGreed} (Extreme Fear) — historically a bottom zone, shorts get squeezed` });
+      }
+      if (direction === 'LONG' && fearGreed < 25) {
+        strengths.push(`Fear & Greed at ${fearGreed} — contrarian long zone`);
+      }
+      if (direction === 'SHORT' && fearGreed > 75) {
+        strengths.push(`Fear & Greed at ${fearGreed} — late-stage greed favors shorts`);
+      }
+    }
+    // Low-liquidity session caution (alts especially)
+    if (cryptoSession?.liquidity === 'LOW' && !isBTC) {
+      issues.push({ severity: 'caution', text: `${cryptoSession.activeSession} session — low liquidity, alts prone to wicks and spreads` });
     }
   }
 

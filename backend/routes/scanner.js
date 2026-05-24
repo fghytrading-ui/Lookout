@@ -5,6 +5,7 @@ import { getMarketChoppiness } from '../lib/marketChoppiness.js';
 import { enrichTicker } from '../lib/news.js';
 import { fetchNextEarnings, evaluateEarningsRisk } from '../lib/earnings.js';
 import { reviewTrade } from '../utils/reviewer.js';
+import { getCryptoContext } from '../lib/cryptoContext.js';
 import {
   analyzeSignals, generateTradeSetup, calculateSMA,
   TIME_SPANS, getTimespanKey, getExitWindow, generateAnalystNotes
@@ -35,6 +36,21 @@ async function getVIX() {
   } catch { return null; }
 }
 
+// Determine BTC's medium-term trend — primary regime filter for crypto alts
+async function getBTCTrend() {
+  try {
+    const btc = await fetchFull('BTC-USD', '3mo');
+    const closes = btc.candles.map(c => c.close);
+    const price  = btc.quote.price;
+    const sma20  = calculateSMA(closes, 20);
+    const sma50  = calculateSMA(closes, 50);
+    if (!sma20 || !sma50) return 'NEUTRAL';
+    if (price > sma20 && sma20 > sma50) return 'BULLISH';
+    if (price < sma20 && sma20 < sma50) return 'BEARISH';
+    return 'NEUTRAL';
+  } catch { return 'NEUTRAL'; }
+}
+
 // Determine weekly trend for a ticker — UP / DOWN / NEUTRAL
 async function getWeeklyTrend(ticker) {
   try {
@@ -56,6 +72,34 @@ async function getWeeklyTrend(ticker) {
 }
 
 const router = Router();
+
+// Crypto watchlist — top liquidity coins on Yahoo
+const CRYPTO_WATCHLIST = [
+  'BTC-USD', 'ETH-USD', 'SOL-USD', 'XRP-USD', 'BNB-USD',
+  'ADA-USD', 'DOGE-USD', 'AVAX-USD', 'MATIC-USD', 'DOT-USD',
+  'LINK-USD', 'ATOM-USD', 'UNI-USD', 'LTC-USD', 'BCH-USD',
+  'ARB-USD', 'OP-USD', 'NEAR-USD', 'APT-USD', 'INJ-USD',
+  'SHIB-USD', 'PEPE-USD', 'TRX-USD', 'TON11419-USD'
+];
+const CRYPTO_NAMES = {
+  'BTC-USD': 'Bitcoin', 'ETH-USD': 'Ethereum', 'SOL-USD': 'Solana',
+  'XRP-USD': 'Ripple', 'BNB-USD': 'Binance Coin', 'ADA-USD': 'Cardano',
+  'DOGE-USD': 'Dogecoin', 'AVAX-USD': 'Avalanche', 'MATIC-USD': 'Polygon',
+  'DOT-USD': 'Polkadot', 'LINK-USD': 'Chainlink', 'ATOM-USD': 'Cosmos',
+  'UNI-USD': 'Uniswap', 'LTC-USD': 'Litecoin', 'BCH-USD': 'Bitcoin Cash',
+  'ARB-USD': 'Arbitrum', 'OP-USD': 'Optimism', 'NEAR-USD': 'NEAR Protocol',
+  'APT-USD': 'Aptos', 'INJ-USD': 'Injective', 'SHIB-USD': 'Shiba Inu',
+  'PEPE-USD': 'Pepe', 'TRX-USD': 'TRON', 'TON11419-USD': 'Toncoin'
+};
+const CRYPTO_CATEGORIES = {
+  'BTC-USD': 'Large Cap', 'ETH-USD': 'Large Cap', 'BNB-USD': 'Large Cap',
+  'SOL-USD': 'Layer 1', 'ADA-USD': 'Layer 1', 'AVAX-USD': 'Layer 1',
+  'DOT-USD': 'Layer 1', 'NEAR-USD': 'Layer 1', 'APT-USD': 'Layer 1', 'ATOM-USD': 'Layer 1',
+  'MATIC-USD': 'Layer 2', 'ARB-USD': 'Layer 2', 'OP-USD': 'Layer 2',
+  'LINK-USD': 'Oracle', 'UNI-USD': 'DeFi', 'INJ-USD': 'DeFi',
+  'XRP-USD': 'Payments', 'LTC-USD': 'Payments', 'BCH-USD': 'Payments', 'TRX-USD': 'Payments',
+  'DOGE-USD': 'Meme', 'SHIB-USD': 'Meme', 'PEPE-USD': 'Meme', 'TON11419-USD': 'Layer 1'
+};
 
 // Major forex pairs (Yahoo format)
 const FOREX_WATCHLIST = [
@@ -237,30 +281,43 @@ function buildCard(ticker, raw, quote, setup, signalData, historical, market = '
   // Choose name + category based on market
   const customName = market === 'forex' ? FOREX_NAMES[ticker]
                    : market === 'commodities' ? COMMODITIES_NAMES[ticker]
+                   : market === 'crypto' ? CRYPTO_NAMES[ticker]
                    : null;
   const category = market === 'forex' ? FOREX_CATEGORIES[ticker]
                  : market === 'commodities' ? COMMODITIES_CATEGORIES[ticker]
+                 : market === 'crypto' ? CRYPTO_CATEGORIES[ticker]
                  : SECTOR_MAP[ticker] || 'N/A';
 
   return {
     ticker,
     name:        customName || raw.longName || ticker,
-    exchange:    raw.exchangeName || (market === 'forex' ? 'FX' : market === 'commodities' ? 'CME' : 'NYSE'),
+    exchange:    raw.exchangeName || (market === 'forex' ? 'FX' : market === 'commodities' ? 'CME' : market === 'crypto' ? 'CRYPTO' : 'NYSE'),
     sector:      category,
     direction, probability, confirming, confidence,
     price, entry, entryLow, entryHigh, entryStatus, entryStatusText,
     tp, tpPct, tp2, tp2Pct,
     sl, slPct,
-    timeSpan: tradeStyle === 'sameDay' ? 'Intraday — Same Day' : TIME_SPANS[tsKey].label,
-    exitWindow: tradeStyle === 'sameDay' ? 'Before market close (9pm UK)' : getExitWindow(tsKey),
+    timeSpan: tradeStyle === 'crypto' ? 'Intraday — Next Session (4–12h)'
+            : tradeStyle === 'sameDay' ? 'Intraday — Same Day'
+            : TIME_SPANS[tsKey].label,
+    exitWindow: tradeStyle === 'crypto' ? 'Within the next active session — 24/7 market'
+              : tradeStyle === 'sameDay' ? 'Before market close (9pm UK)'
+              : getExitWindow(tsKey),
     // Intraday-specific timing windows (UK time)
-    intradayTiming: tradeStyle === 'sameDay' ? {
-      entryFrom: '2:30 PM UK',       // US market open
-      entryUntil: '7:00 PM UK',      // 2 hours before close — don't enter late
-      mustExitBy: '9:00 PM UK',      // US market close
+    intradayTiming: tradeStyle === 'crypto' ? {
+      entryFrom: 'Anytime — 24/7 market',
+      entryUntil: 'Prefer US/EU session overlap (1pm–9pm UK) for liquidity',
+      mustExitBy: 'Within ~12h or by next active session',
+      totalSession: '24h continuous',
+      bestEntryWindow: '1pm – 9pm UK (US/EU overlap, peak liquidity)',
+      avoidWindow: '9pm – 1am UK (low-liquidity, wider spreads)'
+    } : tradeStyle === 'sameDay' ? {
+      entryFrom: '2:30 PM UK',
+      entryUntil: '7:00 PM UK',
+      mustExitBy: '9:00 PM UK',
       totalSession: '6.5 hours',
-      bestEntryWindow: '2:30 – 4:30 PM UK',  // first 2 hours
-      avoidWindow: '7:00 – 9:00 PM UK'        // last 2 hours
+      bestEntryWindow: '2:30 – 4:30 PM UK',
+      avoidWindow: '7:00 – 9:00 PM UK'
     } : null,
     rrRatio, rrRatio2,
     volRatio, expectedDays, expectedDays2,
@@ -296,17 +353,23 @@ router.get('/scan', async (req, res) => {
     const market = (req.query.market || 'stocks').toLowerCase();
     const watchlist = market === 'forex' ? FOREX_WATCHLIST
                     : market === 'commodities' ? COMMODITIES_WATCHLIST
+                    : market === 'crypto' ? CRYPTO_WATCHLIST
                     : WATCHLIST;
 
     const tickerList = req.query.tickers
       ? req.query.tickers.split(',').map(t => t.trim().toUpperCase())
       : watchlist.slice(0, 40);
 
-    // Fetch macro context first
-    const [marketRegime, vix, choppiness] = await Promise.all([
-      getMarketRegime(),
-      getVIX(),
-      getMarketChoppiness()
+    const isCrypto = market === 'crypto';
+    const tradeStyle = isCrypto ? 'crypto' : 'sameDay';
+
+    // Fetch macro context — crypto uses BTC trend + Fear&Greed, not VIX/SPY
+    const [marketRegime, vix, choppiness, btcTrend, cryptoContext] = await Promise.all([
+      isCrypto ? Promise.resolve('NEUTRAL') : getMarketRegime(),
+      isCrypto ? Promise.resolve(null)      : getVIX(),
+      isCrypto ? Promise.resolve(null)      : getMarketChoppiness(),
+      isCrypto ? getBTCTrend()              : Promise.resolve(null),
+      isCrypto ? getCryptoContext().catch(() => null) : Promise.resolve(null)
     ]);
 
     // Single call per ticker: quote + 3mo candles
@@ -324,7 +387,7 @@ router.get('/scan', async (req, res) => {
 
       const quote = adaptQuote(raw);
       const signalData = analyzeSignals(quote, historical, marketRegime);
-      const setup      = generateTradeSetup(quote, historical, signalData, { market, tradeStyle: 'sameDay' });
+      const setup      = generateTradeSetup(quote, historical, signalData, { market, tradeStyle });
       if (!setup) continue;
 
       // Regime filter is now a confidence-boost signal (added in analyzeSignals),
@@ -362,13 +425,15 @@ router.get('/scan', async (req, res) => {
     for (let i = 0; i < priorityCards.length; i++) {
       const card = priorityCards[i];
       try {
-        const [enrichment, earningsData] = await Promise.all([
-          enrichTicker(card.ticker),
-          fetchNextEarnings(card.ticker)
-        ]);
+        const enrichment = await enrichTicker(card.ticker);
         card.news      = enrichment.news || [];
         card.sentiment = enrichment.sentiment || null;
-        card.earnings  = evaluateEarningsRisk(earningsData);
+        if (isCrypto) {
+          card.earnings = null;  // crypto has no earnings reports
+        } else {
+          const earningsData = await fetchNextEarnings(card.ticker);
+          card.earnings = evaluateEarningsRisk(earningsData);
+        }
       } catch {
         card.news = []; card.sentiment = null; card.earnings = null;
       }
@@ -383,11 +448,13 @@ router.get('/scan', async (req, res) => {
     // ── Fetch weekly trends in parallel for the surviving candidates ───
     const reviewCandidates = [...trades.enterNow, ...trades.waitForBounce, ...trades.carryForward];
     const weeklyTrendMap = {};
-    // Limit to top 12 to control rate-limit
-    const topForWeekly = reviewCandidates.slice(0, 12);
-    await Promise.allSettled(topForWeekly.map(async (c) => {
-      weeklyTrendMap[c.ticker] = await getWeeklyTrend(c.ticker);
-    }));
+    // Weekly trend not used for crypto (BTC trend covers macro role instead)
+    if (!isCrypto) {
+      const topForWeekly = reviewCandidates.slice(0, 12);
+      await Promise.allSettled(topForWeekly.map(async (c) => {
+        weeklyTrendMap[c.ticker] = await getWeeklyTrend(c.ticker);
+      }));
+    }
 
     // ── REVIEWER PASS: stress-test each card, drop REJECTs ─────────────
     const filterCategory = (cards) => {
@@ -395,7 +462,11 @@ router.get('/scan', async (req, res) => {
       for (const card of cards) {
         const review = reviewTrade(card, card._historical, card._signalData, {
           vix,
-          weeklyTrend: weeklyTrendMap[card.ticker] || null
+          weeklyTrend: weeklyTrendMap[card.ticker] || null,
+          market,
+          btcTrend,
+          fearGreed: cryptoContext?.fearGreed?.value || null,
+          cryptoSession: cryptoContext?.session || null
         });
         // Strip internal fields before sending
         delete card._historical;
@@ -417,13 +488,14 @@ router.get('/scan', async (req, res) => {
     //   • Confirmation candle (today's bar confirms direction) — pro best practice
     //   • Quality signals (HIGH/MED prob with PASS or strong CAUTION)
     //   • In CHOPPY markets, raise the bar substantially
-    const isChoppy = choppiness?.regime === 'CHOPPY';
-    const isMixed  = choppiness?.regime === 'MIXED';
+    const isChoppy = !isCrypto && choppiness?.regime === 'CHOPPY';
+    const isMixed  = !isCrypto && choppiness?.regime === 'MIXED';
 
     const demoted = [];
     trades.enterNow = trades.enterNow.filter(card => {
       const rr = card.rrRatio || 0;
-      const hasConfirmation = card.confirmation?.confirmed === true;
+      // Crypto: 24/7 means daily candles are arbitrary cuts — confirmation candle isn't a hard gate
+      const hasConfirmation = isCrypto ? true : card.confirmation?.confirmed === true;
       // Choppy market: only the gold-standard setups (HIGH+PASS+confirmation+R:R≥2.0)
       if (isChoppy) {
         const passes = card.probability === 'HIGH' && card.review?.verdict === 'PASS' && rr >= 2.0 && hasConfirmation;
@@ -476,6 +548,8 @@ router.get('/scan', async (req, res) => {
       choppiness,
       vix,
       vixRegime: vix == null ? null : vix > 30 ? 'EXTREME' : vix > 22 ? 'ELEVATED' : vix > 15 ? 'NORMAL' : 'LOW',
+      btcTrend,
+      cryptoContext,
       entryTiming,
       scannedCount: tickerList.length,
       passedFilter: allCards.length,

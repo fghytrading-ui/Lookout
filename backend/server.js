@@ -11,6 +11,7 @@ import calendarRouter from './routes/calendar.js';
 import analystRouter from './routes/analyst.js';
 import forexRouter from './routes/forex.js';
 import commoditiesRouter from './routes/commodities.js';
+import cryptoRouter from './routes/crypto.js';
 import { isMarketOpen, getSession, getEntryTiming } from './utils/market.js';
 import { startAutoPersist } from './lib/persistentCache.js';
 import { POLYGON_ENABLED } from './lib/marketData.js';
@@ -28,6 +29,7 @@ app.use('/api/calendar', calendarRouter);
 app.use('/api/analyst', analystRouter);
 app.use('/api/forex', forexRouter);
 app.use('/api/commodities', commoditiesRouter);
+app.use('/api/crypto', cryptoRouter);
 
 app.get('/api/market-status', (req, res) => {
   res.json({

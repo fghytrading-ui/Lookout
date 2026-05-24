@@ -4,10 +4,12 @@ import CalendarPage from './pages/CalendarPage.jsx';
 import AnalystPage from './pages/AnalystPage.jsx';
 import ForexPage from './pages/ForexPage.jsx';
 import CommoditiesPage from './pages/CommoditiesPage.jsx';
+import CryptoPage from './pages/CryptoPage.jsx';
 
 const NAV = [
   { id: 'dashboard',   label: 'Stocks',      icon: '◎',  hint: 'Live stock swing setups' },
-  { id: 'forex',       label: 'Forex',       icon: '💱', hint: 'Currency pairs + crypto' },
+  { id: 'crypto',      label: 'Crypto',      icon: '₿',  hint: '24/7 crypto intraday setups' },
+  { id: 'forex',       label: 'Forex',       icon: '💱', hint: 'Currency pairs' },
   { id: 'commodities', label: 'Commodities', icon: '🛢', hint: 'Metals, energy, agriculture' },
   { id: 'analyst',     label: 'Analyst',     icon: '🔍', hint: 'Analyze any symbol' },
   { id: 'calendar',    label: 'Calendar',    icon: '📅', hint: 'Economic events' }
@@ -76,6 +78,7 @@ export default function App() {
 
       {/* ── Active view ─────────────────────────────────────────────────── */}
       {view === 'dashboard'   && <DashboardPage />}
+      {view === 'crypto'      && <CryptoPage />}
       {view === 'forex'       && <ForexPage />}
       {view === 'commodities' && <CommoditiesPage />}
       {view === 'analyst'     && <AnalystPage />}
