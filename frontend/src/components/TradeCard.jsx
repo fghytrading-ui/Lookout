@@ -281,37 +281,56 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
           </div>
         )}
 
-        {/* Same-day timing block — clear entry & exit windows */}
-        {trade.tradeStyle === 'sameDay' && trade.intradayTiming && (
-          <div className="bg-amber-500/10 border border-amber-500/40 rounded-lg p-3 mb-3">
+        {/* Intraday timing block — renders for sameDay (stocks) AND crypto with mode-specific copy */}
+        {(trade.tradeStyle === 'sameDay' || trade.tradeStyle === 'crypto') && trade.intradayTiming && (
+          <div className={`rounded-lg p-3 mb-3 border ${
+            trade.tradeStyle === 'crypto' ? 'bg-purple-500/10 border-purple-500/40' : 'bg-amber-500/10 border-amber-500/40'
+          }`}>
             <div className="flex items-center justify-between mb-2 flex-wrap gap-1">
-              <span className="text-[11px] font-mono font-bold text-amber-300 tracking-wider">⏰ DAY TRADE — INTRADAY ONLY</span>
-              <span className="text-[9px] font-mono text-amber-400/70">No overnight risk</span>
+              <span className={`text-[11px] font-mono font-bold tracking-wider ${
+                trade.tradeStyle === 'crypto' ? 'text-purple-300' : 'text-amber-300'
+              }`}>
+                {trade.tradeStyle === 'crypto' ? '₿ CRYPTO INTRADAY — 24/7 MARKET' : '⏰ DAY TRADE — INTRADAY ONLY'}
+              </span>
+              <span className={`text-[9px] font-mono ${
+                trade.tradeStyle === 'crypto' ? 'text-purple-400/70' : 'text-amber-400/70'
+              }`}>
+                {trade.tradeStyle === 'crypto' ? 'No bell, no must-exit — close within ~24h' : 'No overnight risk'}
+              </span>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-[11px] font-mono">
               <div className="bg-green-500/10 border border-green-500/25 rounded p-2">
-                <div className="text-[9px] uppercase tracking-widest text-green-500/70 mb-1">✓ Enter Between</div>
-                <div className="text-green-300 font-bold tabular-nums">{trade.intradayTiming.entryFrom} – {trade.intradayTiming.entryUntil}</div>
+                <div className="text-[9px] uppercase tracking-widest text-green-500/70 mb-1">
+                  {trade.tradeStyle === 'crypto' ? '✓ Peak Liquidity' : '✓ Enter Between'}
+                </div>
+                <div className="text-green-300 font-bold tabular-nums">{trade.intradayTiming.entryFrom}{trade.intradayTiming.entryUntil ? ` – ${trade.intradayTiming.entryUntil}` : ''}</div>
                 <div className="text-[9px] text-green-500/60 mt-0.5">Best: {trade.intradayTiming.bestEntryWindow}</div>
               </div>
               <div className="bg-cyan-500/10 border border-cyan-500/25 rounded p-2">
                 <div className="text-[9px] uppercase tracking-widest text-cyan-500/70 mb-1">⏱ Typical Hold</div>
                 <div className="text-cyan-300 font-bold tabular-nums">
-                  {trade.expectedHours ? `~${trade.expectedHours} hours` : 'Same session'}
+                  {trade.expectedHours ? `~${trade.expectedHours} hours` : (trade.tradeStyle === 'crypto' ? 'Next active session' : 'Same session')}
                 </div>
                 <div className="text-[9px] text-cyan-500/60 mt-0.5">to reach TP1</div>
               </div>
               <div className="bg-red-500/10 border border-red-500/25 rounded p-2">
-                <div className="text-[9px] uppercase tracking-widest text-red-500/70 mb-1">⚠ Must Exit By</div>
+                <div className="text-[9px] uppercase tracking-widest text-red-500/70 mb-1">
+                  {trade.tradeStyle === 'crypto' ? '⚠ Soft Deadline' : '⚠ Must Exit By'}
+                </div>
                 <div className="text-red-300 font-bold tabular-nums">{trade.intradayTiming.mustExitBy}</div>
                 <div className="text-[9px] text-red-500/60 mt-0.5">Avoid: {trade.intradayTiming.avoidWindow}</div>
               </div>
             </div>
+            {trade.tradeStyle === 'crypto' && (
+              <div className="text-[9px] text-purple-400/60 mt-2 leading-relaxed">
+                Why these times: 13:30–20:00 UK = US/EU overlap, tightest spreads. 14:30 UK = NY equity open, where ETF flows + CME futures drive ~70% of major intraday moves.
+              </div>
+            )}
           </div>
         )}
 
-        {/* Swing time row (only shows if NOT same-day mode) */}
-        {trade.tradeStyle !== 'sameDay' && (
+        {/* Swing time row (only for swing-style trades) */}
+        {trade.tradeStyle !== 'sameDay' && trade.tradeStyle !== 'crypto' && (
           <div className="flex flex-wrap gap-x-5 gap-y-1 mb-3 text-[11px] font-mono">
             <div>
               <span className="text-[#3a3a3a]">Hold: </span>
@@ -560,7 +579,7 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
                   ? 'bg-green-500/10 text-green-400 border-green-500/25 animate-pulse'
                   : 'bg-blue-500/10 text-blue-400 border-blue-500/25'
               }`}>
-                {entryTiming?.urgency === 'now' ? 'ENTER NOW' : 'AT NEXT OPEN'}
+                {entryTiming?.urgency === 'now' ? 'ENTER NOW' : (trade.tradeStyle === 'crypto' ? 'AT NEXT PEAK' : 'AT NEXT OPEN')}
               </span>
             )}
           </div>

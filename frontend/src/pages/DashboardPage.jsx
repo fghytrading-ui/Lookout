@@ -279,7 +279,8 @@ export default function DashboardPage({ market = 'stocks', title = null }) {
         marketRegime: d.marketRegime,
         choppiness: d.choppiness,
         btcTrend: d.btcTrend,
-        cryptoContext: d.cryptoContext
+        cryptoContext: d.cryptoContext,
+        entryTiming: d.entryTiming   // crypto: getCryptoEntryTiming(); else: US getEntryTiming()
       });
       setLastUpdated(new Date());
       lastScanTimeRef.current = Date.now();
@@ -626,7 +627,9 @@ export default function DashboardPage({ market = 'stocks', title = null }) {
               const liveCarry  = enrichTrades(trades.carryForward  || [], tickerPrices, hasLiveData);
               const commonProps = {
                 newTickers, accountSize, riskPct,
-                entryTiming: market === 'forex' ? forexContext?.entryTiming : marketStatus?.entryTiming,
+                entryTiming: isCrypto                ? scanStats.entryTiming
+                          : market === 'forex'       ? forexContext?.entryTiming
+                                                      : marketStatus?.entryTiming,
                 onTakeTrade: handleTakeTrade
               };
               return (

@@ -5,7 +5,7 @@ import { getMarketChoppiness } from '../lib/marketChoppiness.js';
 import { enrichTicker } from '../lib/news.js';
 import { fetchNextEarnings, evaluateEarningsRisk } from '../lib/earnings.js';
 import { reviewTrade } from '../utils/reviewer.js';
-import { getCryptoContext, tickerToBinanceSymbol } from '../lib/cryptoContext.js';
+import { getCryptoContext, tickerToBinanceSymbol, getCryptoEntryTiming } from '../lib/cryptoContext.js';
 import {
   analyzeSignals, generateTradeSetup, calculateSMA,
   TIME_SPANS, getTimespanKey, getExitWindow, generateAnalystNotes
@@ -305,12 +305,12 @@ function buildCard(ticker, raw, quote, setup, signalData, historical, market = '
               : getExitWindow(tsKey),
     // Intraday-specific timing windows (UK time)
     intradayTiming: tradeStyle === 'crypto' ? {
-      entryFrom: 'Anytime — 24/7 market',
-      entryUntil: 'Prefer US/EU session overlap (1pm–9pm UK) for liquidity',
-      mustExitBy: 'Within ~12h or by next active session',
-      totalSession: '24h continuous',
-      bestEntryWindow: '1pm – 9pm UK (US/EU overlap, peak liquidity)',
-      avoidWindow: '9pm – 1am UK (low-liquidity, wider spreads)'
+      entryFrom: '13:30 UK',
+      entryUntil: '20:00 UK',
+      mustExitBy: 'Within ~24h (no hard close — close on TP/SL or next peak)',
+      totalSession: '24/7 (peak ~6.5h)',
+      bestEntryWindow: '14:30 – 18:00 UK (NY equity open + ETF inflows + CME futures volume)',
+      avoidWindow: '20:00 – 08:00 UK + all weekend (US-close drainage, Asia thin, weekend wicks)'
     } : tradeStyle === 'sameDay' ? {
       entryFrom: '2:30 PM UK',
       entryUntil: '7:00 PM UK',
@@ -543,8 +543,9 @@ router.get('/scan', async (req, res) => {
       .sort((a, b) => (b.confidence || 0) - (a.confidence || 0))
       .slice(0, 8);
 
-    // Build the entry timing context once
-    const entryTiming = getEntryTiming();
+    // Build the entry timing context — crypto uses its own session-aware function,
+    // others use the US stock market entryTiming.
+    const entryTiming = isCrypto ? getCryptoEntryTiming() : getEntryTiming();
 
     // Mark the single best trade across all categories as TOP PICK
     // Only consider PASS verdict trades for TOP PICK (no caution flags)
