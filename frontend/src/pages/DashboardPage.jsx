@@ -17,6 +17,7 @@ import ForexSessionBar from '../components/ForexSessionBar.jsx';
 import CurrencyStrengthMeter from '../components/CurrencyStrengthMeter.jsx';
 import CommodityScheduleBar from '../components/CommodityScheduleBar.jsx';
 import CryptoContextBar from '../components/CryptoContextBar.jsx';
+import InventoryReleaseBar from '../components/InventoryReleaseBar.jsx';
 
 // Default ticker tape (stocks)
 const DEFAULT_TAPE = ['AAPL','MSFT','NVDA','TSLA','META','GOOGL','AMZN','AMD','SPY','QQQ','GLD','BTC-USD','ETH-USD','CL=F','JPM','COIN','PLTR','MSTR','IWM','SMCI'];
@@ -280,6 +281,7 @@ export default function DashboardPage({ market = 'stocks', title = null }) {
         choppiness: d.choppiness,
         btcTrend: d.btcTrend,
         cryptoContext: d.cryptoContext,
+        inventoryReleases: d.inventoryReleases,
         entryTiming: d.entryTiming   // crypto: getCryptoEntryTiming(); else: US getEntryTiming()
       });
       setLastUpdated(new Date());
@@ -448,6 +450,9 @@ export default function DashboardPage({ market = 'stocks', title = null }) {
       {/* ── Commodities-specific top sections ────────────────────────────── */}
       {market === 'commodities' && commodContext && (
         <CommodityScheduleBar schedule={commodContext.schedule} dxy={commodContext.dxy} />
+      )}
+      {market === 'commodities' && scanStats.inventoryReleases && (
+        <InventoryReleaseBar releases={scanStats.inventoryReleases} />
       )}
 
       {/* ── Crypto-specific context bar ──────────────────────────────────── */}

@@ -394,6 +394,22 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
           </div>
         )}
 
+        {/* Inventory release warning (energy products only) */}
+        {trade.inventoryRelease && trade.inventoryRelease.hoursUntil <= 36 && trade.inventoryRelease.hoursUntil >= -2 && (
+          <div className={`text-[11px] font-mono px-2.5 py-1.5 rounded mb-2 border flex items-center gap-2 ${
+            trade.inventoryRelease.hoursUntil <= 2
+              ? 'bg-red-500/10 border-red-500/30 text-red-300 warn-pulse'
+              : 'bg-amber-500/10 border-amber-500/30 text-amber-300'
+          }`}>
+            <span>⚡</span>
+            <span>
+              {trade.inventoryRelease.title} in {trade.inventoryRelease.hoursUntil.toFixed(1)}h
+              {trade.inventoryRelease.hoursUntil <= 2 ? ' — do NOT hold through release' : ' — clear position before release'}
+              {trade.inventoryRelease.forecast && <span className="opacity-70 ml-1">· consensus {trade.inventoryRelease.forecast}</span>}
+            </span>
+          </div>
+        )}
+
         {/* Earnings risk warning */}
         {trade.earnings && trade.earnings.status !== 'OK' && (
           <div className={`text-[11px] font-mono px-2.5 py-1.5 rounded mb-2 border flex items-center gap-2 ${

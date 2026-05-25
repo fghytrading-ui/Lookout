@@ -30,7 +30,7 @@ export function reviewTrade(card, historical, signalData, marketContext = {}) {
 
   const { direction, price, changePercent, rsi, news, sentiment, fiftyTwoWeekHigh, fiftyTwoWeekLow, earnings, volRatio } = card;
   const { sma200, sma50, macd, atr } = signalData;
-  const { vix, weeklyTrend, market, btcTrend, fearGreed, cryptoSession, funding } = marketContext;
+  const { vix, weeklyTrend, market, btcTrend, fearGreed, cryptoSession, funding, inventoryRisk } = marketContext;
   const isCrypto = market === 'crypto';
 
   // ── A. VIX market regime override ────────────────────────────────────
@@ -96,6 +96,15 @@ export function reviewTrade(card, historical, signalData, marketContext = {}) {
         issues.push({ severity: 'caution', text: `Today's range ${(todayRange / price * 100).toFixed(1)}% — choppy session, signals unreliable` });
       }
     }
+  }
+
+  // ── 0b. INVENTORY RELEASE RISK (energy commodities — earnings equivalent) ──
+  // EIA crude/NG reports are scheduled binary events that move CL/NG 2–5%
+  // in minutes. Treat same as earnings: never hold through.
+  if (inventoryRisk?.status === 'BLOCK') {
+    issues.push({ severity: 'reject', text: inventoryRisk.message });
+  } else if (inventoryRisk?.status === 'CAUTION') {
+    issues.push({ severity: 'caution', text: inventoryRisk.message });
   }
 
   // ── 0. EARNINGS RISK (hardest filter — never hold through report) ────

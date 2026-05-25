@@ -7,6 +7,7 @@ import { fetchNextEarnings, evaluateEarningsRisk } from '../lib/earnings.js';
 import { reviewTrade } from '../utils/reviewer.js';
 import { getCryptoContext, tickerToBinanceSymbol, getCryptoEntryTiming } from '../lib/cryptoContext.js';
 import { fetchCryptoCandlesBatch, computeSessionVWAP } from '../lib/cryptoCandles.js';
+import { getInventoryReleases, evaluateInventoryRisk } from '../lib/inventoryReleases.js';
 import {
   analyzeSignals, generateTradeSetup, calculateSMA,
   TIME_SPANS, getTimespanKey, getExitWindow, generateAnalystNotes
@@ -362,15 +363,18 @@ router.get('/scan', async (req, res) => {
       : watchlist.slice(0, 40);
 
     const isCrypto = market === 'crypto';
+    const isCommodities = market === 'commodities';
     const tradeStyle = isCrypto ? 'crypto' : 'sameDay';
 
     // Fetch macro context — crypto uses BTC trend + Fear&Greed, not VIX/SPY
-    const [marketRegime, vix, choppiness, btcTrend, cryptoContext] = await Promise.all([
+    // Commodities adds inventory release awareness (EIA crude/NG)
+    const [marketRegime, vix, choppiness, btcTrend, cryptoContext, inventoryReleases] = await Promise.all([
       isCrypto ? Promise.resolve('NEUTRAL') : getMarketRegime(),
       isCrypto ? Promise.resolve(null)      : getVIX(),
       isCrypto ? Promise.resolve(null)      : getMarketChoppiness(),
       isCrypto ? getBTCTrend()              : Promise.resolve(null),
-      isCrypto ? getCryptoContext().catch(() => null) : Promise.resolve(null)
+      isCrypto ? getCryptoContext().catch(() => null) : Promise.resolve(null),
+      isCommodities ? getInventoryReleases().catch(() => null) : Promise.resolve(null)
     ]);
 
     // Single call per ticker: quote + 3mo candles (Yahoo for everything)
@@ -500,6 +504,7 @@ router.get('/scan', async (req, res) => {
         const cardFunding = isCrypto && cryptoContext?.funding?.rates
           ? cryptoContext.funding.rates[tickerToBinanceSymbol(card.ticker)] ?? null
           : null;
+        const inventoryRisk = isCommodities ? evaluateInventoryRisk(inventoryReleases, card.ticker) : null;
         const review = reviewTrade(card, card._historical, card._signalData, {
           vix,
           weeklyTrend: weeklyTrendMap[card.ticker] || null,
@@ -507,8 +512,14 @@ router.get('/scan', async (req, res) => {
           btcTrend,
           fearGreed: cryptoContext?.fearGreed?.value || null,
           cryptoSession: cryptoContext?.session || null,
-          funding: cardFunding
+          funding: cardFunding,
+          inventoryRisk
         });
+        // Surface the next release on every commodities card so UI can show it
+        if (isCommodities && inventoryReleases) {
+          const next = Object.values(inventoryReleases).find(r => r.tickers.includes(card.ticker));
+          if (next) card.inventoryRelease = next;
+        }
         // Strip internal fields before sending
         delete card._historical;
         delete card._signalData;
@@ -592,6 +603,7 @@ router.get('/scan', async (req, res) => {
       vixRegime: vix == null ? null : vix > 30 ? 'EXTREME' : vix > 22 ? 'ELEVATED' : vix > 15 ? 'NORMAL' : 'LOW',
       btcTrend,
       cryptoContext,
+      inventoryReleases,
       entryTiming,
       scannedCount: tickerList.length,
       passedFilter: allCards.length,
