@@ -232,6 +232,30 @@ export function reviewTrade(card, historical, signalData, marketContext = {}) {
     if (cryptoSession?.liquidity === 'LOW' && !isBTC) {
       issues.push({ severity: 'caution', text: `${cryptoSession.activeSession} session — low liquidity, alts prone to wicks and spreads` });
     }
+    // VWAP bias — long below VWAP = wind in your face; short above VWAP = same
+    // Crypto pros use VWAP both as a bias filter and as a magnet for mean reversion.
+    if (card.vwap) {
+      const { side, distancePct, vwap: vwapPrice } = card.vwap;
+      if (direction === 'LONG' && side === 'BELOW' && distancePct < -1.5) {
+        issues.push({ severity: 'caution', text: `Price ${Math.abs(distancePct)}% below session VWAP ($${vwapPrice}) — long fights intraday bias` });
+      }
+      if (direction === 'SHORT' && side === 'ABOVE' && distancePct > 1.5) {
+        issues.push({ severity: 'caution', text: `Price ${distancePct}% above session VWAP ($${vwapPrice}) — short fights intraday bias` });
+      }
+      if (direction === 'LONG' && side === 'ABOVE' && distancePct > 3) {
+        issues.push({ severity: 'caution', text: `Price ${distancePct}% above VWAP — extended, snap-back to VWAP likely` });
+      }
+      if (direction === 'SHORT' && side === 'BELOW' && distancePct < -3) {
+        issues.push({ severity: 'caution', text: `Price ${Math.abs(distancePct)}% below VWAP — extended short, bounce risk` });
+      }
+      if (direction === 'LONG' && side === 'ABOVE' && distancePct > 0 && distancePct < 1) {
+        strengths.push(`Price ${distancePct}% above VWAP — intraday bias supports long`);
+      }
+      if (direction === 'SHORT' && side === 'BELOW' && distancePct < 0 && distancePct > -1) {
+        strengths.push(`Price ${Math.abs(distancePct)}% below VWAP — intraday bias supports short`);
+      }
+    }
+
     // Perp funding contrarian flag — crowded positioning predicts squeeze risk
     if (funding != null) {
       const fundingPct = (funding * 100).toFixed(3);

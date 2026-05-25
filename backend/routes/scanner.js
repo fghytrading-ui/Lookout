@@ -2,10 +2,11 @@ import { Router } from 'express';
 import { fetchFullBatch, fetchFull, fetchWeekly } from '../lib/yahoo.js';
 import { classifySetup } from '../lib/setupClassifier.js';
 import { getMarketChoppiness } from '../lib/marketChoppiness.js';
-import { enrichTicker } from '../lib/news.js';
+import { enrichTicker, enrichCryptoTicker } from '../lib/news.js';
 import { fetchNextEarnings, evaluateEarningsRisk } from '../lib/earnings.js';
 import { reviewTrade } from '../utils/reviewer.js';
 import { getCryptoContext, tickerToBinanceSymbol, getCryptoEntryTiming } from '../lib/cryptoContext.js';
+import { fetchCryptoCandlesBatch, computeSessionVWAP } from '../lib/cryptoCandles.js';
 import {
   analyzeSignals, generateTradeSetup, calculateSMA,
   TIME_SPANS, getTimespanKey, getExitWindow, generateAnalystNotes
@@ -372,8 +373,22 @@ router.get('/scan', async (req, res) => {
       isCrypto ? getCryptoContext().catch(() => null) : Promise.resolve(null)
     ]);
 
-    // Single call per ticker: quote + 3mo candles
+    // Single call per ticker: quote + 3mo candles (Yahoo for everything)
     const fullMap = await fetchFullBatch(tickerList);
+
+    // For crypto: replace daily Yahoo candles with intraday 4h Binance klines.
+    // Quote (price/52w/avgVol) stays from Yahoo — works fine.
+    // Candles drive ATR/RSI/MACD/SMA which now operate at 4h resolution.
+    let cryptoCandlesMap = {};
+    if (isCrypto) {
+      cryptoCandlesMap = await fetchCryptoCandlesBatch(tickerList, { interval: '4h', limit: 200 });
+      for (const t of tickerList) {
+        const c = cryptoCandlesMap[t];
+        if (c && c.length >= 30 && fullMap[t]) {
+          fullMap[t].candles = c;
+        }
+      }
+    }
 
     const trades = { enterNow: [], waitForBounce: [], carryForward: [] };
 
@@ -394,6 +409,11 @@ router.get('/scan', async (req, res) => {
       // not a hard reject — we still allow counter-trend setups if they are strong.
 
       const card = buildCard(ticker, raw, quote, setup, signalData, historical, market);
+      // VWAP — crypto-only, intraday level pros use as bias filter and magnet
+      if (isCrypto) {
+        const vwap = computeSessionVWAP(historical);
+        if (vwap) card.vwap = vwap;
+      }
       // Classify the setup type — tells user WHAT KIND of trade this is
       card.setupType = classifySetup(quote, historical, { ...signalData, direction: setup.direction });
       // Stash for the reviewer pass (stripped before sending to client)
@@ -425,7 +445,10 @@ router.get('/scan', async (req, res) => {
     for (let i = 0; i < priorityCards.length; i++) {
       const card = priorityCards[i];
       try {
-        const enrichment = await enrichTicker(card.ticker);
+        // For crypto, search by coin name (Bitcoin, Ethereum…) instead of YHA ticker
+        const enrichment = isCrypto
+          ? await enrichCryptoTicker(CRYPTO_NAMES[card.ticker] || card.ticker.replace('-USD', ''))
+          : await enrichTicker(card.ticker);
         card.news      = enrichment.news || [];
         card.sentiment = enrichment.sentiment || null;
         if (isCrypto) {

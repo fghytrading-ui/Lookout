@@ -365,9 +365,13 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
     tp2Mult = 1.15 + (trendStrength * 0.30);
     slMult  = 0.7;
   } else if (tradeStyle === 'crypto') {
-    tp1Mult = 1.2 + (trendStrength * 0.30);   // 1.2 → 2.1 × ATR (next 4–12h)
-    tp2Mult = 2.0 + (trendStrength * 0.40);   // 2.0 → 3.2 × ATR (next session)
-    slMult  = 1.0;                             // crypto wicks — too-tight stops get hunted
+    // 4h ATR is ~1/sqrt(6) of daily ATR — multipliers scaled accordingly.
+    // SL = 1.5 × ATR_4h ≈ 1.6% BTC stop (tight but not wick-bait)
+    // TP1 = 2.0-3.0 × ATR_4h ≈ 2.2-3.3% BTC (reachable in 6-24h)
+    // TP2 = 3.5-5.0 × ATR_4h ≈ 3.8-5.5% BTC (reachable in 24-48h)
+    tp1Mult = 2.0 + (trendStrength * 0.50);
+    tp2Mult = 3.5 + (trendStrength * 0.60);
+    slMult  = 1.5;
   } else {
     tp1Mult = 1.6 + (trendStrength * 0.4);
     tp2Mult = 2.8 + (trendStrength * 0.4);
@@ -378,8 +382,11 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
   const CAL = {
     sameDay: { slCapPct: 0.025, slFloorATR: 0.4, slRangeMin: 0.4, slRangeMax: 1.0,
                maxDaysTP1: 1,  maxDaysTP2: 2,  minTP1ATR: 0.5, minTP2ATR: 0.9, minRR: 1.2 },
-    crypto:  { slCapPct: 0.045, slFloorATR: 0.6, slRangeMin: 0.6, slRangeMax: 1.5,
-               maxDaysTP1: 2,  maxDaysTP2: 4,  minTP1ATR: 0.8, minTP2ATR: 1.5, minRR: 1.3 },
+    // Crypto runs on 4-hour candles. "days" in this object = bars held.
+    // ATR here is per-4h-bar (~1/sqrt(6) of daily ATR), so multipliers are larger.
+    // Time ceilings: TP1 within 6 bars (~24h, one session), TP2 within 12 bars (~48h).
+    crypto:  { slCapPct: 0.04,  slFloorATR: 1.2, slRangeMin: 1.2, slRangeMax: 2.5,
+               maxDaysTP1: 6,  maxDaysTP2: 12, minTP1ATR: 1.5, minTP2ATR: 2.5, minRR: 1.3 },
     swing:   { slCapPct: 0.04,  slFloorATR: 0.9, slRangeMin: 1.0, slRangeMax: 1.8,
                maxDaysTP1: 10, maxDaysTP2: 16, minTP1ATR: 1.2, minTP2ATR: 2.0, minRR: 1.3 }
   }[tradeStyle] || { slCapPct: 0.04, slFloorATR: 0.9, slRangeMin: 1.0, slRangeMax: 1.8,
@@ -639,8 +646,9 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
 
   // Convert expected days → expected hours for same-day trades
   // (intraday session is ~6.5 hours)
-  // Crypto trades 24h, so a "day" of expected travel is 24h not 6.5h
-  const hoursPerDay    = tradeStyle === 'crypto' ? 12 : 6.5;  // 12h ≈ active liquidity window
+  // Crypto: candles are 4h bars, so each "day" in the math = 4 actual hours.
+  // Stocks: "day" = trading session ≈ 6.5h.
+  const hoursPerDay    = tradeStyle === 'crypto' ? 4 : 6.5;
   const expectedHours  = isIntraday ? Math.max(1, Math.round(expectedDays  * hoursPerDay)) : null;
   const expectedHours2 = isIntraday ? Math.max(2, Math.round(expectedDays2 * hoursPerDay)) : null;
 

@@ -329,6 +329,21 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
           </div>
         )}
 
+        {/* VWAP — intraday bias level (crypto only). Pros use this as magnet + bias filter. */}
+        {trade.tradeStyle === 'crypto' && trade.vwap && (
+          <div className="flex items-center gap-2 mb-3 px-3 py-2 rounded border bg-[#0a0a0a] border-[#1a1a1a] text-[11px] font-mono">
+            <span className="text-[#666] text-[10px] uppercase tracking-widest">VWAP</span>
+            <span className="text-cyan-300 font-bold tabular-nums">${trade.vwap.vwap}</span>
+            <span className={`text-[10px] ${
+              Math.abs(trade.vwap.distancePct) < 1 ? 'text-[#888]' :
+              trade.vwap.side === 'ABOVE' ? 'text-green-400' : 'text-red-400'
+            }`}>
+              · price {trade.vwap.distancePct >= 0 ? '+' : ''}{trade.vwap.distancePct}% ({trade.vwap.side})
+            </span>
+            <span className="text-[9px] text-[#444] ml-auto">session = UTC day</span>
+          </div>
+        )}
+
         {/* Swing time row (only for swing-style trades) */}
         {trade.tradeStyle !== 'sameDay' && trade.tradeStyle !== 'crypto' && (
           <div className="flex flex-wrap gap-x-5 gap-y-1 mb-3 text-[11px] font-mono">

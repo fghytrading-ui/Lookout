@@ -99,3 +99,30 @@ export async function enrichTicker(ticker) {
   const sentiment = deriveSentimentFromNews(news);
   return { news, sentiment };
 }
+
+// Crypto-aware news fetcher — uses coin's full name + "crypto" instead of
+// the Yahoo ticker (BTC-USD returns garbage in Google News). Combines a
+// crypto-specific search to surface listings, hacks, regulatory headlines
+// instead of generic equity noise.
+export async function fetchCryptoNews(coinName, limit = 4) {
+  const key = `cryptoNews:${coinName.toLowerCase()}`;
+  const cached = cacheGet(key);
+  if (cached) return cached;
+  try {
+    const query = encodeURIComponent(`${coinName} cryptocurrency`);
+    const url = `https://news.google.com/rss/search?q=${query}&hl=en-US&gl=US&ceid=US:en`;
+    const { data } = await axios.get(url, { headers: HEADERS, timeout: 8000 });
+    const news = parseRSS(data, limit);
+    cacheSet(key, news);
+    return news;
+  } catch {
+    cacheSet(key, []);
+    return [];
+  }
+}
+
+export async function enrichCryptoTicker(coinName) {
+  const news = await fetchCryptoNews(coinName, 4);
+  const sentiment = deriveSentimentFromNews(news);
+  return { news, sentiment };
+}
