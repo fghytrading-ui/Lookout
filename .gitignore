@@ -1,10 +1,11 @@
-node_modules/
-dist/
+**/.env
+*.log
+.DS_Store
 .env
 .env.local
-**/.env
 /tmp/
-*.log
-backend/public/
 backend/.cache/
-.DS_Store
+backend/data/
+backend/public/
+dist/
+node_modules/

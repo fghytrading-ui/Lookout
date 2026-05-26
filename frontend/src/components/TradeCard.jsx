@@ -391,6 +391,27 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
               </span>
             </div>
             <p className="text-[10px] text-[#888] font-mono leading-snug">{trade.setupType.description}</p>
+            {/* LIVE historical performance from auto-tracked outcomes */}
+            {trade.historicalStats && (
+              <div className="text-[10px] font-mono text-[#666] mt-2 pt-2 border-t border-[#1a1a1a] flex items-center gap-2 flex-wrap">
+                <span className="text-[#888]">📊 This system's record on {trade.setupType.label}:</span>
+                <span className={`font-bold ${
+                  trade.historicalStats.winRate >= 0.6 ? 'text-green-400' :
+                  trade.historicalStats.winRate >= 0.5 ? 'text-amber-400' :
+                  trade.historicalStats.winRate >= 0.4 ? 'text-orange-400' : 'text-red-400'
+                }`}>
+                  {(trade.historicalStats.winRate * 100).toFixed(0)}% wins
+                </span>
+                <span>(n={trade.historicalStats.sampleSize}, last 60d)</span>
+                {trade.confidenceAdjustment != null && trade.confidenceAdjustment !== 0 && (
+                  <span className={`text-[9px] px-1.5 py-0.5 rounded border ${
+                    trade.confidenceAdjustment > 0 ? 'border-green-500/30 text-green-400' : 'border-red-500/30 text-red-400'
+                  }`} title="Confidence auto-adjusted based on this setup's historical win rate">
+                    confidence {trade.confidenceAdjustment > 0 ? '+' : ''}{trade.confidenceAdjustment}
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         )}
 

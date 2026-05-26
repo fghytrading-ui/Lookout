@@ -8,6 +8,7 @@ import { reviewTrade } from '../utils/reviewer.js';
 import { getCryptoContext, tickerToBinanceSymbol, getCryptoEntryTiming } from '../lib/cryptoContext.js';
 import { fetchCryptoCandlesBatch, computeSessionVWAP } from '../lib/cryptoCandles.js';
 import { getInventoryReleases, evaluateInventoryRisk } from '../lib/inventoryReleases.js';
+import { logSignal, getSetupTypeStats } from '../lib/signalLog.js';
 import {
   analyzeSignals, generateTradeSetup, calculateSMA,
   TIME_SPANS, getTimespanKey, getExitWindow, generateAnalystNotes
@@ -580,6 +581,30 @@ router.get('/scan', async (req, res) => {
     // Build the entry timing context — crypto uses its own session-aware function,
     // others use the US stock market entryTiming.
     const entryTiming = isCrypto ? getCryptoEntryTiming() : getEntryTiming();
+
+    // Log every surviving signal + attach historical setup-type stats for feedback loop.
+    // The monitor (lib/signalMonitor.js) tracks each from here to its outcome.
+    for (const card of [...trades.enterNow, ...trades.waitForBounce, ...trades.carryForward]) {
+      if (card.review?.verdict === 'REJECT') continue;
+      // 1. Look up historical performance for this setup type and apply to confidence
+      const setupKey = card.setupType?.label || null;
+      const hist = setupKey ? getSetupTypeStats(setupKey, { market, lookbackDays: 60, minSamples: 10 }) : null;
+      if (hist) {
+        card.historicalStats = hist;
+        // Adjust confidence: <40% wins demotes by 10, >60% boosts by 8
+        let adj = 0;
+        if (hist.winRate < 0.40) adj = -10;
+        else if (hist.winRate < 0.50) adj = -5;
+        else if (hist.winRate > 0.60) adj = 8;
+        else if (hist.winRate > 0.55) adj = 4;
+        if (adj !== 0) {
+          card.confidence = Math.max(15, Math.min(95, card.confidence + adj));
+          card.confidenceAdjustment = adj;
+        }
+      }
+      // 2. Log the signal (idempotent — dedupes per ticker+direction)
+      try { logSignal(card, { market }); } catch {}
+    }
 
     // Mark the single best trade across all categories as TOP PICK
     // Only consider PASS verdict trades for TOP PICK (no caution flags)
