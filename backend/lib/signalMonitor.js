@@ -176,7 +176,9 @@ export async function monitorTick() {
 
 export function startSignalMonitor() {
   // First tick after a short delay so server boot finishes first
-  setTimeout(() => monitorTick().catch(() => {}), 60_000);
+  // [FAST-SYSTEM-101] First tick delayed to 5 min so it doesn't compete
+  // with the user's initial cold-cache scan for Yahoo bandwidth.
+  setTimeout(() => monitorTick().catch(() => {}), 5 * 60_000);
   setInterval(() => monitorTick().catch(() => {}), TICK_MS);
   console.log('  ✓ Signal monitor started (tick every 5 min)');
 }

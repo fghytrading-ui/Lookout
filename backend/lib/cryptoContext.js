@@ -4,7 +4,10 @@ import axios from 'axios';
 import { registerCache } from './persistentCache.js';
 
 const cache = new Map();
-const TTL = 5 * 60 * 1000; // 5 min
+// [FAST-SYSTEM-101] Bumped 5 → 15 min. Funding rates update every 8h,
+// Fear & Greed daily, BTC dominance slowly. Staler data here costs nothing,
+// reduces API load.
+const TTL = 15 * 60 * 1000;
 registerCache('crypto-context', cache);
 
 const HEADERS = {

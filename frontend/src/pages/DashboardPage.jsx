@@ -335,13 +335,22 @@ export default function DashboardPage({ market = 'stocks', title = null }) {
   // ── Initial load ──────────────────────────────────────────────────────────
 
   useEffect(() => {
+    // [FAST-SYSTEM-101] Progressive render: show page as soon as scan finishes.
+    // Other init fetches (tape, calendar, extended-movers) continue in background.
+    // Lazy-load extended-movers — only when in PRE_MARKET / AFTER_HOURS session.
     const init = async () => {
       setLoading(true);
       await fetchMarketStatus();
-      const initTasks = [fetchTickerPrices(), fetchScan(), fetchCalendar(), fetchExtendedMovers()];
-      if (market === 'forex') initTasks.push(fetchForexContext());
-      if (market === 'commodities') initTasks.push(fetchCommodContext());
-      await Promise.allSettled(initTasks);
+      const scanPromise = fetchScan();              // critical path
+      fetchTickerPrices();                          // non-blocking
+      fetchCalendar();                              // non-blocking
+      if (market === 'forex') fetchForexContext();
+      if (market === 'commodities') fetchCommodContext();
+      const sess = marketStatusRef.current?.session;
+      if (sess === 'PRE_MARKET' || sess === 'AFTER_HOURS') {
+        fetchExtendedMovers();                      // only when relevant
+      }
+      await scanPromise;
       setLoading(false);
     };
     init();
