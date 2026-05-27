@@ -25,6 +25,14 @@ function timeAgo(iso) {
   return `${Math.floor(hrs / 24)}d ago`;
 }
 
+// Crypto quick-pick row — top liquidity coins for one-click analysis
+const CRYPTO_PICKS = [
+  ['BTC-USD', 'BTC'], ['ETH-USD', 'ETH'], ['SOL-USD', 'SOL'],
+  ['BNB-USD', 'BNB'], ['XRP-USD', 'XRP'], ['ADA-USD', 'ADA'],
+  ['DOGE-USD', 'DOGE'], ['AVAX-USD', 'AVAX'], ['LINK-USD', 'LINK'],
+  ['MATIC-USD', 'MATIC'], ['DOT-USD', 'DOT'], ['ATOM-USD', 'ATOM']
+];
+
 const RECENT_KEY = 'lookout-analyst-recent';
 const loadRecent = () => { try { return JSON.parse(localStorage.getItem(RECENT_KEY) || '[]'); } catch { return []; } };
 const pushRecent = (t) => {
@@ -81,12 +89,23 @@ export default function AnalystPage() {
     <div className="max-w-[1200px] mx-auto px-2 sm:px-4 py-3 sm:py-5">
       <div className="mb-5">
         <div className="flex items-center gap-3 mb-1 flex-wrap">
-          <h1 className="text-2xl font-condensed font-bold tracking-widest text-cyan-400">🔍 STOCK ANALYST</h1>
+          <h1 className="text-2xl font-condensed font-bold tracking-widest text-cyan-400">
+            🔍 ASSET ANALYST
+          </h1>
           <span className="text-[10px] font-mono font-bold px-2 py-1 rounded border border-cyan-500/40 bg-cyan-500/10 text-cyan-300 tracking-widest">
             ⚖ BALANCED MODE
           </span>
+          {data?.market === 'crypto' && (
+            <span className="text-[10px] font-mono font-bold px-2 py-1 rounded border border-purple-500/40 bg-purple-500/10 text-purple-300 tracking-widest">
+              ₿ CRYPTO MODE
+            </span>
+          )}
         </div>
-        <p className="text-[11px] text-[#444] font-mono">Decisive when conviction is there — flashes BUY/SELL when sources agree. Still rejects clearly bad setups.</p>
+        <p className="text-[11px] text-[#444] font-mono">
+          {data?.market === 'crypto'
+            ? '4h candles · crypto calibration · BTC trend + Fear & Greed + funding · VWAP'
+            : 'Decisive when conviction is there — flashes BUY/SELL when sources agree. Still rejects clearly bad setups.'}
+        </p>
       </div>
 
       {/* Search input */}
@@ -119,6 +138,16 @@ export default function AnalystPage() {
             ))}
           </div>
         )}
+        {/* Crypto quick-pick — one-click analysis for top coins */}
+        <div className="flex items-center gap-2 mt-2 flex-wrap">
+          <span className="text-[10px] text-[#333] font-mono">₿ Crypto:</span>
+          {CRYPTO_PICKS.map(([t, label]) => (
+            <button key={t} type="button" onClick={() => { setTicker(t); fetchAnalysis(t); }}
+              className="text-[10px] font-mono px-2 py-0.5 rounded border border-[#1f1f1f] hover:border-purple-500/40 text-[#666] hover:text-purple-300">
+              {label}
+            </button>
+          ))}
+        </div>
       </form>
 
       {error && (
@@ -163,6 +192,78 @@ export default function AnalystPage() {
             </div>
             <Sparkline data={data.sparkline} direction={data.verdictTone === 'bullish' ? 'LONG' : data.verdictTone === 'bearish' ? 'SHORT' : null} width={300} height={36} />
           </div>
+
+          {/* ── CRYPTO CONTEXT (only when ticker is crypto) ─────────────────── */}
+          {data.market === 'crypto' && (data.cryptoContext || data.vwap) && (
+            <div className="rounded-lg p-3 border border-purple-500/30 bg-purple-500/5">
+              <div className="text-[10px] uppercase tracking-widest text-purple-400/70 font-mono mb-2">
+                ₿ Crypto context for {data.ticker}
+              </div>
+              <div className="flex items-center gap-2 sm:gap-3 flex-wrap text-[11px] font-mono">
+                {data.cryptoContext?.btcTrend && (
+                  <div className={`px-2.5 py-1.5 rounded border flex items-center gap-2 ${
+                    data.cryptoContext.btcTrend === 'BULLISH' ? 'border-green-500/40 text-green-300 bg-green-500/10' :
+                    data.cryptoContext.btcTrend === 'BEARISH' ? 'border-red-500/40 text-red-300 bg-red-500/10' :
+                                                                 'border-[#2a2a2a] text-[#888]'
+                  }`}>
+                    <span className="text-[10px] opacity-70">BTC trend</span>
+                    <span className="font-bold">{data.cryptoContext.btcTrend}</span>
+                  </div>
+                )}
+                {data.cryptoContext?.fearGreed && (
+                  <div className={`px-2.5 py-1.5 rounded border flex items-center gap-2 ${
+                    data.cryptoContext.fearGreed.value <= 25 ? 'border-red-500/40 text-red-300 bg-red-500/10' :
+                    data.cryptoContext.fearGreed.value >= 75 ? 'border-red-500/40 text-red-300 bg-red-500/10' :
+                    data.cryptoContext.fearGreed.value <= 45 ? 'border-amber-500/30 text-amber-300' :
+                    data.cryptoContext.fearGreed.value >= 55 ? 'border-amber-500/30 text-amber-300' :
+                                                                'border-[#2a2a2a] text-[#aaa]'
+                  }`}>
+                    <span className="font-bold text-[12px]">{data.cryptoContext.fearGreed.value}</span>
+                    <span className="text-[10px]">Fear & Greed · {data.cryptoContext.fearGreed.interpretation}</span>
+                  </div>
+                )}
+                {data.cryptoContext?.btcDominance != null && (
+                  <div className="px-2.5 py-1.5 rounded border border-[#2a2a2a] text-[#aaa] flex items-center gap-2">
+                    <span className="text-[10px] opacity-70">BTC.D</span>
+                    <span className="font-bold">{data.cryptoContext.btcDominance.toFixed(1)}%</span>
+                  </div>
+                )}
+                {data.cryptoContext?.funding != null && (
+                  <div className={`px-2.5 py-1.5 rounded border flex items-center gap-2 ${
+                    Math.abs(data.cryptoContext.funding) > 0.0005 ? 'border-red-500/40 text-red-300 bg-red-500/10' :
+                                                                     'border-[#2a2a2a] text-[#aaa]'
+                  }`}>
+                    <span className="text-[10px] opacity-70">Funding {data.ticker}</span>
+                    <span className="font-bold tabular-nums">{(data.cryptoContext.funding * 100).toFixed(4)}%</span>
+                    <span className="text-[9px] opacity-70">/8h</span>
+                  </div>
+                )}
+                {data.vwap && (
+                  <div className="px-2.5 py-1.5 rounded border border-[#2a2a2a] text-[#aaa] flex items-center gap-2">
+                    <span className="text-[10px] opacity-70">VWAP</span>
+                    <span className="font-bold text-cyan-300 tabular-nums">${data.vwap.vwap}</span>
+                    <span className={`text-[10px] ${
+                      Math.abs(data.vwap.distancePct) < 1 ? 'text-[#888]' :
+                      data.vwap.side === 'ABOVE' ? 'text-green-400' : 'text-red-400'
+                    }`}>
+                      {data.vwap.distancePct >= 0 ? '+' : ''}{data.vwap.distancePct}% {data.vwap.side}
+                    </span>
+                  </div>
+                )}
+                {data.cryptoContext?.session && (
+                  <div className={`px-2.5 py-1.5 rounded border flex items-center gap-2 ${
+                    data.cryptoContext.session.liquidity === 'HIGH'   ? 'border-green-500/40 text-green-300' :
+                    data.cryptoContext.session.liquidity === 'MEDIUM' ? 'border-amber-500/30 text-amber-300' :
+                                                                        'border-red-500/30 text-red-300'
+                  }`}>
+                    <span className="text-[10px] opacity-70">Session</span>
+                    <span className="font-bold">{data.cryptoContext.session.activeSession}</span>
+                    <span className="text-[9px] opacity-80">· {data.cryptoContext.session.liquidity} liq</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* ── TRADE GRADE (top-level synthesis) ────────────────────────────── */}
           {data.tradeGrade && data.tradeGrade.grade !== '—' && (

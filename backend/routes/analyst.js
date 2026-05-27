@@ -10,6 +10,37 @@ import { computeTradeGrade } from '../lib/tradeGrade.js';
 import { getPerformanceMetrics } from '../lib/performanceMetrics.js';
 import { analyzeSignals, generateTradeSetup, calculateSMA, calculateMACD, TIME_SPANS, getTimespanKey, getExitWindow } from '../utils/signals.js';
 import { reviewTrade } from '../utils/reviewer.js';
+import { fetchCryptoCandles, computeSessionVWAP } from '../lib/cryptoCandles.js';
+import { getCryptoContext, tickerToBinanceSymbol } from '../lib/cryptoContext.js';
+import { enrichCryptoTicker } from '../lib/news.js';
+
+// Crypto names + categories from scanner watchlist
+const CRYPTO_MAP = {
+  'BTC-USD': 'Bitcoin', 'ETH-USD': 'Ethereum', 'SOL-USD': 'Solana',
+  'XRP-USD': 'Ripple', 'BNB-USD': 'Binance Coin', 'ADA-USD': 'Cardano',
+  'DOGE-USD': 'Dogecoin', 'AVAX-USD': 'Avalanche', 'MATIC-USD': 'Polygon',
+  'DOT-USD': 'Polkadot', 'LINK-USD': 'Chainlink', 'ATOM-USD': 'Cosmos',
+  'UNI-USD': 'Uniswap', 'LTC-USD': 'Litecoin', 'BCH-USD': 'Bitcoin Cash',
+  'ARB-USD': 'Arbitrum', 'OP-USD': 'Optimism', 'NEAR-USD': 'NEAR Protocol',
+  'APT-USD': 'Aptos', 'INJ-USD': 'Injective', 'SHIB-USD': 'Shiba Inu',
+  'PEPE-USD': 'Pepe', 'TRX-USD': 'TRON', 'TON11419-USD': 'Toncoin'
+};
+const isCryptoTicker = (t) => !!CRYPTO_MAP[t];
+
+// BTC trend computed from BTC-USD daily candles
+async function getBTCTrendForAnalyst() {
+  try {
+    const btc = await fetchFull('BTC-USD', '3mo');
+    const closes = btc.candles.map(c => c.close);
+    const price = btc.quote.price;
+    const sma20 = calculateSMA(closes, 20);
+    const sma50 = calculateSMA(closes, 50);
+    if (!sma20 || !sma50) return 'NEUTRAL';
+    if (price > sma20 && sma20 > sma50) return 'BULLISH';
+    if (price < sma20 && sma20 < sma50) return 'BEARISH';
+    return 'NEUTRAL';
+  } catch { return 'NEUTRAL'; }
+}
 
 const router = Router();
 
@@ -658,6 +689,130 @@ async function getVIX() {
 // GET /api/analyst/:ticker
 router.get('/:ticker', async (req, res) => {
   const ticker = req.params.ticker.toUpperCase();
+
+  // ── CRYPTO BRANCH ─────────────────────────────────────────────────────
+  // Crypto tickers use Binance 4h klines, crypto news, crypto context,
+  // and the 'crypto' tradeStyle calibration. Skips earnings + wallStreet +
+  // sector + weeklyTrend which don't apply.
+  if (isCryptoTicker(ticker)) {
+    try {
+      const coinName = CRYPTO_MAP[ticker];
+      const [full, candles4h, news, btcTrend, cryptoContext] = await Promise.all([
+        fetchFull(ticker, '3mo'),                              // for live quote + 52w high/low
+        fetchCryptoCandles(ticker, { interval: '4h', limit: 200 }),
+        enrichCryptoTicker(coinName),
+        getBTCTrendForAnalyst(),
+        getCryptoContext().catch(() => null)
+      ]);
+
+      const candles = candles4h && candles4h.length >= 30 ? candles4h : full.candles;
+      if (!candles || candles.length < 30) {
+        return res.status(404).json({ error: `Insufficient data for ${ticker}` });
+      }
+
+      const raw = full.quote;
+      const quote = adaptQuote(raw);
+      const signalData = analyzeSignals(quote, candles, null);
+      const setup = generateTradeSetup(quote, candles, signalData, { market: 'crypto', tradeStyle: 'crypto' });
+      const vwap = computeSessionVWAP(candles);
+      const fundingRate = cryptoContext?.funding?.rates?.[tickerToBinanceSymbol(ticker)] ?? null;
+
+      const card = {
+        ticker, name: coinName, direction: setup?.direction,
+        price: raw.price, changePercent: raw.changePercent,
+        rsi: signalData.rsi, atr: signalData.atr,
+        news: news.news, sentiment: news.sentiment,
+        earnings: null,
+        fiftyTwoWeekHigh: raw.fiftyTwoWeekHigh,
+        fiftyTwoWeekLow: raw.fiftyTwoWeekLow,
+        volRatio: raw.averageDailyVolume3Month && raw.volume ? raw.volume / raw.averageDailyVolume3Month : null,
+        vwap
+      };
+      const review = setup ? reviewTrade(card, candles, signalData, {
+        market: 'crypto',
+        btcTrend,
+        fearGreed: cryptoContext?.fearGreed?.value || null,
+        cryptoSession: cryptoContext?.session || null,
+        funding: fundingRate
+      }) : { verdict: 'NO_SETUP', summary: 'No setup found', issues: [], strengths: [] };
+
+      const atrSafe = signalData.atr || raw.price * 0.02;
+      const targets = priceTargets(raw.price, atrSafe, signalData.sma200, raw.fiftyTwoWeekHigh, raw.fiftyTwoWeekLow, candles);
+      const forecast = buildForecastCone(raw.price, atrSafe, signalData.sma20, candles);
+      const reliability = computeReliability({
+        setup, signalData, review,
+        weeklyTrend: 'NEUTRAL',
+        sentiment: news.sentiment, news: news.news,
+        vix: null, volRatio: card.volRatio,
+        changePercent: raw.changePercent,
+        earnings: null
+      });
+      const verdict = deriveVerdict(setup, review, 'NEUTRAL', reliability);
+      const bestPlay = generateBestPlay({
+        setup, review, weeklyTrend: 'NEUTRAL', reliability,
+        price: raw.price, verdict: verdict.action, targets,
+        earnings: null, vix: null
+      });
+      const keyLevels = findKeyLevels(candles, raw.price, atrSafe);
+      const bullsBears = generateBullsBearsCase(signalData, card, 'NEUTRAL', keyLevels);
+      const invalidation = setup ? generateInvalidationTriggers(setup, signalData, keyLevels) : [];
+      const setupType = setup ? classifySetup(quote, candles, { ...signalData, direction: setup.direction }) : null;
+
+      return res.json({
+        market: 'crypto',
+        ticker, name: coinName,
+        exchange: 'CRYPTO',
+        price: raw.price, change: raw.change, changePercent: raw.changePercent,
+        dayHigh: raw.dayHigh, dayLow: raw.dayLow,
+        fiftyTwoWeekHigh: raw.fiftyTwoWeekHigh, fiftyTwoWeekLow: raw.fiftyTwoWeekLow,
+        volume: raw.volume, avgVolume: raw.averageDailyVolume3Month, volRatio: card.volRatio,
+        verdict: verdict.action, verdictTone: verdict.tone, verdictDetail: verdict.detail,
+        bestPlay, reliability, forecast, keyLevels, bullsBears, invalidation,
+        sectorContext: null, backtest: null, wallStreet: null,
+        mtfTrends: null, mtfAlignment: null, performance: null,
+        tradeGrade: computeTradeGrade({ setup, review, reliability, mtfAlignment: null, backtest: null, weeklyTrend: 'NEUTRAL', sentiment: news.sentiment }),
+        setupType,
+        // Crypto-specific extras
+        cryptoContext: { btcTrend, fearGreed: cryptoContext?.fearGreed || null, session: cryptoContext?.session || null, btcDominance: cryptoContext?.global?.btcDominance || null, funding: fundingRate, fundingTier: cryptoContext?.funding?.tier || null },
+        vwap,
+        vix: null,
+        targets,
+        setup: setup ? {
+          direction: setup.direction, entryLow: setup.entryLow, entryHigh: setup.entryHigh, entry: setup.entry,
+          tp: setup.tp, tp2: setup.tp2, sl: setup.sl,
+          rrRatio: setup.rrRatio, rrRatio2: setup.rrRatio2,
+          probability: setup.probability, confidence: setup.confidence,
+          confirming: setup.confirming, signals: setup.signals,
+          expectedDays: setup.expectedDays, expectedDays2: setup.expectedDays2,
+          expectedHours: setup.expectedHours, expectedHours2: setup.expectedHours2,
+          trendStrength: setup.trendStrength, trendStrengthLabel: setup.trendStrengthLabel,
+          timeSpan: 'Intraday — Next Session (4–12h)',
+          exitWindow: 'Within next active session (24/7 market)'
+        } : null,
+        review, weeklyTrend: null,
+        news: news.news, sentiment: news.sentiment, earnings: null,
+        technicals: {
+          rsi: signalData.rsi ? Math.round(signalData.rsi) : null,
+          atr: signalData.atr ? r2(signalData.atr) : null,
+          sma20: signalData.sma20 ? r2(signalData.sma20) : null,
+          sma50: signalData.sma50 ? r2(signalData.sma50) : null,
+          sma200: signalData.sma200 ? r2(signalData.sma200) : null,
+          macd: signalData.macd ? {
+            line: r2(signalData.macd.macd || 0), signal: r2(signalData.macd.signal || 0),
+            histogram: r2(signalData.macd.histogram || 0),
+            bullishCross: !!signalData.macd.bullishCross, bearishCross: !!signalData.macd.bearishCross
+          } : null
+        },
+        sparkline: candles.slice(-30).map(c => c.close),
+        timestamp: new Date().toISOString()
+      });
+    } catch (err) {
+      console.error('Crypto analyst error:', err);
+      return res.status(500).json({ error: `Analyst failed for ${ticker}`, details: err.message });
+    }
+  }
+
+  // ── STOCK / FOREX / COMMODITY BRANCH (existing logic, unchanged) ──────
   try {
     // Parallel fetch of all data sources
     const [full, weeklyTrend, news, earningsRaw, vix, wallStreet, fullForBacktest] = await Promise.all([
