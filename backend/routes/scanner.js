@@ -556,19 +556,22 @@ router.get('/scan', async (req, res) => {
         demoted.push(card);
         return false;
       }
-      // Mixed market: tighter than normal
+      // Mixed market: tighter than normal — PASS only (CAUTION dropped from
+      // eligibility since it wins at the same rate as PASS in tracked data).
       if (isMixed) {
-        const passes = (card.probability === 'HIGH' && card.review?.verdict === 'PASS' && rr >= 1.7 && hasConfirmation) ||
-                       (card.probability === 'HIGH' && card.review?.verdict === 'CAUTION' && rr >= 2.0 && hasConfirmation);
+        if (card.setupBlocked) { demoted.push(card); return false; }
+        const passes = card.probability === 'HIGH' && card.review?.verdict === 'PASS' && rr >= 1.7 && hasConfirmation;
         if (passes) return true;
         demoted.push(card);
         return false;
       }
-      // Trending market: standard gates + confirmation candle
-      const isHighPass    = card.probability === 'HIGH'   && card.review?.verdict === 'PASS'    && rr >= 1.5;
-      const isHighCaution = card.probability === 'HIGH'   && card.review?.verdict === 'CAUTION' && rr >= 1.8;
-      const isMedPass     = card.probability === 'MEDIUM' && card.review?.verdict === 'PASS'    && rr >= 1.8;
-      const qualifies = (isHighPass || isHighCaution || isMedPass) && hasConfirmation;
+      // FEEDBACK LOOP v2 tightening: data showed PASS and CAUTION win at the
+      // same 31% rate, so CAUTION no longer earns the ENTER NOW slot. Blocked
+      // setups (auto-flagged by historical <25% win rate) are also barred.
+      if (card.setupBlocked) { demoted.push(card); return false; }
+      const isHighPass = card.probability === 'HIGH'   && card.review?.verdict === 'PASS' && rr >= 1.5;
+      const isMedPass  = card.probability === 'MEDIUM' && card.review?.verdict === 'PASS' && rr >= 1.8;
+      const qualifies = (isHighPass || isMedPass) && hasConfirmation;
       if (qualifies) return true;
       demoted.push(card);
       return false;
@@ -584,17 +587,23 @@ router.get('/scan', async (req, res) => {
 
     // Log every surviving signal + attach historical setup-type stats for feedback loop.
     // The monitor (lib/signalMonitor.js) tracks each from here to its outcome.
+    // FEEDBACK LOOP v2 — data-driven tunings:
+    //  • minSamples 10 → 8 so more setups get auto-adjusted
+    //  • New "block" tier: <25% win rate over n≥15 hard-caps confidence + tags
+    //    the card so it can never reach ENTER NOW
     for (const card of [...trades.enterNow, ...trades.waitForBounce, ...trades.carryForward]) {
       if (card.review?.verdict === 'REJECT') continue;
-      // 1. Look up historical performance for this setup type and apply to confidence
       const setupKey = card.setupType?.label || null;
-      const hist = setupKey ? getSetupTypeStats(setupKey, { market, lookbackDays: 60, minSamples: 10 }) : null;
+      const hist = setupKey ? getSetupTypeStats(setupKey, { market, lookbackDays: 60, minSamples: 8 }) : null;
       if (hist) {
         card.historicalStats = hist;
-        // Adjust confidence: <40% wins demotes by 10, >60% boosts by 8
         let adj = 0;
-        if (hist.winRate < 0.40) adj = -10;
-        else if (hist.winRate < 0.50) adj = -5;
+        // "Block" tier — statistically bad setup, quarantine it
+        if (hist.winRate < 0.25 && hist.sampleSize >= 15) {
+          adj = -25;
+          card.setupBlocked = true;  // barred from ENTER NOW below
+        } else if (hist.winRate < 0.35) adj = -15;
+        else if (hist.winRate < 0.45) adj = -8;
         else if (hist.winRate > 0.60) adj = 8;
         else if (hist.winRate > 0.55) adj = 4;
         if (adj !== 0) {
@@ -602,7 +611,6 @@ router.get('/scan', async (req, res) => {
           card.confidenceAdjustment = adj;
         }
       }
-      // 2. Log the signal (idempotent — dedupes per ticker+direction)
       try { logSignal(card, { market }); } catch {}
     }
 

@@ -57,48 +57,61 @@ function determineOutcome(signal, candles) {
   for (const c of candles) {
     const high = c.high;
     const low  = c.low;
+    // Bar open/close direction tiebreaker: when TP AND SL are both touched
+    // inside the same bar, the open→close direction tells us which came first.
+    // Green bar (close > open) after a long entry → price ran up first, so TP
+    // was hit before any late reversal to SL. Red bar → SL came first.
+    const barBullish = c.close > c.open;
     if (direction === 'LONG') {
       if (high > mfeRunning) mfeRunning = high;
       if (low < maeRunning)  maeRunning = low;
-      // SL hit (intra-bar)
-      if (low <= sl) {
-        closeReason = 'SL';
-        closePrice = sl;
-        closedAt = new Date(c.date).getTime();
-        break;
-      }
-      // TP2 hit (intra-bar) — prefer TP2 if both TP1 and TP2 in same bar
-      if (high >= tp2) {
-        closeReason = 'TP2';
-        closePrice = tp2;
-        closedAt = new Date(c.date).getTime();
-        break;
-      }
-      // TP1 hit
-      if (high >= tp) {
-        closeReason = 'TP1';
-        closePrice = tp;
+      const slHit = low <= sl;
+      const tp2Hit = high >= tp2;
+      const tp1Hit = high >= tp;
+      if (slHit || tp1Hit || tp2Hit) {
+        // Both TP and SL touched in same bar — use open/close direction to
+        // decide which came first (removes the previous SL-first bias).
+        if (slHit && (tp1Hit || tp2Hit)) {
+          if (barBullish) {
+            // Bar rallied first, so TP was reached before any reversal
+            closeReason = tp2Hit ? 'TP2' : 'TP1';
+            closePrice = tp2Hit ? tp2 : tp;
+          } else {
+            closeReason = 'SL';
+            closePrice = sl;
+          }
+        } else if (slHit) {
+          closeReason = 'SL'; closePrice = sl;
+        } else if (tp2Hit) {
+          closeReason = 'TP2'; closePrice = tp2;
+        } else {
+          closeReason = 'TP1'; closePrice = tp;
+        }
         closedAt = new Date(c.date).getTime();
         break;
       }
     } else { // SHORT
       if (low < mfeRunning)  mfeRunning = low;
       if (high > maeRunning) maeRunning = high;
-      if (high >= sl) {
-        closeReason = 'SL';
-        closePrice = sl;
-        closedAt = new Date(c.date).getTime();
-        break;
-      }
-      if (low <= tp2) {
-        closeReason = 'TP2';
-        closePrice = tp2;
-        closedAt = new Date(c.date).getTime();
-        break;
-      }
-      if (low <= tp) {
-        closeReason = 'TP1';
-        closePrice = tp;
+      const slHit = high >= sl;
+      const tp2Hit = low <= tp2;
+      const tp1Hit = low <= tp;
+      if (slHit || tp1Hit || tp2Hit) {
+        if (slHit && (tp1Hit || tp2Hit)) {
+          // For shorts: bearish bar (red) rallied down first → TP first
+          if (!barBullish) {
+            closeReason = tp2Hit ? 'TP2' : 'TP1';
+            closePrice = tp2Hit ? tp2 : tp;
+          } else {
+            closeReason = 'SL'; closePrice = sl;
+          }
+        } else if (slHit) {
+          closeReason = 'SL'; closePrice = sl;
+        } else if (tp2Hit) {
+          closeReason = 'TP2'; closePrice = tp2;
+        } else {
+          closeReason = 'TP1'; closePrice = tp;
+        }
         closedAt = new Date(c.date).getTime();
         break;
       }
