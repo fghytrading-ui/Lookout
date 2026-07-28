@@ -594,7 +594,11 @@ router.get('/scan', async (req, res) => {
     for (const card of [...trades.enterNow, ...trades.waitForBounce, ...trades.carryForward]) {
       if (card.review?.verdict === 'REJECT') continue;
       const setupKey = card.setupType?.label || null;
-      const hist = setupKey ? getSetupTypeStats(setupKey, { market, lookbackDays: 60, minSamples: 8 }) : null;
+      // 90-day window: a 60-day lookback was discarding ~40% of resolved
+      // signals, leaving every setup type below the minimum sample size so
+      // the loop never fired. Setup-pattern edge is stable enough over a
+      // quarter for this to be safe.
+      const hist = setupKey ? getSetupTypeStats(setupKey, { market, lookbackDays: 90, minSamples: 8 }) : null;
       if (hist) {
         card.historicalStats = hist;
         let adj = 0;

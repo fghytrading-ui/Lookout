@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getAggregateStats, getOpenSignals, getAllSignals } from '../lib/signalLog.js';
+import { getAggregateStats, getOpenSignals, getAllSignals, getLogSize, mergeSignals } from '../lib/signalLog.js';
 import { monitorTick } from '../lib/signalMonitor.js';
 
 const router = Router();
@@ -52,9 +52,33 @@ router.post('/monitor-now', async (req, res) => {
   }
 });
 
-// GET /api/performance/raw — all signal records (for export/debug)
+// GET /api/performance/raw — all signal records (for export/debug + client mirror)
 router.get('/raw', (req, res) => {
   res.json(getAllSignals());
+});
+
+// GET /api/performance/size — cheap check so the client knows whether the
+// server lost its log to an ephemeral-disk wipe (Render free tier restart)
+router.get('/size', (req, res) => {
+  res.json({ size: getLogSize() });
+});
+
+// POST /api/performance/restore — client pushes its localStorage mirror back
+// after the server's disk was wiped. Merged by id; CLOSED records win.
+router.post('/restore', (req, res) => {
+  try {
+    const incoming = Array.isArray(req.body) ? req.body : req.body?.signals;
+    if (!Array.isArray(incoming)) {
+      return res.status(400).json({ error: 'Expected an array of signal records' });
+    }
+    const result = mergeSignals(incoming);
+    if (result.added || result.updated) {
+      console.log(`  ✓ Restored from client backup: +${result.added} new, ${result.updated} updated (total ${result.total})`);
+    }
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: 'Restore failed', details: err.message });
+  }
 });
 
 export default router;

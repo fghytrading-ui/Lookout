@@ -187,11 +187,49 @@ export async function monitorTick() {
   return { checked: open.length, closed };
 }
 
+// Catch-up pass: the free tier sleeps after ~15 min idle, so scheduled ticks
+// are missed for hours or days at a time. Any signal already past its horizon
+// is resolved immediately on wake — otherwise they pile up as permanently OPEN
+// and never feed the learning loop.
+export async function catchUpOverdue() {
+  const open = getOpenSignals();
+  const now = Date.now();
+  const overdue = open.filter(s => now > s.expiresAt);
+  if (!overdue.length) return { overdue: 0, closed: 0 };
+
+  let closed = 0;
+  const concurrency = 4;
+  for (let i = 0; i < overdue.length; i += concurrency) {
+    const chunk = overdue.slice(i, i + concurrency);
+    await Promise.allSettled(chunk.map(async (sig) => {
+      const candles = await fetchCandlesSince(sig);
+      const outcome = determineOutcome(sig, candles);
+      if (!outcome) return;
+      updateSignal(sig.id, {
+        status: 'CLOSED',
+        closeReason: outcome.reason,
+        closePrice: outcome.closePrice,
+        mfe: outcome.mfe,
+        mae: outcome.mae,
+        mfePct: outcome.mfePct ?? null,
+        maePct: outcome.maePct ?? null,
+        closedAt: outcome.closedAt,
+        timeToCloseHrs: parseFloat(((outcome.closedAt - sig.signaledAt) / (60 * 60 * 1000)).toFixed(1)),
+        outcome: classifyOutcome(outcome.reason)
+      });
+      closed++;
+    }));
+  }
+  console.log(`  ✓ Catch-up: resolved ${closed} of ${overdue.length} overdue signals`);
+  return { overdue: overdue.length, closed };
+}
+
 export function startSignalMonitor() {
-  // First tick after a short delay so server boot finishes first
-  // [FAST-SYSTEM-101] First tick delayed to 5 min so it doesn't compete
+  // Catch-up runs first — clears the backlog the free tier's sleeping created.
+  setTimeout(() => catchUpOverdue().catch(() => {}), 30_000);
+  // [FAST-SYSTEM-101] Regular first tick delayed to 5 min so it doesn't compete
   // with the user's initial cold-cache scan for Yahoo bandwidth.
   setTimeout(() => monitorTick().catch(() => {}), 5 * 60_000);
   setInterval(() => monitorTick().catch(() => {}), TICK_MS);
-  console.log('  ✓ Signal monitor started (tick every 5 min)');
+  console.log('  ✓ Signal monitor started (catch-up in 30s, tick every 5 min)');
 }

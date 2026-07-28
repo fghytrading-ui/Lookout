@@ -23,7 +23,9 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 app.use(cors());
-app.use(express.json());
+// Raised limit so the client can POST its full signal-log mirror back after
+// a Render free-tier disk wipe (see /api/performance/restore).
+app.use(express.json({ limit: '12mb' }));
 
 app.use('/api/quotes', quotesRouter);
 app.use('/api/scanner', scannerRouter);

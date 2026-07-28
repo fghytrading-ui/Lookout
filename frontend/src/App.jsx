@@ -6,6 +6,7 @@ import ForexPage from './pages/ForexPage.jsx';
 import CommoditiesPage from './pages/CommoditiesPage.jsx';
 import CryptoPage from './pages/CryptoPage.jsx';
 import PerformancePage from './pages/PerformancePage.jsx';
+import { syncSignalBackup } from './utils/signalBackup.js';
 
 const NAV = [
   { id: 'dashboard',   label: 'Stocks',      icon: '◎',  hint: 'Live stock swing setups' },
@@ -26,6 +27,11 @@ export default function App() {
       .then(r => r.json())
       .then(d => setDataSource(d.dataSource))
       .catch(() => {});
+    // Keep the browser mirror of the signal log in sync, and push it back if
+    // the server lost its disk to a Render free-tier restart. Runs on every
+    // app load so the learning history survives even if the user never opens
+    // the Performance page.
+    syncSignalBackup().catch(() => {});
   }, []);
 
   return (

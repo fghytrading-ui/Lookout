@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { syncSignalBackup, getBackupMeta } from '../utils/signalBackup.js';
 
 const LOOKBACKS = [
   { days: 7,  label: '7d' },
@@ -80,10 +81,15 @@ export default function PerformancePage() {
   const [open, setOpen] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [backup, setBackup] = useState(() => getBackupMeta());
 
   const fetchAll = useCallback(async () => {
     try {
       setLoading(true);
+      // Sync the browser mirror first — restores the server's log if Render
+      // wiped its disk, so the stats below reflect the full history.
+      const syncResult = await syncSignalBackup().catch(() => null);
+      if (syncResult) setBackup({ ...getBackupMeta(), lastSync: syncResult });
       const [sRes, oRes] = await Promise.all([
         fetch(`/api/performance?lookback=${lookback}`).then(r => r.json()),
         fetch('/api/performance/open').then(r => r.json())
@@ -145,6 +151,27 @@ export default function PerformancePage() {
           >⟳ Tick now</button>
         </div>
       </div>
+
+      {/* Backup status — the learning history survives Render's disk wipes
+          because the browser keeps a mirror and restores it automatically. */}
+      {backup && (
+        <div className="mb-3 px-3 py-2 rounded border border-[#1a1a1a] bg-[#0a0a0a] text-[10px] font-mono text-[#666] flex items-center gap-2 flex-wrap">
+          <span className="text-[#888]">💾 Backup:</span>
+          <span className="text-cyan-400/80 font-bold">{backup.size ?? 0} signals</span>
+          <span>mirrored in this browser</span>
+          {backup.lastSync?.status === 'restored' && (
+            <span className="px-1.5 py-0.5 rounded border border-green-500/30 text-green-400">
+              ✓ restored {backup.lastSync.restored} to server after restart
+            </span>
+          )}
+          {backup.lastSync?.status === 'synced' && backup.lastSync.newFromServer > 0 && (
+            <span className="px-1.5 py-0.5 rounded border border-cyan-500/30 text-cyan-400">
+              +{backup.lastSync.newFromServer} new pulled from server
+            </span>
+          )}
+          <span className="text-[#333] ml-auto">Protects history from free-tier restarts</span>
+        </div>
+      )}
 
       {/* Summary cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">

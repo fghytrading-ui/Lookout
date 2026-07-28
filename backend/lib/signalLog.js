@@ -168,12 +168,23 @@ export function getSetupTypeStats(setupType, { market = null, lookbackDays = 60,
   load();
   if (!setupType) return null;
   const since = Date.now() - lookbackDays * 24 * 60 * 60 * 1000;
-  const sample = signals.filter(s =>
+
+  const inWindow = signals.filter(s =>
     s.status === 'CLOSED' &&
     s.setupType === setupType &&
-    s.closedAt >= since &&
-    (!market || s.market === market)
+    s.closedAt >= since
   );
+
+  // Prefer market-specific stats, but a setup's edge is mostly about the
+  // pattern rather than the venue. Filtering by market alone starved the
+  // sample size so much that the feedback loop never fired — fall back to
+  // cross-market data when the per-market slice is too thin.
+  let sample = market ? inWindow.filter(s => s.market === market) : inWindow;
+  let scope = market ? 'market' : 'all';
+  if (sample.length < minSamples && market) {
+    sample = inWindow;
+    scope = 'all-markets';
+  }
   if (sample.length < minSamples) return null;
 
   const wins = sample.filter(s => s.outcome === 'WIN').length;
@@ -189,6 +200,7 @@ export function getSetupTypeStats(setupType, { market = null, lookbackDays = 60,
     tpHitRate: tpHits / sample.length,
     slHitRate: slHits / sample.length,
     sampleSize: sample.length,
+    scope,   // 'market' | 'all-markets' | 'all' — tells the UI how broad the sample is
     avgMFEPct: parseFloat(mfeAvg.toFixed(2)),
     avgMAEPct: parseFloat(maeAvg.toFixed(2))
   };
@@ -269,3 +281,48 @@ export function getAggregateStats({ lookbackDays = 30 } = {}) {
 
 // Force a flush — useful at shutdown
 export function flushSignalLog() { persist(); }
+
+// ── EPHEMERAL-DISK RECOVERY ──────────────────────────────────────────────
+// Render's free tier wipes the disk on every restart (and it sleeps after
+// ~15 min idle). Without this, the learning system loses all history and can
+// never accumulate enough samples to tune anything.
+//
+// Mitigation: the browser keeps a mirror in localStorage and POSTs it back
+// whenever the server's log is smaller than the client's. We merge by id,
+// preferring CLOSED records (they carry resolved outcomes) over OPEN ones.
+
+export function getLogSize() { load(); return signals.length; }
+
+export function mergeSignals(incoming) {
+  load();
+  if (!Array.isArray(incoming)) return { added: 0, updated: 0, total: signals.length };
+  let added = 0, updated = 0;
+
+  for (const rec of incoming) {
+    if (!rec || typeof rec !== 'object' || !rec.id || !rec.ticker) continue;
+    const existing = indexById.get(rec.id);
+    if (!existing) {
+      signals.push(rec);
+      indexById.set(rec.id, rec);
+      added++;
+      continue;
+    }
+    // Conflict: prefer the CLOSED record — a resolved outcome beats an open one
+    if (existing.status !== 'CLOSED' && rec.status === 'CLOSED') {
+      Object.assign(existing, rec);
+      updated++;
+    }
+  }
+
+  if (added || updated) {
+    // Keep the store bounded — newest 5000 records is far more than we need
+    if (signals.length > 5000) {
+      signals.sort((a, b) => b.signaledAt - a.signaledAt);
+      signals = signals.slice(0, 5000);
+      indexById = new Map(signals.map(s => [s.id, s]));
+    }
+    dirty = true;
+    persist();
+  }
+  return { added, updated, total: signals.length };
+}
