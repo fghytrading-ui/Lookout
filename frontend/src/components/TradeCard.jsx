@@ -216,7 +216,7 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
           <div className="mb-3">
             <div className="flex items-center justify-between mb-1">
               <span className="text-[9px] uppercase tracking-widest text-[#444] font-mono">
-                {trade.tradeStyle === 'sameDay' ? 'Same-Day Execution Probability' : 'Confidence Score'}
+                {trade.tradeStyle === 'sameDay' ? 'Setup Confidence (1–2 session horizon)' : 'Confidence Score'}
               </span>
               <span className="text-[9px] text-[#555] font-mono">
                 {trade.confidence >= 80 ? 'Very High' : trade.confidence >= 65 ? 'High' : trade.confidence >= 50 ? 'Moderate' : 'Low'}
@@ -290,12 +290,12 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
               <span className={`text-[11px] font-mono font-bold tracking-wider ${
                 trade.tradeStyle === 'crypto' ? 'text-purple-300' : 'text-amber-300'
               }`}>
-                {trade.tradeStyle === 'crypto' ? '₿ CRYPTO INTRADAY — 24/7 MARKET' : '⏰ DAY TRADE — INTRADAY ONLY'}
+                {trade.tradeStyle === 'crypto' ? '₿ CRYPTO — 24/7 MARKET' : '⏰ SHORT-TERM — 1 TO 2 SESSIONS'}
               </span>
               <span className={`text-[9px] font-mono ${
                 trade.tradeStyle === 'crypto' ? 'text-purple-400/70' : 'text-amber-400/70'
               }`}>
-                {trade.tradeStyle === 'crypto' ? 'No bell, no must-exit — close within ~24h' : 'No overnight risk'}
+                {trade.tradeStyle === 'crypto' ? 'No bell — close within 1–3 sessions' : 'May hold overnight — size accordingly'}
               </span>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-[11px] font-mono">
@@ -315,7 +315,7 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
               </div>
               <div className="bg-red-500/10 border border-red-500/25 rounded p-2">
                 <div className="text-[9px] uppercase tracking-widest text-red-500/70 mb-1">
-                  {trade.tradeStyle === 'crypto' ? '⚠ Soft Deadline' : '⚠ Must Exit By'}
+                  {trade.tradeStyle === 'crypto' ? '⚠ Soft Deadline' : '⚠ Exit Horizon'}
                 </div>
                 <div className="text-red-300 font-bold tabular-nums">{trade.intradayTiming.mustExitBy}</div>
                 <div className="text-[9px] text-red-500/60 mt-0.5">Avoid: {trade.intradayTiming.avoidWindow}</div>
@@ -391,6 +391,27 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
               </span>
             </div>
             <p className="text-[10px] text-[#888] font-mono leading-snug">{trade.setupType.description}</p>
+            {/* EXPECTANCY — the number that decides whether this trade makes
+                money if repeated: (winRate x R:R) - (1 - winRate), in R. */}
+            {trade.expectancy != null && (
+              <div className={`text-[10px] font-mono mt-2 pt-2 border-t border-[#1a1a1a] flex items-center gap-2 flex-wrap ${
+                trade.expectancy > 0 ? 'text-green-400/90' : 'text-red-400/90'
+              }`}>
+                <span className="text-[#888]">📐 Expectancy:</span>
+                <span className="font-bold">
+                  {trade.expectancy > 0 ? '+' : ''}{trade.expectancy}R per trade
+                </span>
+                <span className="text-[#555]">
+                  · needs R:R ≥ {trade.breakEvenRR} to break even · this trade is {trade.rrRatio}
+                </span>
+                {trade.expectancy <= 0 && (
+                  <span className="px-1.5 py-0.5 rounded border border-red-500/40 text-red-400">
+                    ⚠ loses money if repeated
+                  </span>
+                )}
+              </div>
+            )}
+
             {/* LIVE historical performance from auto-tracked outcomes */}
             {trade.historicalStats && (
               <div className="text-[10px] font-mono text-[#666] mt-2 pt-2 border-t border-[#1a1a1a] flex items-center gap-2 flex-wrap">

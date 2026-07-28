@@ -300,11 +300,15 @@ function buildCard(ticker, raw, quote, setup, signalData, historical, market = '
     price, entry, entryLow, entryHigh, entryStatus, entryStatusText,
     tp, tpPct, tp2, tp2Pct,
     sl, slPct,
-    timeSpan: tradeStyle === 'crypto' ? 'Intraday — Next Session (4–12h)'
-            : tradeStyle === 'sameDay' ? 'Intraday — Same Day'
+    // Horizon labels now reflect the recalibrated targets. The old copy said
+    // "same day / no overnight risk", but targets wide enough to be profitable
+    // take ~1-2 sessions to reach — claiming otherwise would have had users
+    // closing winners early or being surprised by an overnight hold.
+    timeSpan: tradeStyle === 'crypto' ? 'Short-term — 1 to 3 sessions (12–60h)'
+            : tradeStyle === 'sameDay' ? 'Short-term — 1 to 2 sessions'
             : TIME_SPANS[tsKey].label,
-    exitWindow: tradeStyle === 'crypto' ? 'Within the next active session — 24/7 market'
-              : tradeStyle === 'sameDay' ? 'Before market close (9pm UK)'
+    exitWindow: tradeStyle === 'crypto' ? 'Within the next 1–3 active sessions — 24/7 market'
+              : tradeStyle === 'sameDay' ? 'Typically next session; hard exit after 2 sessions'
               : getExitWindow(tsKey),
     // Intraday-specific timing windows (UK time)
     intradayTiming: tradeStyle === 'crypto' ? {
@@ -317,8 +321,8 @@ function buildCard(ticker, raw, quote, setup, signalData, historical, market = '
     } : tradeStyle === 'sameDay' ? {
       entryFrom: '2:30 PM UK',
       entryUntil: '7:00 PM UK',
-      mustExitBy: '9:00 PM UK',
-      totalSession: '6.5 hours',
+      mustExitBy: 'End of next session (may hold overnight)',
+      totalSession: '1–2 sessions',
       bestEntryWindow: '2:30 – 4:30 PM UK',
       avoidWindow: '7:00 – 9:00 PM UK'
     } : null,
@@ -569,8 +573,13 @@ router.get('/scan', async (req, res) => {
       // same 31% rate, so CAUTION no longer earns the ENTER NOW slot. Blocked
       // setups (auto-flagged by historical <25% win rate) are also barred.
       if (card.setupBlocked) { demoted.push(card); return false; }
-      const isHighPass = card.probability === 'HIGH'   && card.review?.verdict === 'PASS' && rr >= 1.5;
-      const isMedPass  = card.probability === 'MEDIUM' && card.review?.verdict === 'PASS' && rr >= 1.8;
+      // Negative expectancy = a trade that loses money if repeated. Never a
+      // top pick, however clean the chart looks.
+      if (card.negativeExpectancy) { demoted.push(card); return false; }
+      // R:R floors raised to 2.0 — tracked data showed 81% of signals sat
+      // below that, and at a ~30% win rate every one of them was a loser.
+      const isHighPass = card.probability === 'HIGH'   && card.review?.verdict === 'PASS' && rr >= 2.0;
+      const isMedPass  = card.probability === 'MEDIUM' && card.review?.verdict === 'PASS' && rr >= 2.3;
       const qualifies = (isHighPass || isMedPass) && hasConfirmation;
       if (qualifies) return true;
       demoted.push(card);
@@ -613,6 +622,21 @@ router.get('/scan', async (req, res) => {
         if (adj !== 0) {
           card.confidence = Math.max(15, Math.min(95, card.confidence + adj));
           card.confidenceAdjustment = adj;
+        }
+
+        // ── EXPECTANCY GATE ────────────────────────────────────────────
+        // The decisive test: does this trade make money if repeated?
+        //   E = (winRate x R:R) - (1 - winRate),  in units of risk (R).
+        // Tracked data showed the whole book at -0.25R — profitable-looking
+        // setups that bled out because R:R never covered the loss rate.
+        // Anything with negative expectancy is now flagged and kept out of
+        // ENTER NOW, regardless of how good its technicals look.
+        const rr = card.rrRatio || 0;
+        const expectancy = (hist.winRate * rr) - (1 - hist.winRate);
+        card.expectancy = parseFloat(expectancy.toFixed(3));
+        card.breakEvenRR = parseFloat(((1 - hist.winRate) / Math.max(hist.winRate, 0.01)).toFixed(2));
+        if (expectancy <= 0) {
+          card.negativeExpectancy = true;
         }
       }
       try { logSignal(card, { market }); } catch {}

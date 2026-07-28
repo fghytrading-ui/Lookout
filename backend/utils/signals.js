@@ -361,17 +361,26 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
   // SWING:    multi-day targets
   let tp1Mult, tp2Mult, slMult;
   if (tradeStyle === 'sameDay') {
-    tp1Mult = 0.65 + (trendStrength * 0.20);
-    tp2Mult = 1.15 + (trendStrength * 0.30);
-    slMult  = 0.7;
+    // RECALIBRATED FROM TRACKED OUTCOMES (52 closed signals, expectancy -0.25R).
+    // The old numbers (TP1 0.65-1.25 ATR against a 0.7 ATR stop) capped R:R at
+    // ~1.8, but a 29% win rate needs R:R > 2.47 just to break even — every
+    // signal was mathematically a loser. Winners overshot TP by 227% on
+    // average, so price demonstrably travels far enough to support wider
+    // targets. TP1 1.5-2.1 ATR against a 0.68 ATR stop gives R:R 2.2-3.1.
+    tp1Mult = 1.50 + (trendStrength * 0.20);
+    tp2Mult = 2.40 + (trendStrength * 0.35);
+    slMult  = 0.68;
   } else if (tradeStyle === 'crypto') {
     // 4h ATR is ~1/sqrt(6) of daily ATR — multipliers scaled accordingly.
     // SL = 1.5 × ATR_4h ≈ 1.6% BTC stop (tight but not wick-bait)
     // TP1 = 2.0-3.0 × ATR_4h ≈ 2.2-3.3% BTC (reachable in 6-24h)
     // TP2 = 3.5-5.0 × ATR_4h ≈ 3.8-5.5% BTC (reachable in 24-48h)
-    tp1Mult = 2.0 + (trendStrength * 0.50);
-    tp2Mult = 3.5 + (trendStrength * 0.60);
-    slMult  = 1.5;
+    // Same recalibration as sameDay: old R:R ceiling was ~2.0 at best and
+    // usually well under. 2.8-4.0 ATR targets against a 1.3 ATR stop give
+    // R:R 2.15-3.1.
+    tp1Mult = 2.8 + (trendStrength * 0.40);
+    tp2Mult = 4.4 + (trendStrength * 0.60);
+    slMult  = 1.3;
   } else {
     tp1Mult = 1.6 + (trendStrength * 0.4);
     tp2Mult = 2.8 + (trendStrength * 0.4);
@@ -380,13 +389,17 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
 
   // ── Calibration per trade style (used by SL/TP bounds, time ceilings, floors) ──
   const CAL = {
-    sameDay: { slCapPct: 0.025, slFloorATR: 0.4, slRangeMin: 0.4, slRangeMax: 1.0,
-               maxDaysTP1: 1,  maxDaysTP2: 2,  minTP1ATR: 0.5, minTP2ATR: 0.9, minRR: 1.2 },
+    // Time ceilings widened to match the new targets. Tracked winners took
+    // ~34h on average to resolve, so a strict 1-day cap was truncating targets
+    // down to unprofitable R:R. minRR raised 1.2 -> 2.0: below that, a 29%
+    // win rate cannot produce positive expectancy.
+    sameDay: { slCapPct: 0.028, slFloorATR: 0.5, slRangeMin: 0.5, slRangeMax: 1.1,
+               maxDaysTP1: 4,  maxDaysTP2: 8,  minTP1ATR: 1.2, minTP2ATR: 2.0, minRR: 2.0 },
     // Crypto runs on 4-hour candles. "days" in this object = bars held.
     // ATR here is per-4h-bar (~1/sqrt(6) of daily ATR), so multipliers are larger.
-    // Time ceilings: TP1 within 6 bars (~24h, one session), TP2 within 12 bars (~48h).
-    crypto:  { slCapPct: 0.04,  slFloorATR: 1.2, slRangeMin: 1.2, slRangeMax: 2.5,
-               maxDaysTP1: 6,  maxDaysTP2: 12, minTP1ATR: 1.5, minTP2ATR: 2.5, minRR: 1.3 },
+    // Ceilings: TP1 within 16 bars (~64h), TP2 within 30 bars (~5d).
+    crypto:  { slCapPct: 0.045, slFloorATR: 1.1, slRangeMin: 1.1, slRangeMax: 2.2,
+               maxDaysTP1: 16, maxDaysTP2: 30, minTP1ATR: 2.2, minTP2ATR: 3.2, minRR: 2.0 },
     swing:   { slCapPct: 0.04,  slFloorATR: 0.9, slRangeMin: 1.0, slRangeMax: 1.8,
                maxDaysTP1: 10, maxDaysTP2: 16, minTP1ATR: 1.2, minTP2ATR: 2.0, minRR: 1.3 }
   }[tradeStyle] || { slCapPct: 0.04, slFloorATR: 0.9, slRangeMin: 1.0, slRangeMax: 1.8,
@@ -567,38 +580,55 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
   // Calibrated for intraday execution when tradeStyle='sameDay'
   let confidence = 50;
 
-  // 1. Setup quality (technical signals)
-  confidence += confirming * 5;                     // each confirming +5
-  confidence -= opposing * 7;                       // each opposing -7
-  if (probability === 'HIGH') confidence += 8;
-  if (rrRatio >= 2.5) confidence += 5;
-  if (rrRatio >= 2.0) confidence += 2;
+  // ── REBUILT FROM TRACKED OUTCOMES ─────────────────────────────────────
+  // The previous model was anti-predictive: signals scoring 80+ won 23% of
+  // the time while signals scoring 60-69 won 57%. Three causes, all fixed
+  // below — redundant signal counting, a bonus for close (low-R:R) targets,
+  // and a bonus for chasing stocks that had already moved.
 
-  // 2. Trend alignment (helps any trade)
-  if (direction === 'LONG'  && sma20 && sma50 && price > sma20 && sma20 > sma50) confidence += 5;
-  if (direction === 'SHORT' && sma20 && sma50 && price < sma20 && sma20 < sma50) confidence += 5;
+  // 1. Setup quality. Confirming signals are heavily correlated (price>SMA20,
+  //    price>SMA50 and SMA20>SMA50 are three readings of one fact), so a
+  //    strong trend used to collect +15 right before it mean-reverted.
+  //    Diminishing returns stop that pile-up.
+  confidence += Math.min(confirming, 3) * 5 + Math.max(0, confirming - 3) * 1.5;
+  confidence -= opposing * 7;
+  if (probability === 'HIGH') confidence += 5;
+
+  // 2. R:R now drives confidence, because it drives expectancy. At the
+  //    observed ~30% win rate a trade needs R:R > 2.4 just to break even.
+  if (rrRatio >= 3.0)      confidence += 14;
+  else if (rrRatio >= 2.5) confidence += 10;
+  else if (rrRatio >= 2.2) confidence += 5;
+  else if (rrRatio < 2.0)  confidence -= 12;   // mathematically a losing trade
+
+  // 3. Trend alignment (already partly counted above, so kept small)
+  if (direction === 'LONG'  && sma20 && sma50 && price > sma20 && sma20 > sma50) confidence += 3;
+  if (direction === 'SHORT' && sma20 && sma50 && price < sma20 && sma20 < sma50) confidence += 3;
 
   // ── INTRADAY-SPECIFIC CONFIDENCE ADJUSTMENTS (sameDay + crypto) ──
   const isIntraday = tradeStyle === 'sameDay' || tradeStyle === 'crypto';
   if (isIntraday) {
-    // a) TP proximity — closer TP = higher chance of hitting within session
+    // a) REMOVED: the old "closer TP = higher confidence" bonus (+10 for a
+    //    target under 0.8 ATR). It was the single most damaging rule in the
+    //    system — a close target means a small reward against the same stop,
+    //    i.e. poor R:R, i.e. negative expectancy. It is precisely why the
+    //    highest-confidence signals had the worst win rate. R:R scoring above
+    //    now handles target quality, in the correct direction.
+    //    Only an unreachable target is still penalised:
     const tpDistATR = Math.abs(tp - entry) / atr;
-    if (tpDistATR < 0.8)      confidence += 10;  // very reachable in hours
-    else if (tpDistATR < 1.2) confidence += 5;   // reachable in session
-    else if (tpDistATR < 1.6) confidence += 0;   // borderline
-    else                       confidence -= 8;   // unlikely intraday
+    if (tpDistATR > 3.2) confidence -= 8;   // too far to reach in the horizon
 
-    // b) Today's intraday momentum alignment
+    // b) Today's move. Modest momentum in our favour is a genuine edge, but
+    //    the old rule handed +10 to anything already up >1.5% — rewarding
+    //    entries at the top of an extended move. Now the sweet spot is a
+    //    small confirming move, and chasing is penalised.
     const chg = quote.regularMarketChangePercent || 0;
-    if (direction === 'LONG') {
-      if (chg > 1.5)  confidence += 10;  // strong same-direction move today
-      else if (chg > 0.3) confidence += 5;
-      else if (chg < -1.5) confidence -= 12; // bad — moving against you
-    } else {
-      if (chg < -1.5) confidence += 10;
-      else if (chg < -0.3) confidence += 5;
-      else if (chg > 1.5)  confidence -= 12;
-    }
+    const aligned = direction === 'LONG' ? chg : -chg;
+    if (aligned > 4)        confidence -= 6;   // extended — chasing
+    else if (aligned > 2.5) confidence += 1;   // getting stretched
+    else if (aligned > 0.3) confidence += 7;   // ideal: confirming, not extended
+    else if (aligned > -1.5) confidence += 0;
+    else                     confidence -= 12; // moving against us
 
     // c) TODAY's volume conviction (not just average)
     const vol = quote.regularMarketVolume;

@@ -49,7 +49,7 @@ export function classifySetup(quote, historical, signalData) {
         label: '📈 Pullback Long',
         description: 'Price pulled back to support in an uptrend — classic high-probability swing entry',
         historicalWinRate: 65,
-        idealHold: 'Same session (~4-6 hours)',
+        idealHold: 'Typically 12–30 hours',
         risk: 'medium',
         reasoning: `Stock pulled back ${pullbackPct.toFixed(1)}% from 20-day high. RSI ${rsi.toFixed(0)} is in the buy zone. Uptrend intact (price > 50 SMA > 200 SMA).`,
         action: 'Buy the dip — typical full-session move as trend resumes intraday.'
@@ -74,7 +74,7 @@ export function classifySetup(quote, historical, signalData) {
         label: '🚀 Breakout Long',
         description: 'Price breaking above 20-day high with strong volume — momentum continuation',
         historicalWinRate: 50,
-        idealHold: 'Same session (~2-4 hours)',
+        idealHold: 'Typically 8–24 hours',
         risk: 'medium-high',
         reasoning: `Price within 2% of 20-day high (${high20.toFixed(2)}). Volume is ${volRatio.toFixed(1)}× average — institutions are buying.`,
         action: 'Enter on confirmed break. Tight stop. Bigger winners possible if momentum holds.'
@@ -96,7 +96,7 @@ export function classifySetup(quote, historical, signalData) {
         label: '🔄 Reversal Long',
         description: 'Oversold bounce attempt off support — mean-reversion play',
         historicalWinRate: 55,
-        idealHold: 'Same session (~3-5 hours)',
+        idealHold: 'Typically 12–24 hours',
         risk: 'high',
         reasoning: `RSI ${rsi.toFixed(0)} is oversold. ${nearLow52 ? 'Near 52-week low.' : ''} ${isBullishToday ? 'Today closing above its open shows buyers stepping in.' : ''}`,
         action: 'Mean-reversion trade — tighter stop, smaller size. Quick win or quick exit.'
@@ -111,7 +111,7 @@ export function classifySetup(quote, historical, signalData) {
       label: '📊 Trend Continuation Long',
       description: 'Established uptrend with momentum — riding the wave',
       historicalWinRate: 60,
-      idealHold: 'Same session (~5-6 hours)',
+      idealHold: 'Typically 18–36 hours',
       risk: 'medium',
       reasoning: `Price above 20 SMA, 20 above 50 (clean uptrend). RSI ${rsi.toFixed(0)} shows momentum without exhaustion.`,
       action: 'Trail behind the trend. Most consistent intraday setup — exit by close.'
@@ -133,7 +133,7 @@ export function classifySetup(quote, historical, signalData) {
         label: '💥 Breakdown Short',
         description: 'Price breaking below 20-day low with volume — momentum to the downside',
         historicalWinRate: 50,
-        idealHold: 'Same session (~2-4 hours)',
+        idealHold: 'Typically 8–24 hours',
         risk: 'medium-high',
         reasoning: `Price within 2% of 20-day low (${low20.toFixed(2)}). Volume ${volRatio.toFixed(1)}× average — selling pressure confirmed.`,
         action: 'Short on confirmed break. Tight stop above breakout level.'
@@ -153,7 +153,7 @@ export function classifySetup(quote, historical, signalData) {
         label: '📉 Rally Short',
         description: 'Price rallied into resistance in a downtrend — sell the bounce',
         historicalWinRate: 60,
-        idealHold: 'Same session (~4-6 hours)',
+        idealHold: 'Typically 12–30 hours',
         risk: 'medium',
         reasoning: `Stock bounced ${distFromLow.toFixed(1)}% from 20-day low. RSI ${rsi.toFixed(0)} entering sell zone. Downtrend intact (price < 50 SMA).`,
         action: 'Short the rally — let downtrend resume.'
@@ -171,7 +171,7 @@ export function classifySetup(quote, historical, signalData) {
         label: '🔄 Reversal Short',
         description: 'Overbought rejection — mean-reversion to the downside',
         historicalWinRate: 55,
-        idealHold: 'Same session (~3-5 hours)',
+        idealHold: 'Typically 12–24 hours',
         risk: 'high',
         reasoning: `RSI ${rsi.toFixed(0)} is overbought. Today closing below its open shows sellers stepping in.`,
         action: 'Counter-trend short — tighter stop, smaller size.'
@@ -186,7 +186,7 @@ export function classifySetup(quote, historical, signalData) {
       label: '📊 Trend Continuation Short',
       description: 'Established downtrend with momentum',
       historicalWinRate: 60,
-      idealHold: 'Same session (~5-6 hours)',
+      idealHold: 'Typically 18–36 hours',
       risk: 'medium',
       reasoning: `Price below 20 SMA, 20 below 50 (clean downtrend). RSI ${rsi.toFixed(0)} confirms selling pressure.`,
       action: 'Ride the downtrend. Trail stop above recent highs.'
