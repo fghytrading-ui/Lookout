@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { fetchFullBatch, fetchFull, fetchWeekly } from '../lib/yahoo.js';
+import { fetchFullBatch, fetchFull, fetchWeekly, fetchExtendedHours } from '../lib/yahoo.js';
 import { classifySetup } from '../lib/setupClassifier.js';
 import { getMarketChoppiness } from '../lib/marketChoppiness.js';
 import { enrichTicker, enrichCryptoTicker } from '../lib/news.js';
@@ -9,6 +9,7 @@ import { getCryptoContext, tickerToBinanceSymbol, getCryptoEntryTiming } from '.
 import { fetchCryptoCandlesBatch, computeSessionVWAP } from '../lib/cryptoCandles.js';
 import { getInventoryReleases, evaluateInventoryRisk } from '../lib/inventoryReleases.js';
 import { logSignal, getSetupTypeStats } from '../lib/signalLog.js';
+import { withLiveBar } from '../lib/liveBar.js';
 import {
   analyzeSignals, generateTradeSetup, calculateSMA,
   TIME_SPANS, getTimespanKey, getExitWindow, generateAnalystNotes
@@ -405,12 +406,22 @@ router.get('/scan', async (req, res) => {
       const entry = fullMap[ticker];
       if (!entry || entry.error) continue;
 
-      const raw        = entry.quote;
-      const historical = entry.candles;
-      if (!raw.price || historical.length < 30) continue;  // Need 30+ for 200 SMA
+      const raw = entry.quote;
+      if (!raw.price || entry.candles.length < 30) continue;  // Need 30+ for 200 SMA
+
+      // Indicators previously ran on completed daily bars only, so during a
+      // live session (and all through pre/post market) they ignored everything
+      // price had done since yesterday's close. Splicing the forming bar in
+      // makes RSI/MACD/ATR/SMA reflect current action. Crypto already has
+      // genuine intraday candles and is left alone.
+      const historical = isCrypto ? entry.candles : withLiveBar(entry.candles, raw);
 
       const quote = adaptQuote(raw);
       const signalData = analyzeSignals(quote, historical, marketRegime);
+
+      // Extended-hours data is fetched per-card in the enrichment pass below
+      // (it needs a separate intraday request, so it is limited to the cards
+      // that actually survive filtering rather than the whole watchlist).
       const setup      = generateTradeSetup(quote, historical, signalData, { market, tradeStyle });
       if (!setup) continue;
 
@@ -425,6 +436,11 @@ router.get('/scan', async (req, res) => {
       }
       // Classify the setup type — tells user WHAT KIND of trade this is
       card.setupType = classifySetup(quote, historical, { ...signalData, direction: setup.direction });
+      // Flag whether indicators included a live forming bar, so the UI can be
+      // honest about how current the analysis is
+      card.liveBar = historical[historical.length - 1]?.isLive === true
+        ? { session: historical[historical.length - 1].liveSession }
+        : null;
       // Stash for the reviewer pass (stripped before sending to client)
       card._historical = historical;
       card._signalData = signalData;
@@ -460,6 +476,19 @@ router.get('/scan', async (req, res) => {
           : await enrichTicker(card.ticker);
         card.news      = enrichment.news || [];
         card.sentiment = enrichment.sentiment || null;
+        // Pre/post-market move — real extended-hours trading, not a display
+        // value. Feeds the reviewer below and is shown on the card.
+        if (!isCrypto) {
+          const ext = await fetchExtendedHours(card.ticker);
+          if (ext && Math.abs(ext.movePct) >= 0.25) {
+            card.extendedHours = {
+              ...ext,
+              direction: ext.movePct > 0 ? 'up' : 'down',
+              magnitude: Math.abs(ext.movePct) >= 3 ? 'large'
+                       : Math.abs(ext.movePct) >= 1.5 ? 'moderate' : 'small'
+            };
+          }
+        }
         if (isCrypto) {
           card.earnings = null;  // crypto has no earnings reports
         } else {

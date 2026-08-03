@@ -17,7 +17,7 @@ import { startSignalMonitor } from './lib/signalMonitor.js';
 import { isMarketOpen, getSession, getEntryTiming } from './utils/market.js';
 import { startAutoPersist } from './lib/persistentCache.js';
 import { POLYGON_ENABLED } from './lib/marketData.js';
-import { FINNHUB_ENABLED } from './lib/finnhub.js';
+import { FINNHUB_ENABLED, getFinnhubHealth } from './lib/finnhub.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -53,10 +53,15 @@ app.get('/api/system/status', (req, res) => {
   const dataSource = POLYGON_ENABLED ? 'polygon'
                   : FINNHUB_ENABLED ? 'finnhub+yahoo'
                   : 'yahoo';
+  const finnhub = getFinnhubHealth();
   res.json({
     dataSource,
+    // Report the source actually in use. When Finnhub is throttled the app
+    // falls back to Yahoo, which can lag — previously that happened silently.
+    effectiveSource: finnhub.throttled ? 'yahoo (finnhub throttled)' : dataSource,
     polygonEnabled: POLYGON_ENABLED,
     finnhubEnabled: FINNHUB_ENABLED,
+    finnhub,
     cacheEnabled: true,
     timestamp: new Date().toISOString()
   });

@@ -144,6 +144,75 @@ export async function fetchWeekly(ticker) {
   return candles;
 }
 
+// ── EXTENDED-HOURS (PRE / POST MARKET) ───────────────────────────────────
+// The daily-chart meta does not carry preMarketPrice/postMarketPrice, so
+// extended-hours action was invisible to the system. Intraday bars requested
+// with includePrePost=true DO include it: any bar falling outside the regular
+// session boundaries in meta.tradingPeriods is extended-hours trading.
+//
+// Returns { session, price, referenceClose, movePct, barTime } or null.
+export async function fetchExtendedHours(ticker) {
+  const cacheKey = `ext:${ticker}`;
+  const cached = cacheGet(cacheKey);
+  if (cached !== null && cached !== undefined) return cached;
+
+  try {
+    const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}`;
+    const data = await yahooGet(url, { interval: '5m', range: '2d', includePrePost: true });
+    const result = data?.chart?.result?.[0];
+    if (!result) return null;
+
+    const meta  = result.meta;
+    const times = result.timestamp || [];
+    const q     = result.indicators?.quote?.[0] || {};
+    if (!times.length) return null;
+
+    // Normalise tradingPeriods — Yahoo returns either {regular:[[...]]} or [[...]]
+    const tp = meta.tradingPeriods;
+    const periods = Array.isArray(tp?.regular) ? tp.regular.flat()
+                  : Array.isArray(tp)          ? tp.flat()
+                  : null;
+    if (!periods?.length) return null;
+
+    const latestRegular = periods[periods.length - 1];
+    const regStart = latestRegular.start;
+    const regEnd   = latestRegular.end;
+
+    // Reference for the gap = the last completed regular-session close.
+    // meta.regularMarketPrice is exactly that: during pre-market it holds the
+    // previous session's close, during post-market it holds today's close.
+    // (Scanning bars for this is unreliable — the 2-day window can start
+    // mid-session and silently pick a close from the wrong day.)
+    const referenceClose = meta.regularMarketPrice
+      ?? meta.chartPreviousClose
+      ?? meta.previousClose;
+    if (!referenceClose) return null;
+
+    // Most recent bar outside regular hours
+    let extPrice = null, extTime = null;
+    for (let i = times.length - 1; i >= 0; i--) {
+      const t = times[i];
+      if (q.close?.[i] == null) continue;
+      if (t > regEnd || t < regStart) { extPrice = q.close[i]; extTime = t; break; }
+      break;  // newest bar is inside the session — no extended-hours activity
+    }
+    if (extPrice == null) { cacheSet(cacheKey, null); return null; }
+
+    const movePct = ((extPrice - referenceClose) / referenceClose) * 100;
+    const out = {
+      session: extTime > regEnd ? 'post' : 'pre',
+      price: extPrice,
+      referenceClose,
+      movePct: parseFloat(movePct.toFixed(2)),
+      barTime: new Date(extTime * 1000).toISOString()
+    };
+    cacheSet(cacheKey, out);
+    return out;
+  } catch {
+    return null;
+  }
+}
+
 // Batched fetches with concurrency cap + inter-chunk delay
 export async function fetchBatch(tickers, { concurrency = 3, delayMs = 600 } = {}) {
   const results = {};

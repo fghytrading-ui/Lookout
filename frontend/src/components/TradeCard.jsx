@@ -436,6 +436,28 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
           </div>
         )}
 
+        {/* Extended-hours move — pre/post market action feeding the signal */}
+        {trade.extendedHours && (
+          <div className={`text-[11px] font-mono px-2.5 py-1.5 rounded mb-2 border flex items-center gap-2 flex-wrap ${
+            trade.extendedHours.magnitude === 'large'
+              ? 'bg-amber-500/10 border-amber-500/30 text-amber-300'
+              : 'bg-[#0a0a0a] border-[#1f1f1f] text-[#999]'
+          }`}>
+            <span>{trade.extendedHours.session === 'pre' ? '🌅' : '🌙'}</span>
+            <span className="font-bold">
+              {trade.extendedHours.session === 'pre' ? 'Pre-market' : 'Post-market'}{' '}
+              {trade.extendedHours.movePct > 0 ? '+' : ''}{trade.extendedHours.movePct}%
+            </span>
+            <span className="opacity-70">at ${trade.extendedHours.price?.toFixed(2)}</span>
+            {trade.extendedHours.magnitude === 'large' && (
+              <span className="text-[10px] opacity-80">· large gap — much of the move may already be done</span>
+            )}
+            {trade.liveBar && (
+              <span className="text-[9px] opacity-60 ml-auto">indicators include live {trade.liveBar.session} price</span>
+            )}
+          </div>
+        )}
+
         {/* Inventory release warning (energy products only) */}
         {trade.inventoryRelease && trade.inventoryRelease.hoursUntil <= 36 && trade.inventoryRelease.hoursUntil >= -2 && (
           <div className={`text-[11px] font-mono px-2.5 py-1.5 rounded mb-2 border flex items-center gap-2 ${

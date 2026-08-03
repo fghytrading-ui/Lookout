@@ -25,7 +25,7 @@ export default function App() {
   useEffect(() => {
     fetch('/api/system/status')
       .then(r => r.json())
-      .then(d => setDataSource(d.dataSource))
+      .then(d => setDataSource(d.finnhub?.throttled ? 'throttled' : d.dataSource))
       .catch(() => {});
     // Keep the browser mirror of the signal log in sync, and push it back if
     // the server lost its disk to a Render free-tier restart. Runs on every
@@ -52,14 +52,17 @@ export default function App() {
               <span className={`text-[9px] font-mono px-2 py-0.5 rounded border ml-2 ${
                 dataSource === 'polygon'       ? 'border-green-500/40 text-green-300 bg-green-500/10' :
                 dataSource === 'finnhub+yahoo' ? 'border-cyan-500/40 text-cyan-300 bg-cyan-500/10' :
+                dataSource === 'throttled'     ? 'border-amber-500/50 text-amber-300 bg-amber-500/10' :
                                                   'border-[#2a2a2a] text-[#555] bg-[#0e0e0e]'
               }`} title={
                 dataSource === 'polygon'       ? 'Polygon.io real-time data' :
                 dataSource === 'finnhub+yahoo' ? 'Finnhub real-time stocks + Yahoo for everything else' :
+                dataSource === 'throttled'     ? 'Finnhub rate limit reached — running on Yahoo, which may be delayed up to 15 minutes' :
                                                   'Yahoo Finance (free, may be delayed)'
               }>
                 {dataSource === 'polygon'       && '⚡ POLYGON LIVE'}
                 {dataSource === 'finnhub+yahoo' && '⚡ FINNHUB + YAHOO'}
+                {dataSource === 'throttled'     && '⚠ DELAYED — FINNHUB LIMIT'}
                 {dataSource === 'yahoo'         && '🟡 YAHOO'}
               </span>
             )}

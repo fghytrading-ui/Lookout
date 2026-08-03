@@ -153,6 +153,32 @@ export function reviewTrade(card, historical, signalData, marketContext = {}) {
     }
   }
 
+  // ── 2b. Extended-hours gap risk ──────────────────────────────────────
+  // A stock already up 4% in pre-market has done much of the move before the
+  // bell, and extended-hours prices are thin — the open frequently retraces
+  // them. Treated as a real risk rather than confirmation.
+  if (card.extendedHours) {
+    const e = card.extendedHours;
+    const label = e.session === 'pre' ? 'Pre-market' : 'Post-market';
+    const withUs = (direction === 'LONG' && e.direction === 'up') ||
+                   (direction === 'SHORT' && e.direction === 'down');
+    if (e.magnitude === 'large') {
+      issues.push({
+        severity: withUs ? 'caution' : 'reject',
+        text: withUs
+          ? `${label} already ${e.direction} ${e.movePct}% — entering after the move; thin-liquidity gaps often retrace at the open`
+          : `${label} ${e.direction} ${e.movePct}% against this ${direction} — premise is being invalidated before the open`
+      });
+    } else if (e.magnitude === 'moderate' && !withUs) {
+      issues.push({
+        severity: 'caution',
+        text: `${label} ${e.direction} ${e.movePct}% runs against this ${direction}`
+      });
+    } else if (withUs) {
+      strengths.push(`${label} ${e.movePct > 0 ? '+' : ''}${e.movePct}% confirms direction ahead of the session`);
+    }
+  }
+
   // ── 3. Today's gap risk (crypto often moves 5% — only flag >10%) ─────
   const gapThresh = isCrypto ? 10 : 5;
   if (Math.abs(changePercent || 0) > gapThresh) {
