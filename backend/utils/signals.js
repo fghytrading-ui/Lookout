@@ -199,9 +199,28 @@ export function analyzeSignals(quote, historical, marketRegime = null) {
 // Returns: { confirmed: bool, type: string, reasoning: string }
 function checkConfirmationCandle(historical, direction) {
   if (!historical || historical.length < 3) return { confirmed: false, type: 'no-data', reasoning: 'Insufficient candle history' };
-  const today  = historical[historical.length - 1];
-  const yesterday = historical[historical.length - 2];
-  const day3  = historical[historical.length - 3];
+
+  // The series may end with a live, still-forming bar. That is what we want
+  // for RSI/MACD/ATR, but it is useless for candle confirmation before the
+  // open: a pre-market bar has almost no body, so every setup would read as
+  // "unconfirmed" and nothing could ever qualify. When the forming bar is
+  // pre-market, or has no meaningful range yet, confirm against the last
+  // completed session instead.
+  let series = historical;
+  const newest = historical[historical.length - 1];
+  if (newest?.isLive) {
+    const range = newest.high - newest.low;
+    const refPrice = newest.close || 1;
+    const negligible = range / refPrice < 0.002;   // <0.2% range = not yet meaningful
+    if (newest.liveSession === 'pre' || negligible) {
+      series = historical.slice(0, -1);            // fall back to completed bars
+      if (series.length < 3) return { confirmed: false, type: 'no-data', reasoning: 'Insufficient candle history' };
+    }
+  }
+
+  const today  = series[series.length - 1];
+  const yesterday = series[series.length - 2];
+  const day3  = series[series.length - 3];
   if (!today || !yesterday) return { confirmed: false, type: 'no-data', reasoning: 'Missing candle data' };
 
   const todayBody = Math.abs(today.close - today.open);

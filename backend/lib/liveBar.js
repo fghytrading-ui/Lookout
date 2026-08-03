@@ -18,7 +18,11 @@
 function ymd(d) { return new Date(d).toISOString().split('T')[0]; }
 
 // Pick the most relevant live price and label which session it came from.
-export function getLivePrice(quote) {
+// `ext` is the result of fetchExtendedHours() — real pre/post-market trading
+// pulled from intraday bars. It takes priority because the daily-chart quote
+// does not carry extended-hours prices at all.
+export function getLivePrice(quote, ext = null) {
+  if (ext?.price > 0) return { price: ext.price, session: ext.session };
   if (!quote) return null;
   if (quote.preMarketPrice > 0)  return { price: quote.preMarketPrice,  session: 'pre'  };
   if (quote.postMarketPrice > 0) return { price: quote.postMarketPrice, session: 'post' };
@@ -31,9 +35,9 @@ export function getLivePrice(quote) {
  * Returns a NEW array — the input is never mutated, so cached candle data
  * stays clean for other callers.
  */
-export function withLiveBar(candles, quote) {
+export function withLiveBar(candles, quote, ext = null) {
   if (!candles?.length || !quote) return candles;
-  const live = getLivePrice(quote);
+  const live = getLivePrice(quote, ext);
   if (!live) return candles;
 
   const out = candles.slice();
@@ -59,17 +63,29 @@ export function withLiveBar(candles, quote) {
     return out;
   }
 
-  // No bar for today yet (pre-market, or the feed hasn't produced one).
-  // Build one seeded from the previous close.
+  // No bar for today yet. Before appending one, make sure the quote actually
+  // describes a NEW session. When the market is closed, dayHigh/dayLow/price
+  // still hold the LAST session's values — appending them would duplicate the
+  // previous bar under today's date and corrupt ATR and RSI. Only append when
+  // the quote genuinely differs from the last completed bar.
+  const samePrice = Math.abs(live.price - last.close) < 1e-9;
+  const sameHigh  = dayHigh == null || Math.abs(dayHigh - last.high) < 1e-9;
+  const sameLow   = dayLow  == null || Math.abs(dayLow  - last.low)  < 1e-9;
+  if (samePrice && sameHigh && sameLow) return candles;   // stale quote — leave series untouched
+
+  // Genuine new-session activity (extended hours or an open market).
   const prevClose = last.close;
-  const open = quote.open > 0 ? quote.open : prevClose;
+  const open = quote.open > 0 && Math.abs(quote.open - last.open) > 1e-9 ? quote.open : prevClose;
+  // Only trust dayHigh/dayLow if they are not simply the previous bar's values
+  const hi = (dayHigh != null && !sameHigh) ? dayHigh : live.price;
+  const lo = (dayLow  != null && !sameLow)  ? dayLow  : live.price;
   out.push({
     date: new Date().toISOString(),
     open,
-    high:  Math.max(dayHigh ?? live.price, open, live.price),
-    low:   Math.min(dayLow  ?? live.price, open, live.price),
+    high:  Math.max(hi, open, live.price),
+    low:   Math.min(lo, open, live.price),
     close: live.price,
-    volume: quote.volume || 0,
+    volume: 0,           // volume for the forming bar is not yet meaningful
     isLive: true,
     liveSession: live.session
   });

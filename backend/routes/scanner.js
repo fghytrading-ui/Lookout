@@ -400,6 +400,25 @@ router.get('/scan', async (req, res) => {
       }
     }
 
+    // Extended-hours prices for the live bar. Fetched only outside regular
+    // trading hours — during the session the regular quote is already current,
+    // and this costs one extra request per ticker.
+    const extMap = {};
+    if (!isCrypto) {
+      const { getSession } = await import('../utils/market.js');
+      const sess = getSession();
+      if (sess === 'PRE_MARKET' || sess === 'AFTER_HOURS') {
+        const chunk = 6;
+        for (let i = 0; i < tickerList.length; i += chunk) {
+          const slice = tickerList.slice(i, i + chunk);
+          const got = await Promise.allSettled(slice.map(t => fetchExtendedHours(t)));
+          slice.forEach((t, j) => {
+            if (got[j].status === 'fulfilled' && got[j].value) extMap[t] = got[j].value;
+          });
+        }
+      }
+    }
+
     const trades = { enterNow: [], waitForBounce: [], carryForward: [] };
 
     for (const ticker of tickerList) {
@@ -414,7 +433,7 @@ router.get('/scan', async (req, res) => {
       // price had done since yesterday's close. Splicing the forming bar in
       // makes RSI/MACD/ATR/SMA reflect current action. Crypto already has
       // genuine intraday candles and is left alone.
-      const historical = isCrypto ? entry.candles : withLiveBar(entry.candles, raw);
+      const historical = isCrypto ? entry.candles : withLiveBar(entry.candles, raw, extMap[ticker]);
 
       const quote = adaptQuote(raw);
       const signalData = analyzeSignals(quote, historical, marketRegime);
