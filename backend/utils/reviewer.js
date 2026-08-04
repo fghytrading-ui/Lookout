@@ -107,6 +107,21 @@ export function reviewTrade(card, historical, signalData, marketContext = {}) {
     issues.push({ severity: 'caution', text: inventoryRisk.message });
   }
 
+  // ── 0c. SCHEDULED EVENT INSIDE THE TRADE WINDOW ──────────────────────
+  // A high-impact macro release lands during the hold. Position sizing and
+  // stop placement mean nothing through an FOMC decision or a CPI print —
+  // price gaps straight through the level.
+  if (card.eventTimeline?.warning) {
+    // Grade against the event that raised the warning, not whatever happens
+    // to be first on the clock. Rejection is reserved for a top-tier release
+    // within six hours — traders routinely hold into an FOMC a day out with
+    // reduced size, but opening fresh risk just before the print is not a
+    // trade, it is a coin flip.
+    const e = card.eventTimeline.warningEvent || card.eventTimeline.nextEvent;
+    const severity = (e?.impact >= 9 && e?.hoursUntil <= 6) ? 'reject' : 'caution';
+    issues.push({ severity, text: card.eventTimeline.warning });
+  }
+
   // ── 0. EARNINGS RISK (hardest filter — never hold through report) ────
   if (earnings?.status === 'BLOCK') {
     issues.push({ severity: 'reject', text: `Earnings in ${earnings.daysAway} day${earnings.daysAway === 1 ? '' : 's'} — do NOT hold through report` });

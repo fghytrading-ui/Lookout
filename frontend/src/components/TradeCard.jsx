@@ -480,6 +480,36 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
           </div>
         )}
 
+        {/* Upcoming scheduled events landing inside the holding window */}
+        {trade.eventTimeline?.events?.length > 0 && (
+          <div className={`rounded p-2.5 mb-2 border ${
+            trade.eventTimeline.warning
+              ? 'bg-amber-500/10 border-amber-500/40'
+              : 'bg-[#0a0a0a] border-[#1a1a1a]'
+          }`}>
+            <div className="text-[9px] uppercase tracking-widest text-[#666] font-mono mb-1.5">
+              📅 Coming up during this trade
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {trade.eventTimeline.events.map((e, i) => (
+                <span key={i} className={`text-[10px] font-mono px-2 py-1 rounded border ${
+                  e.critical      ? 'border-red-500/40 text-red-300 bg-red-500/10' :
+                  e.impact >= 8   ? 'border-amber-500/40 text-amber-300' :
+                                     'border-[#252525] text-[#888]'
+                }`}>
+                  {e.label} <span className="opacity-70">{e.when}</span>
+                  {e.forecast && <span className="opacity-50"> · est {e.forecast}</span>}
+                </span>
+              ))}
+            </div>
+            {trade.eventTimeline.warning && (
+              <p className="text-[10px] text-amber-300/90 font-mono mt-2 leading-snug">
+                ⚠ {trade.eventTimeline.warning}
+              </p>
+            )}
+          </div>
+        )}
+
         {/* Catalyst detail — the specific events found, newest first */}
         {trade.catalysts?.length > 0 && (
           <div className="bg-[#0a0a0a] border border-[#1a1a1a] rounded p-2.5 mb-2">

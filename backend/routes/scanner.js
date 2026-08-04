@@ -12,6 +12,7 @@ import { logSignal, getSetupTypeStats } from '../lib/signalLog.js';
 import { withLiveBar } from '../lib/liveBar.js';
 import { analyseCatalysts, catalystSignals } from '../lib/catalystEngine.js';
 import { buildThesis } from '../lib/thesis.js';
+import { getUpcomingMacro, buildEventTimeline } from '../lib/upcomingEvents.js';
 import {
   analyzeSignals, generateTradeSetup, calculateSMA,
   TIME_SPANS, getTimespanKey, getExitWindow, generateAnalystNotes
@@ -421,6 +422,11 @@ router.get('/scan', async (req, res) => {
       }
     }
 
+    // Scheduled events landing inside the trade window. Fetched once and
+    // shared across every card — a setup can look perfect and still be a bad
+    // trade because CPI drops in six hours.
+    const upcomingMacro = await getUpcomingMacro({ windowHours: 48 }).catch(() => []);
+
     const trades = { enterNow: [], waitForBounce: [], carryForward: [] };
 
     for (const ticker of tickerList) {
@@ -547,6 +553,16 @@ router.get('/scan', async (req, res) => {
         if (cs.signals.length || cs.warnings.length) {
           card.signals = [...(card.signals || []), ...cs.signals, ...cs.warnings];
         }
+
+        // ── UPCOMING EVENTS ────────────────────────────────────────────
+        // What is still to come inside the holding window — this name's
+        // earnings plus any market-moving macro release.
+        card.eventTimeline = buildEventTimeline({
+          ticker: card.ticker,
+          macro: upcomingMacro,
+          earnings: card.earnings,
+          market
+        });
 
         // ── TRADE THESIS ───────────────────────────────────────────────
         // One line stating why this trade exists. Trades with no catalyst and
