@@ -114,24 +114,61 @@ export function reviewTrade(card, historical, signalData, marketContext = {}) {
     issues.push({ severity: 'caution', text: `Earnings in ${earnings.daysAway} days — must clear position before report` });
   }
 
-  // ── 1. News-direction conflict (HARD REJECT) ─────────────────────────
-  if (news?.length >= 2) {
+  // ── 1. CATALYST CHECK — the specific event moving this name ──────────
+  // Replaces blunt keyword counting. A merger collapsing and a merger being
+  // agreed both contain the word "merger"; only the event type tells you
+  // which way to trade, and only recency tells you whether it still matters.
+  const cat = card.catalystAnalysis || card._catalystAnalysis;
+  if (cat?.primary) {
+    const p = cat.primary;
+    const aligned  = (direction === 'LONG'  && p.direction === 'bullish') ||
+                     (direction === 'SHORT' && p.direction === 'bearish');
+    const conflicts = (direction === 'LONG'  && p.direction === 'bearish') ||
+                      (direction === 'SHORT' && p.direction === 'bullish');
+
+    // A fresh, high-impact event overrides the chart entirely. Technicals do
+    // not survive an FDA rejection or a collapsed acquisition.
+    if (cat.blocking) {
+      const b = cat.blocking;
+      const bAligned = (direction === 'LONG'  && b.direction === 'bullish') ||
+                       (direction === 'SHORT' && b.direction === 'bearish');
+      if (!bAligned) {
+        issues.push({ severity: 'reject',
+          text: `${b.label} (${b.age}) — event-driven move against this ${direction}; the chart is irrelevant here` });
+      } else {
+        issues.push({ severity: 'caution',
+          text: `${b.label} (${b.age}) — major event already in motion; much of the move may be gone and volatility will be extreme` });
+      }
+    } else if (conflicts && p.weight >= 1.3) {
+      issues.push({ severity: 'reject',
+        text: `${p.label} (${p.age}) runs against this ${direction}` });
+    } else if (aligned && p.weight >= 1.3) {
+      strengths.push(`${p.label} (${p.age}) supports this ${direction}${p.impact >= 8 ? ' — major catalyst' : ''}`);
+    }
+
+    // Something is unfolding right now — spreads widen and direction whipsaws
+    if (cat.burst && !cat.blocking) {
+      issues.push({ severity: 'caution',
+        text: 'Unusual news volume in the last few hours — a story is developing, expect volatility' });
+    }
+  } else if (news?.length >= 4) {
+    // No classifiable catalyst — fall back to tone as a weak signal only.
     const bullCount = countKeywords(news, BULLISH_HEADLINE_WORDS);
     const bearCount = countKeywords(news, BEARISH_HEADLINE_WORDS);
-
-    if (direction === 'LONG' && bearCount >= 2 && bearCount > bullCount) {
-      issues.push({ severity: 'reject', text: `News flow is bearish (${bearCount} negative headlines) — long trade conflicts` });
+    if (direction === 'LONG' && bearCount >= 3 && bearCount > bullCount * 2) {
+      issues.push({ severity: 'caution', text: `News tone is negative (${bearCount} bearish headlines) with no clear catalyst` });
     }
-    if (direction === 'SHORT' && bullCount >= 2 && bullCount > bearCount) {
-      issues.push({ severity: 'reject', text: `News flow is bullish (${bullCount} positive headlines) — short trade conflicts` });
-    }
-    if (direction === 'LONG' && bullCount >= 2) {
-      strengths.push(`News confirms bullish bias (${bullCount} positive headlines)`);
-    }
-    if (direction === 'SHORT' && bearCount >= 2) {
-      strengths.push(`News confirms bearish bias (${bearCount} negative headlines)`);
+    if (direction === 'SHORT' && bullCount >= 3 && bullCount > bearCount * 2) {
+      issues.push({ severity: 'caution', text: `News tone is positive (${bullCount} bullish headlines) with no clear catalyst` });
     }
   }
+
+  // NOTE: thesis quality is deliberately NOT judged here. The reviewer's job
+  // is RISK — what could go wrong with this trade. The thesis answers a
+  // different question: is there a reason to take it at all. Feeding thesis
+  // quality into the verdict double-counted it (it already gates ENTER NOW)
+  // and made every card CAUTION, which left the top tier permanently empty.
+  // Rationale gating happens once, at the ENTER NOW gate in the scanner.
 
   // ── 2. Extended move warning — don't chase (crypto runs hotter) ──────
   if (historical?.length >= 5) {

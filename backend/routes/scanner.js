@@ -10,6 +10,8 @@ import { fetchCryptoCandlesBatch, computeSessionVWAP } from '../lib/cryptoCandle
 import { getInventoryReleases, evaluateInventoryRisk } from '../lib/inventoryReleases.js';
 import { logSignal, getSetupTypeStats } from '../lib/signalLog.js';
 import { withLiveBar } from '../lib/liveBar.js';
+import { analyseCatalysts, catalystSignals } from '../lib/catalystEngine.js';
+import { buildThesis } from '../lib/thesis.js';
 import {
   analyzeSignals, generateTradeSetup, calculateSMA,
   TIME_SPANS, getTimespanKey, getExitWindow, generateAnalystNotes
@@ -480,44 +482,99 @@ router.get('/scan', async (req, res) => {
     trades.carryForward  = sortTrades(trades.carryForward).slice(0, 6);
 
     // ── Enrich ONLY the most important cards (saves API calls) ─────────────
+    // Enrich EVERY surviving card. Enrichment used to be limited to a
+    // handful to save API calls, but the catalyst analysis and trade thesis
+    // are now the core of the decision — a card with no reason attached
+    // cannot be judged, and half the list was appearing without one.
     const priorityCards = [
       ...trades.enterNow,
-      ...trades.waitForBounce.slice(0, 2),
-      ...trades.carryForward.slice(0, 2)
+      ...trades.waitForBounce,
+      ...trades.carryForward
     ];
+    // Enrichment runs in parallel batches. Enriching every card sequentially,
+    // with three chained requests each and a sleep between cards, pushed a
+    // scan to 88 seconds — longer than the 60s refresh interval, so scans
+    // overlapped and the page never settled. Batching concurrently brings it
+    // back under control while still pacing requests.
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-    for (let i = 0; i < priorityCards.length; i++) {
-      const card = priorityCards[i];
+    const ENRICH_CONCURRENCY = 5;
+
+    const enrichCard = async (card) => {
       try {
-        // For crypto, search by coin name (Bitcoin, Ethereum…) instead of YHA ticker
-        const enrichment = isCrypto
-          ? await enrichCryptoTicker(CRYPTO_NAMES[card.ticker] || card.ticker.replace('-USD', ''))
-          : await enrichTicker(card.ticker);
-        card.news      = enrichment.news || [];
-        card.sentiment = enrichment.sentiment || null;
-        // Pre/post-market move — real extended-hours trading, not a display
-        // value. Feeds the reviewer below and is shown on the card.
-        if (!isCrypto) {
-          const ext = await fetchExtendedHours(card.ticker);
-          if (ext && Math.abs(ext.movePct) >= 0.25) {
-            card.extendedHours = {
-              ...ext,
-              direction: ext.movePct > 0 ? 'up' : 'down',
-              magnitude: Math.abs(ext.movePct) >= 3 ? 'large'
-                       : Math.abs(ext.movePct) >= 1.5 ? 'moderate' : 'small'
-            };
-          }
+        // The three lookups are independent — run them together rather than
+        // chained, which was tripling each card's latency.
+        const [enrichRes, extRes, earnRes] = await Promise.allSettled([
+          isCrypto
+            ? enrichCryptoTicker(CRYPTO_NAMES[card.ticker] || card.ticker.replace('-USD', ''))
+            : enrichTicker(card.ticker),
+          isCrypto ? Promise.resolve(null) : fetchExtendedHours(card.ticker),
+          isCrypto ? Promise.resolve(null) : fetchNextEarnings(card.ticker)
+        ]);
+
+        const enrichment = enrichRes.status === 'fulfilled' ? enrichRes.value : null;
+        card.news      = enrichment?.news || [];
+        card.sentiment = enrichment?.sentiment || null;
+
+        const ext = extRes.status === 'fulfilled' ? extRes.value : null;
+        if (ext && Math.abs(ext.movePct) >= 0.25) {
+          card.extendedHours = {
+            ...ext,
+            direction: ext.movePct > 0 ? 'up' : 'down',
+            magnitude: Math.abs(ext.movePct) >= 3 ? 'large'
+                     : Math.abs(ext.movePct) >= 1.5 ? 'moderate' : 'small'
+          };
         }
-        if (isCrypto) {
-          card.earnings = null;  // crypto has no earnings reports
-        } else {
-          const earningsData = await fetchNextEarnings(card.ticker);
-          card.earnings = evaluateEarningsRisk(earningsData);
+
+        card.earnings = isCrypto ? null
+          : (earnRes.status === 'fulfilled' ? evaluateEarningsRisk(earnRes.value) : null);
+
+        // ── CATALYST ANALYSIS ──────────────────────────────────────────
+        // Identify the actual event moving this name (M&A, guidance change,
+        // FDA decision, deal collapse, short report...) rather than counting
+        // sentiment words. Recency-weighted, so fresh news dominates.
+        const catalystAnalysis = analyseCatalysts(card.news);
+        card.catalysts = catalystAnalysis.catalysts;
+        card.primaryCatalyst = catalystAnalysis.primary;
+        card.catalystDirection = catalystAnalysis.netDirection;
+        card.catalystBreaking = catalystAnalysis.breaking;
+        card.catalystBurst = catalystAnalysis.burst;
+        card.blockingCatalyst = catalystAnalysis.blocking;
+        card._catalystAnalysis = catalystAnalysis;
+
+        // Fold catalysts into the signal list so they are visible alongside
+        // the technical reasons on the card.
+        const cs = catalystSignals(catalystAnalysis);
+        if (cs.signals.length || cs.warnings.length) {
+          card.signals = [...(card.signals || []), ...cs.signals, ...cs.warnings];
         }
+
+        // ── TRADE THESIS ───────────────────────────────────────────────
+        // One line stating why this trade exists. Trades with no catalyst and
+        // only weak technicals are marked untradeable — a setup with no reason
+        // behind it is not worth risking money on.
+        card.thesis = buildThesis({
+          direction: card.direction,
+          catalystAnalysis,
+          signalData: card._signalData,
+          setup: { entry: card.entry, confirmation: card.confirmation },
+          extendedHours: card.extendedHours,
+          sector: card.sector,
+          market,
+          cryptoContext: isCrypto ? {
+            btcTrend,
+            fearGreed: cryptoContext?.fearGreed?.value ?? null
+          } : null,
+          vwap: card.vwap || null
+        });
       } catch {
         card.news = []; card.sentiment = null; card.earnings = null;
       }
-      if (i < priorityCards.length - 1) await sleep(250);
+    };
+
+    for (let i = 0; i < priorityCards.length; i += ENRICH_CONCURRENCY) {
+      const batch = priorityCards.slice(i, i + ENRICH_CONCURRENCY);
+      await Promise.allSettled(batch.map(enrichCard));
+      if (i + ENRICH_CONCURRENCY < priorityCards.length) await sleep(200);
     }
     // Cards that didn't get enriched get empty defaults
     [...trades.enterNow, ...trades.waitForBounce, ...trades.carryForward].forEach(c => {
@@ -576,6 +633,7 @@ router.get('/scan', async (req, res) => {
         // Strip internal fields before sending
         delete card._historical;
         delete card._signalData;
+        delete card._catalystAnalysis;
         card.review = review;
         card.weeklyTrend = weeklyTrendMap[card.ticker] || null;
 
@@ -624,6 +682,9 @@ router.get('/scan', async (req, res) => {
       // Negative expectancy = a trade that loses money if repeated. Never a
       // top pick, however clean the chart looks.
       if (card.negativeExpectancy) { demoted.push(card); return false; }
+      // No stated reason = not a trade. ENTER NOW is reserved for setups with
+      // either a real catalyst or genuinely strong technical confluence.
+      if (card.thesis && card.thesis.tradeable === false) { demoted.push(card); return false; }
       // R:R floors raised to 2.0 — tracked data showed 81% of signals sat
       // below that, and at a ~30% win rate every one of them was a loser.
       const isHighPass = card.probability === 'HIGH'   && card.review?.verdict === 'PASS' && rr >= 2.0;
@@ -633,6 +694,26 @@ router.get('/scan', async (req, res) => {
       demoted.push(card);
       return false;
     });
+    // When nothing clears the bar, say why. An empty ENTER NOW with no
+    // explanation reads as a broken scanner; the actual reason ("everything
+    // failed on expectancy", "no confirming candles yet") is information the
+    // trader can act on.
+    let enterNowEmptyReason = null;
+    if (trades.enterNow.length === 0 && demoted.length > 0) {
+      const tally = {};
+      for (const c of demoted) {
+        if (c.negativeExpectancy) tally['negative expectancy'] = (tally['negative expectancy'] || 0) + 1;
+        else if (c.setupBlocked) tally['setup type blocked on poor track record'] = (tally['setup type blocked on poor track record'] || 0) + 1;
+        else if (c.thesis?.tradeable === false) tally['no clear driver behind the setup'] = (tally['no clear driver behind the setup'] || 0) + 1;
+        else if (!(isCrypto || c.confirmation?.confirmed)) tally['no confirming candle yet'] = (tally['no confirming candle yet'] || 0) + 1;
+        else if (c.review?.verdict !== 'PASS') tally['reviewer flagged risks'] = (tally['reviewer flagged risks'] || 0) + 1;
+        else tally['reward-to-risk below threshold'] = (tally['reward-to-risk below threshold'] || 0) + 1;
+      }
+      const parts = Object.entries(tally).sort((a, b) => b[1] - a[1])
+        .map(([k, n]) => `${n} ${k}`);
+      enterNowEmptyReason = `${demoted.length} setup${demoted.length === 1 ? '' : 's'} reviewed, none qualified — ${parts.join('; ')}.`;
+    }
+
     trades.enterNow = sortTrades(trades.enterNow).slice(0, 6);  // 6 best max — quality not quantity
     trades.carryForward = [...trades.carryForward, ...demoted]
       .sort((a, b) => (b.confidence || 0) - (a.confidence || 0))
@@ -714,6 +795,7 @@ router.get('/scan', async (req, res) => {
       cryptoContext,
       inventoryReleases,
       entryTiming,
+      enterNowEmptyReason,
       scannedCount: tickerList.length,
       passedFilter: allCards.length,
       timestamp: new Date().toISOString()

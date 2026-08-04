@@ -279,6 +279,7 @@ export default function DashboardPage({ market = 'stocks', title = null }) {
         vixRegime: d.vixRegime,
         marketRegime: d.marketRegime,
         choppiness: d.choppiness,
+        enterNowEmptyReason: d.enterNowEmptyReason,
         btcTrend: d.btcTrend,
         cryptoContext: d.cryptoContext,
         inventoryReleases: d.inventoryReleases,
@@ -648,7 +649,7 @@ export default function DashboardPage({ market = 'stocks', title = null }) {
               };
               return (
                 <>
-                  <TradeSection trades={liveEnter}  type="enter"  {...commonProps} />
+                  <TradeSection trades={liveEnter}  type="enter"  {...commonProps} emptyReason={scanStats.enterNowEmptyReason} />
                   <TradeSection trades={liveBounce} type="bounce" {...commonProps} />
                   <TradeSection trades={liveCarry}  type="carry"  {...commonProps} />
                 </>

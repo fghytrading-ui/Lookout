@@ -27,7 +27,7 @@ const SECTION_CONFIG = {
   }
 };
 
-export default function TradeSection({ trades, type, onRefresh, newTickers, accountSize, riskPct, entryTiming, onTakeTrade }) {
+export default function TradeSection({ trades, type, onRefresh, newTickers, accountSize, riskPct, entryTiming, onTakeTrade, emptyReason }) {
   const cfg = SECTION_CONFIG[type] || SECTION_CONFIG.carry;
 
   return (
@@ -53,6 +53,13 @@ export default function TradeSection({ trades, type, onRefresh, newTickers, acco
           <p className="text-[#333] text-xs font-mono">
             No setups passed the analyst filter in this category
           </p>
+          {/* Say WHY nothing qualified — an unexplained empty section reads as
+              a broken scanner, when the reason is usually actionable. */}
+          {type === 'enter' && emptyReason && (
+            <p className="text-[10px] text-[#555] font-mono mt-2 max-w-xl mx-auto leading-relaxed">
+              {emptyReason}
+            </p>
+          )}
         </div>
       ) : (
         <div className={`border border-t-0 ${cfg.border} rounded-b p-4`}>

@@ -2,14 +2,37 @@ import axios from 'axios';
 import { registerCache } from './persistentCache.js';
 
 // ── In-memory cache (avoids re-fetching within TTL) ───────────────────────
+// TTL is per data type. Everything used to share an 8-second expiry, which
+// meant a full scan re-downloaded three months of DAILY candles for every
+// ticker every 8 seconds. Yahoo answered with hundreds of 429s and each one
+// cost a 2-8s backoff, pushing a scan past 60 seconds.
+//
+// Daily candles change once a day, so they are cached for 30 minutes. Live
+// price still updates every 8 seconds, and withLiveBar() splices the current
+// quote onto the cached series — so indicators stay current without
+// re-fetching history that has not changed.
 const cache = new Map();
-const CACHE_TTL_MS = 8_000; // 8 seconds — supports 10-second client polling
+// 10 minutes rather than 30: fetchFull returns the quote alongside the
+// candles, and that quote seeds the entry zone. Ten minutes keeps entry
+// pricing sane while still cutting history fetches by ~75x. The displayed
+// price is separately refreshed every 10s via /api/quotes/batch, and the
+// frontend recomputes entry status against it.
+const CACHE_TTL_MS = 8_000;             // quotes — supports 10s client polling
+const CANDLE_TTL_MS = 10 * 60_000;      // daily candles — change once per day
+const EXT_TTL_MS = 3 * 60_000;          // extended-hours bars
 registerCache('yahoo-quotes', cache);
+
+function ttlFor(key) {
+  if (key.startsWith('full:'))   return CANDLE_TTL_MS;
+  if (key.startsWith('weekly:')) return CANDLE_TTL_MS;
+  if (key.startsWith('ext:'))    return EXT_TTL_MS;
+  return CACHE_TTL_MS;
+}
 
 function cacheGet(key) {
   const entry = cache.get(key);
   if (!entry) return null;
-  if (Date.now() - entry.ts > CACHE_TTL_MS) { cache.delete(key); return null; }
+  if (Date.now() - entry.ts > ttlFor(key)) { cache.delete(key); return null; }
   return entry.data;
 }
 function cacheSet(key, data) {

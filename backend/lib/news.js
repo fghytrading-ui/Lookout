@@ -51,7 +51,7 @@ function parseRSS(xml, limit = 4) {
 }
 
 // Google News RSS — permissive, free, no key
-export async function fetchNews(ticker, limit = 4) {
+export async function fetchNews(ticker, limit = 12) {
   const cached = cacheGet(`news:${ticker}`);
   if (cached) return cached;
 
@@ -95,7 +95,7 @@ export function deriveSentimentFromNews(news) {
 }
 
 export async function enrichTicker(ticker) {
-  const news = await fetchNews(ticker, 4);
+  const news = await fetchNews(ticker, 12);
   const sentiment = deriveSentimentFromNews(news);
   return { news, sentiment };
 }
@@ -104,7 +104,7 @@ export async function enrichTicker(ticker) {
 // the Yahoo ticker (BTC-USD returns garbage in Google News). Combines a
 // crypto-specific search to surface listings, hacks, regulatory headlines
 // instead of generic equity noise.
-export async function fetchCryptoNews(coinName, limit = 4) {
+export async function fetchCryptoNews(coinName, limit = 12) {
   const key = `cryptoNews:${coinName.toLowerCase()}`;
   const cached = cacheGet(key);
   if (cached) return cached;
@@ -122,7 +122,7 @@ export async function fetchCryptoNews(coinName, limit = 4) {
 }
 
 export async function enrichCryptoTicker(coinName) {
-  const news = await fetchCryptoNews(coinName, 4);
+  const news = await fetchCryptoNews(coinName, 12);
   const sentiment = deriveSentimentFromNews(news);
   return { news, sentiment };
 }

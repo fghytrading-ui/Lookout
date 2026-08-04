@@ -436,6 +436,75 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
           </div>
         )}
 
+        {/* ── WHY THIS TRADE ───────────────────────────────────────────
+            The reason the setup exists, stated up front. A scanner that
+            lists patterns without a driver is just noise. */}
+        {trade.thesis && (
+          <div className={`rounded-lg p-3 mb-3 border ${
+            trade.thesis.quality === 'catalyst-driven' ? 'bg-cyan-500/10 border-cyan-500/40' :
+            trade.thesis.quality === 'technical'       ? 'bg-[#0a0a0a] border-[#252525]' :
+                                                          'bg-red-500/10 border-red-500/30'
+          }`}>
+            <div className="flex items-center gap-2 mb-1 flex-wrap">
+              <span className="text-[9px] uppercase tracking-widest font-mono text-[#666]">Why this trade</span>
+              <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded border ${
+                trade.thesis.quality === 'catalyst-driven' ? 'border-cyan-500/40 text-cyan-300' :
+                trade.thesis.quality === 'technical'       ? 'border-[#333] text-[#888]' :
+                                                              'border-red-500/40 text-red-300'
+              }`}>
+                {trade.thesis.quality === 'catalyst-driven' ? '⚡ NEWS CATALYST'
+                 : trade.thesis.quality === 'technical' ? '📐 TECHNICAL ONLY'
+                 : '⚠ NO CLEAR REASON'}
+              </span>
+              {trade.catalystBreaking && (
+                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded border border-amber-500/50 text-amber-300 warn-pulse">
+                  🔴 BREAKING
+                </span>
+              )}
+            </div>
+            <p className={`text-[12px] font-mono leading-snug ${
+              trade.thesis.tradeable ? 'text-[#ddd]' : 'text-red-300'
+            }`}>
+              {trade.thesis.headline}
+            </p>
+            {trade.thesis.drivers?.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mt-2">
+                {trade.thesis.drivers.map((d, i) => (
+                  <span key={i} className={`text-[9px] font-mono px-1.5 py-0.5 rounded border ${
+                    d.kind === 'catalyst' ? 'border-cyan-500/30 text-cyan-300 bg-cyan-500/5'
+                                          : 'border-[#242424] text-[#777]'
+                  }`}>{d.text}</span>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Catalyst detail — the specific events found, newest first */}
+        {trade.catalysts?.length > 0 && (
+          <div className="bg-[#0a0a0a] border border-[#1a1a1a] rounded p-2.5 mb-2">
+            <div className="text-[9px] uppercase tracking-widest text-[#555] font-mono mb-1.5">
+              📰 Catalysts detected{trade.catalystBurst ? ' · story developing now' : ''}
+            </div>
+            <div className="space-y-1.5">
+              {trade.catalysts.slice(0, 3).map((c, i) => (
+                <div key={i} className="flex items-start gap-2 text-[10px] font-mono">
+                  <span className={`px-1.5 py-0.5 rounded border flex-shrink-0 ${
+                    c.direction === 'bullish' ? 'border-green-500/30 text-green-400' :
+                    c.direction === 'bearish' ? 'border-red-500/30 text-red-400' :
+                                                 'border-amber-500/30 text-amber-400'
+                  }`}>{c.label}</span>
+                  <span className="text-[#666] flex-shrink-0">{c.age}</span>
+                  <a href={c.link} target="_blank" rel="noreferrer"
+                     className="text-[#888] hover:text-cyan-400 leading-snug line-clamp-2">
+                    {c.title}
+                  </a>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Extended-hours move — pre/post market action feeding the signal */}
         {trade.extendedHours && (
           <div className={`text-[11px] font-mono px-2.5 py-1.5 rounded mb-2 border flex items-center gap-2 flex-wrap ${
