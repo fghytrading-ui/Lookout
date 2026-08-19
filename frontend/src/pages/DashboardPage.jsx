@@ -284,6 +284,7 @@ export default function DashboardPage({ market = 'stocks', title = null }) {
         vixRegime: d.vixRegime,
         marketRegime: d.marketRegime,
         choppiness: d.choppiness,
+        macroBlackout: d.macroBlackout,
         enterNowEmptyReason: d.enterNowEmptyReason,
         btcTrend: d.btcTrend,
         cryptoContext: d.cryptoContext,
@@ -516,6 +517,22 @@ export default function DashboardPage({ market = 'stocks', title = null }) {
         {/* Ticker tape */}
         <TickerTape prices={tickerPrices} />
       </header>
+
+      {/* Macro blackout — a top-tier release is imminent and new entries are
+          barred. Shown prominently because an empty ENTER NOW with no reason
+          reads as a broken scanner. */}
+      {scanStats.macroBlackout && (
+        <div className="mx-4 mt-3 p-3 rounded border border-amber-500/50 bg-amber-500/10 text-amber-200 font-mono warn-pulse">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-base">⏸</span>
+            <span className="text-[12px] font-bold tracking-wide">NEW ENTRIES PAUSED</span>
+            <span className="text-[11px] opacity-90">— {scanStats.macroBlackout.message}</span>
+          </div>
+          <div className="text-[10px] opacity-70 mt-1">
+            Setups below stay visible so you can prepare, but none are being recommended for entry right now.
+          </div>
+        </div>
+      )}
 
       {/* ── Macro alert bar ────────────────────────────────────────────── */}
       <MacroAlertBar context={macroContext} />

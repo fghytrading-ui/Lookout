@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react';
 import DashboardPage from './pages/DashboardPage.jsx';
 import CalendarPage from './pages/CalendarPage.jsx';
 import AnalystPage from './pages/AnalystPage.jsx';
-import ForexPage from './pages/ForexPage.jsx';
 import CommoditiesPage from './pages/CommoditiesPage.jsx';
 import CryptoPage from './pages/CryptoPage.jsx';
 import PerformancePage from './pages/PerformancePage.jsx';
@@ -11,7 +10,6 @@ import { syncSignalBackup } from './utils/signalBackup.js';
 const NAV = [
   { id: 'dashboard',   label: 'Stocks',      icon: '◎',  hint: 'Live stock swing setups' },
   { id: 'crypto',      label: 'Crypto',      icon: '₿',  hint: '24/7 crypto intraday setups' },
-  { id: 'forex',       label: 'Forex',       icon: '💱', hint: 'Currency pairs' },
   { id: 'commodities', label: 'Commodities', icon: '🛢', hint: 'Metals, energy, agriculture' },
   { id: 'analyst',     label: 'Analyst',     icon: '🔍', hint: 'Analyze any symbol' },
   { id: 'performance', label: 'Performance', icon: '📊', hint: 'Auto-tracked signal outcomes + win rates' },
@@ -90,7 +88,6 @@ export default function App() {
       {/* ── Active view ─────────────────────────────────────────────────── */}
       {view === 'dashboard'   && <DashboardPage />}
       {view === 'crypto'      && <CryptoPage />}
-      {view === 'forex'       && <ForexPage />}
       {view === 'commodities' && <CommoditiesPage />}
       {view === 'analyst'     && <AnalystPage />}
       {view === 'performance' && <PerformancePage />}

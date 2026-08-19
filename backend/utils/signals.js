@@ -412,14 +412,21 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
     // ~34h on average to resolve, so a strict 1-day cap was truncating targets
     // down to unprofitable R:R. minRR raised 1.2 -> 2.0: below that, a 29%
     // win rate cannot produce positive expectancy.
-    sameDay: { slCapPct: 0.028, slFloorATR: 0.5, slRangeMin: 0.5, slRangeMax: 1.1,
-               maxDaysTP1: 4,  maxDaysTP2: 8,  minTP1ATR: 1.2, minTP2ATR: 2.0, minRR: 2.0 },
+    // slMinPct is the decisive parameter. Grouping 146 resolved signals by
+    // stop distance: stops under 1.5% of price won 21% of the time (-0.30R),
+    // 1.5-2.5% won 28% (-0.18R), and 2.5-4% won 37% (+0.42R). A stop inside
+    // ~2% sits within ordinary daily noise and gets taken out before the idea
+    // has a chance — which is also why trades resolving in under six hours
+    // won only 10% while those held 24-48h won 50%. The floor moves the stop
+    // outside the noise band; the cap keeps risk sane.
+    sameDay: { slCapPct: 0.045, slMinPct: 0.022, slFloorATR: 0.9, slRangeMin: 0.9, slRangeMax: 1.8,
+               maxDaysTP1: 6,  maxDaysTP2: 12, minTP1ATR: 1.6, minTP2ATR: 2.6, minRR: 2.0 },
     // Crypto runs on 4-hour candles. "days" in this object = bars held.
     // ATR here is per-4h-bar (~1/sqrt(6) of daily ATR), so multipliers are larger.
     // Ceilings: TP1 within 16 bars (~64h), TP2 within 30 bars (~5d).
     crypto:  { slCapPct: 0.045, slFloorATR: 1.1, slRangeMin: 1.1, slRangeMax: 2.2,
                maxDaysTP1: 16, maxDaysTP2: 30, minTP1ATR: 2.2, minTP2ATR: 3.2, minRR: 2.0 },
-    swing:   { slCapPct: 0.04,  slFloorATR: 0.9, slRangeMin: 1.0, slRangeMax: 1.8,
+    swing:   { slCapPct: 0.05, slMinPct: 0.025, slFloorATR: 0.9, slRangeMin: 1.0, slRangeMax: 1.8,
                maxDaysTP1: 10, maxDaysTP2: 16, minTP1ATR: 1.2, minTP2ATR: 2.0, minRR: 1.3 }
   }[tradeStyle] || { slCapPct: 0.04, slFloorATR: 0.9, slRangeMin: 1.0, slRangeMax: 1.8,
                      maxDaysTP1: 10, maxDaysTP2: 16, minTP1ATR: 1.2, minTP2ATR: 2.0, minRR: 1.3 };
@@ -441,8 +448,12 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
       const slRangeMax = atr * CAL.slRangeMax;
       if (dist >= slRangeMin && dist <= slRangeMax) slCandidate = supportBased;
     }
-    sl = round(Math.max(slCandidate, entry * (1 - CAL.slCapPct)));
-    sl = round(Math.min(sl, entry - atr * CAL.slFloorATR));
+    // Order matters: widen to the minimums first, then let the cap have the
+    // final say. Applying the ATR floor after the cap allowed a volatile name
+    // to end up with a 6% stop against a 4.5% ceiling.
+    sl = Math.min(slCandidate, entry - atr * CAL.slFloorATR);
+    if (CAL.slMinPct) sl = Math.min(sl, entry * (1 - CAL.slMinPct));
+    sl = round(Math.max(sl, entry * (1 - CAL.slCapPct)));
 
     // ── TP1: REALISTIC ──
     // Default = trend-scaled ATR. Use resistance if within sensible range.
@@ -509,8 +520,9 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
       const slRangeMax = atr * CAL.slRangeMax;
       if (dist >= slRangeMin && dist <= slRangeMax) slCandidate = resBased;
     }
-    sl = round(Math.min(slCandidate, entry * (1 + CAL.slCapPct)));
-    sl = round(Math.max(sl, entry + atr * CAL.slFloorATR));
+    sl = Math.max(slCandidate, entry + atr * CAL.slFloorATR);
+    if (CAL.slMinPct) sl = Math.max(sl, entry * (1 + CAL.slMinPct));
+    sl = round(Math.min(sl, entry * (1 + CAL.slCapPct)));
 
     // TP1
     const tpDefault = entry - atr * tp1Mult;
@@ -611,7 +623,11 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
   //    Diminishing returns stop that pile-up.
   confidence += Math.min(confirming, 3) * 5 + Math.max(0, confirming - 3) * 1.5;
   confidence -= opposing * 7;
-  if (probability === 'HIGH') confidence += 5;
+  // No bonus for the HIGH probability tier. Across 146 resolved signals HIGH
+  // won 24% while MEDIUM won 39% — the tier is derived from how many
+  // confirming signals fired, and a high count marks an extended, crowded
+  // move rather than a good entry. Rewarding it made the score worse than
+  // random, so it no longer contributes.
 
   // 2. R:R now drives confidence, because it drives expectancy. At the
   //    observed ~30% win rate a trade needs R:R > 2.4 just to break even.

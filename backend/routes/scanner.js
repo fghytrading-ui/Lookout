@@ -371,6 +371,21 @@ router.get('/scan', async (req, res) => {
       ? req.query.tickers.split(',').map(t => t.trim().toUpperCase())
       : watchlist.slice(0, 40);
 
+    // FOREX RETIRED. Across 146 resolved signals forex produced 1 win in 18
+    // trades (6%, -0.79R) — the worst of any market by a wide margin, losing
+    // in both directions (longs 0/3, shorts 1/15). The pairs move on interest
+    // rate differentials and central bank policy, which none of this system's
+    // inputs measure; the technical setups that work on equities have no edge
+    // there. Rather than keep feeding it capital it has been removed.
+    if (market === 'forex') {
+      return res.json({
+        trades: { enterNow: [], waitForBounce: [], carryForward: [] },
+        market, retired: true,
+        retiredReason: 'Forex removed: 1 win in 18 tracked trades (6% hit rate, -0.79R per trade). The system has no edge in currency pairs.',
+        scannedCount: 0, passedFilter: 0, timestamp: new Date().toISOString()
+      });
+    }
+
     const isCrypto = market === 'crypto';
     const isCommodities = market === 'commodities';
     const tradeStyle = isCrypto ? 'crypto' : 'sameDay';
@@ -427,6 +442,20 @@ router.get('/scan', async (req, res) => {
     // trade because CPI drops in six hours.
     const upcomingMacro = await getUpcomingMacro({ windowHours: 48 }).catch(() => []);
 
+    // MACRO BLACKOUT — a top-tier release inside six hours. Position sizing
+    // and stop placement mean nothing through an FOMC decision or a CPI print:
+    // price gaps straight through the level. New entries are barred until it
+    // clears, but existing candidates stay visible so the user can prepare.
+    const blackoutEvent = (upcomingMacro || [])
+      .filter(e => e.impact >= 9 && e.hoursUntil <= 6 && e.hoursUntil > -1)
+      .sort((a, b) => b.impact - a.impact)[0] || null;
+    const macroBlackout = blackoutEvent ? {
+      event: blackoutEvent.label,
+      when: blackoutEvent.when,
+      hoursUntil: blackoutEvent.hoursUntil,
+      message: `${blackoutEvent.label} ${blackoutEvent.when} — no new entries until it clears. Price gaps through stops on these releases.`
+    } : null;
+
     const trades = { enterNow: [], waitForBounce: [], carryForward: [] };
 
     for (const ticker of tickerList) {
@@ -452,6 +481,18 @@ router.get('/scan', async (req, res) => {
       const setup      = generateTradeSetup(quote, historical, signalData, { market, tradeStyle });
       if (!setup) continue;
 
+      // ── SHORT GATE ──────────────────────────────────────────────────
+      // Across 146 resolved signals, longs won 35% (+0.14R) while shorts won
+      // 16% (-0.42R), and shorts lost in every market: stocks 17%, forex 7%,
+      // commodities 20%. "Trend Continuation Short" went 0 for 18. The system
+      // was shorting into a rising market, where a falling stock is usually a
+      // temporary dip inside an uptrend rather than the start of a decline.
+      // Shorts are now only permitted when the broad market is genuinely
+      // bearish — the one regime in which they historically work.
+      if (setup.direction === 'SHORT' && !isCrypto && marketRegime !== 'BEARISH') {
+        continue;
+      }
+
       // Regime filter is now a confidence-boost signal (added in analyzeSignals),
       // not a hard reject — we still allow counter-trend setups if they are strong.
 
@@ -463,6 +504,13 @@ router.get('/scan', async (req, res) => {
       }
       // Classify the setup type — tells user WHAT KIND of trade this is
       card.setupType = classifySetup(quote, historical, { ...signalData, direction: setup.direction });
+
+      // Setups with no historical wins at a meaningful sample size are not
+      // shown at all. "Reversal Long" went 0 for 10 — catching a falling knife
+      // is a losing pattern in this system, and no amount of confirmation
+      // rescued it.
+      const DEAD_SETUPS = ['🔄 Reversal Long'];
+      if (DEAD_SETUPS.includes(card.setupType?.label)) continue;
       // Flag whether indicators included a live forming bar, so the UI can be
       // honest about how current the analysis is
       card.liveBar = historical[historical.length - 1]?.isLive === true
@@ -685,7 +733,8 @@ router.get('/scan', async (req, res) => {
       // Mixed market: tighter than normal — PASS only (CAUTION dropped from
       // eligibility since it wins at the same rate as PASS in tracked data).
       if (isMixed) {
-        if (card.setupBlocked) { demoted.push(card); return false; }
+        if (macroBlackout) { demoted.push(card); return false; }
+      if (card.setupBlocked) { demoted.push(card); return false; }
         const passes = card.probability === 'HIGH' && card.review?.verdict === 'PASS' && rr >= 1.7 && hasConfirmation;
         if (passes) return true;
         demoted.push(card);
@@ -694,6 +743,7 @@ router.get('/scan', async (req, res) => {
       // FEEDBACK LOOP v2 tightening: data showed PASS and CAUTION win at the
       // same 31% rate, so CAUTION no longer earns the ENTER NOW slot. Blocked
       // setups (auto-flagged by historical <25% win rate) are also barred.
+      if (macroBlackout) { demoted.push(card); return false; }
       if (card.setupBlocked) { demoted.push(card); return false; }
       // Negative expectancy = a trade that loses money if repeated. Never a
       // top pick, however clean the chart looks.
@@ -812,6 +862,7 @@ router.get('/scan', async (req, res) => {
       inventoryReleases,
       entryTiming,
       enterNowEmptyReason,
+      macroBlackout,
       scannedCount: tickerList.length,
       passedFilter: allCards.length,
       timestamp: new Date().toISOString()

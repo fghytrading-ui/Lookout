@@ -174,16 +174,39 @@ export default function PerformancePage() {
       )}
 
       {/* Summary cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-4">
         <Card title="Total signals">
           <div className="text-2xl font-bold text-cyan-300 tabular-nums">{stats.totalSignals}</div>
           <div className="text-[10px] text-[#555] font-mono">last {lookback}d · {stats.open} open · {stats.closed} closed</div>
+        </Card>
+        <Card title="Expectancy / trade" hint="(win rate x R:R) - (1 - win rate). Above zero = profitable. This decides whether the system makes money; hit rate alone does not.">
+          <div className={`text-2xl font-bold tabular-nums ${
+            (stats.expectancy?.expectancy ?? 0) > 0 ? 'text-green-400' : 'text-red-400'
+          }`}>
+            {stats.expectancy
+              ? `${stats.expectancy.expectancy >= 0 ? '+' : ''}${stats.expectancy.expectancy.toFixed(2)}R`
+              : '—'}
+          </div>
+          <div className="text-[10px] text-[#555] font-mono">
+            {stats.expectancy
+              ? `avg R:R ${stats.expectancy.avgRR.toFixed(2)} · breakeven at ${(stats.expectancy.breakEvenWinRate * 100).toFixed(0)}% wins`
+              : 'no closed trades yet'}
+          </div>
         </Card>
         <Card title="Overall win rate">
           <div className={`text-2xl font-bold tabular-nums ${rateColor(stats.overallWinRate || 0, stats.closed)}`}>
             {stats.overallWinRate != null ? pct(stats.overallWinRate) : '—'}
           </div>
-          <div className="text-[10px] text-[#555] font-mono">{stats.wins} wins · {stats.losses} losses · {stats.expired} expired</div>
+          <div className="text-[10px] text-[#555] font-mono">
+            {stats.wins} wins · {stats.losses} losses · {stats.expired} expired
+          </div>
+          {stats.expectancy && (
+            <div className={`text-[9px] font-mono mt-1 ${
+              stats.overallWinRate > stats.expectancy.breakEvenWinRate ? 'text-green-500/70' : 'text-red-500/70'
+            }`}>
+              {stats.overallWinRate > stats.expectancy.breakEvenWinRate ? 'above' : 'below'} the {(stats.expectancy.breakEvenWinRate * 100).toFixed(0)}% needed at this R:R
+            </div>
+          )}
         </Card>
         <Card title="TP hit rate" hint="WIN includes both TP1 and TP2 outcomes">
           <div className="text-2xl font-bold text-green-400 tabular-nums">

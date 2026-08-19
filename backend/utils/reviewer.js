@@ -112,14 +112,12 @@ export function reviewTrade(card, historical, signalData, marketContext = {}) {
   // stop placement mean nothing through an FOMC decision or a CPI print —
   // price gaps straight through the level.
   if (card.eventTimeline?.warning) {
-    // Grade against the event that raised the warning, not whatever happens
-    // to be first on the clock. Rejection is reserved for a top-tier release
-    // within six hours — traders routinely hold into an FOMC a day out with
-    // reduced size, but opening fresh risk just before the print is not a
-    // trade, it is a coin flip.
-    const e = card.eventTimeline.warningEvent || card.eventTimeline.nextEvent;
-    const severity = (e?.impact >= 9 && e?.hoursUntil <= 6) ? 'reject' : 'caution';
-    issues.push({ severity, text: card.eventTimeline.warning });
+    // Always a caution, never a reject. A top-tier release like FOMC applies
+    // to every equity at once, so rejecting on it emptied the entire board and
+    // left the user staring at nothing with no explanation. Entry is still
+    // blocked — the scanner raises a macro blackout that bars ENTER NOW and
+    // shows a banner — but the candidates stay visible and labelled.
+    issues.push({ severity: 'caution', text: card.eventTimeline.warning });
   }
 
   // ── 0. EARNINGS RISK (hardest filter — never hold through report) ────
