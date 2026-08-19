@@ -48,11 +48,16 @@ function determineOutcome(signal, candles) {
   }
 
   const { direction, entry, tp, tp2, sl } = signal;
+  // First scale-out. Older records predate it, so derive the same 30% level
+  // rather than skipping them — otherwise historical comparisons break.
+  const tp0 = signal.tp0 ?? (entry + (tp - entry) * 0.30);
   let mfeRunning = entry;
   let maeRunning = entry;
   let closeReason = null;
   let closePrice = null;
   let closedAt = null;
+  let scaledOut = false;      // first target filled — a third is already banked
+  let effectiveSl = sl;       // moves to breakeven once the scale fills
 
   for (const c of candles) {
     const high = c.high;
@@ -65,7 +70,13 @@ function determineOutcome(signal, candles) {
     if (direction === 'LONG') {
       if (high > mfeRunning) mfeRunning = high;
       if (low < maeRunning)  maeRunning = low;
-      const slHit = low <= sl;
+      // The stop in force DURING this bar. The breakeven promotion below only
+      // applies from the next bar onward: within the bar where the scale
+      // fills, that bar's low may have printed before the fill, and testing it
+      // against the new breakeven stop closed winners as scratches.
+      const slThisBar = effectiveSl;
+      if (!scaledOut && high >= tp0) { scaledOut = true; effectiveSl = entry; }
+      const slHit = low <= slThisBar;
       const tp2Hit = high >= tp2;
       const tp1Hit = high >= tp;
       if (slHit || tp1Hit || tp2Hit) {
@@ -81,7 +92,8 @@ function determineOutcome(signal, candles) {
             closePrice = sl;
           }
         } else if (slHit) {
-          closeReason = 'SL'; closePrice = sl;
+          closeReason = slThisBar === entry ? 'SCALED_BE' : 'SL';
+          closePrice = slThisBar;
         } else if (tp2Hit) {
           closeReason = 'TP2'; closePrice = tp2;
         } else {
@@ -93,7 +105,9 @@ function determineOutcome(signal, candles) {
     } else { // SHORT
       if (low < mfeRunning)  mfeRunning = low;
       if (high > maeRunning) maeRunning = high;
-      const slHit = high >= sl;
+      const slThisBar = effectiveSl;
+      if (!scaledOut && low <= tp0) { scaledOut = true; effectiveSl = entry; }
+      const slHit = high >= slThisBar;
       const tp2Hit = low <= tp2;
       const tp1Hit = low <= tp;
       if (slHit || tp1Hit || tp2Hit) {
@@ -106,7 +120,8 @@ function determineOutcome(signal, candles) {
             closeReason = 'SL'; closePrice = sl;
           }
         } else if (slHit) {
-          closeReason = 'SL'; closePrice = sl;
+          closeReason = slThisBar === entry ? 'SCALED_BE' : 'SL';
+          closePrice = slThisBar;
         } else if (tp2Hit) {
           closeReason = 'TP2'; closePrice = tp2;
         } else {
@@ -133,7 +148,7 @@ function determineOutcome(signal, candles) {
   const maePct = slDistance > 0 ? (maeAbs / slDistance) * 100 : 0;
 
   if (closeReason) {
-    return { reason: closeReason, closePrice, mfe: mfeAbs, mae: maeAbs, mfePct, maePct, closedAt };
+    return { reason: closeReason, closePrice, mfe: mfeAbs, mae: maeAbs, mfePct, maePct, closedAt, scaledOut };
   }
 
   // No TP/SL hit — check expiration
@@ -143,16 +158,21 @@ function determineOutcome(signal, candles) {
       reason: 'EXPIRED',
       closePrice: lastClose,
       mfe: mfeAbs, mae: maeAbs, mfePct, maePct,
-      closedAt: signal.expiresAt
+      closedAt: signal.expiresAt,
+      scaledOut
     };
   }
   return null;
 }
 
-function classifyOutcome(reason) {
+// A trade that banked its first scale and then stopped at breakeven finished
+// GREEN, not red. Scoring those as losses is what made the tracked hit rate
+// look like 28% when 70% of trades actually went far enough to pay something.
+function classifyOutcome(reason, scaledOut) {
   if (reason === 'TP1' || reason === 'TP2') return 'WIN';
+  if (reason === 'SCALED_BE') return 'SCRATCH';   // partial profit banked, runner flat
   if (reason === 'SL') return 'LOSS';
-  return 'EXPIRED'; // distinguished from outright loss since stop wasn't hit
+  return scaledOut ? 'SCRATCH' : 'EXPIRED';
 }
 
 export async function monitorTick() {
@@ -178,7 +198,8 @@ export async function monitorTick() {
         maePct: outcome.maePct ?? null,
         closedAt: outcome.closedAt,
         timeToCloseHrs: parseFloat(((outcome.closedAt - sig.signaledAt) / (60 * 60 * 1000)).toFixed(1)),
-        outcome: classifyOutcome(outcome.reason)
+        outcome: classifyOutcome(outcome.reason, outcome.scaledOut),
+        scaledOut: !!outcome.scaledOut
       });
       closed++;
     }));
@@ -215,7 +236,8 @@ export async function catchUpOverdue() {
         maePct: outcome.maePct ?? null,
         closedAt: outcome.closedAt,
         timeToCloseHrs: parseFloat(((outcome.closedAt - sig.signaledAt) / (60 * 60 * 1000)).toFixed(1)),
-        outcome: classifyOutcome(outcome.reason)
+        outcome: classifyOutcome(outcome.reason, outcome.scaledOut),
+        scaledOut: !!outcome.scaledOut
       });
       closed++;
     }));

@@ -221,6 +221,7 @@ export function getAggregateStats({ lookbackDays = 30 } = {}) {
       if (!map[key]) map[key] = { wins: 0, losses: 0, expired: 0, total: 0, mfeSum: 0, maeSum: 0 };
       map[key].total++;
       if (s.outcome === 'WIN') map[key].wins++;
+      else if (s.outcome === 'SCRATCH') { map[key].scratches = (map[key].scratches || 0) + 1; }
       else if (s.outcome === 'LOSS') map[key].losses++;
       else if (s.outcome === 'EXPIRED') map[key].expired++;
       map[key].mfeSum += s.mfePct || 0;
@@ -232,15 +233,26 @@ export function getAggregateStats({ lookbackDays = 30 } = {}) {
       wins: v.wins,
       losses: v.losses,
       expired: v.expired,
+      scratches: v.scratches || 0,
       winRate: v.total ? v.wins / v.total : 0,
+      greenRate: v.total ? (v.wins + (v.scratches || 0)) / v.total : 0,
       slHitRate: v.total ? v.losses / v.total : 0,
       avgMFEPct: v.total ? parseFloat((v.mfeSum / v.total).toFixed(2)) : 0,
       avgMAEPct: v.total ? parseFloat((v.maeSum / v.total).toFixed(2)) : 0
     })).sort((a, b) => b.total - a.total);
   };
 
+  // GREEN RATE — the share of trades that finished in profit, counting those
+  // that banked the first scale and then stopped at breakeven. This is the
+  // number that answers "how many of the trades you showed me made money",
+  // which is not the same as the full-target hit rate.
+  const green = closed.filter(s => s.outcome === 'WIN' || s.outcome === 'SCRATCH').length;
+
   return {
     lookbackDays,
+    greenRate: closed.length ? green / closed.length : null,
+    greenCount: green,
+    scratchCount: closed.filter(s => s.outcome === 'SCRATCH').length,
     totalSignals: allRecent.length,
     open: open.length,
     closed: closed.length,

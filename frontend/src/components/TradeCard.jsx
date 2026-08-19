@@ -436,6 +436,42 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
           </div>
         )}
 
+        {/* ── EXIT PLAN ────────────────────────────────────────────────
+            Three-stage scale. Only 28% of tracked trades reached the full
+            target, but 70% travelled at least 30% of the way — banking a
+            third there and moving the stop to breakeven turns most of that
+            70% into a green trade instead of a red one. */}
+        {trade.tp0 && (
+          <div className="rounded-lg p-3 mb-3 border border-green-500/30 bg-green-500/5">
+            <div className="text-[9px] uppercase tracking-widest text-green-400/70 font-mono mb-2">
+              🎯 Exit plan — scale out in thirds
+            </div>
+            <div className="grid grid-cols-3 gap-2 text-[11px] font-mono">
+              <div className="bg-[#0a0a0a] border border-green-500/30 rounded p-2">
+                <div className="text-[9px] text-green-500/70 mb-0.5">1 · TAKE 33%</div>
+                <div className="text-green-300 font-bold tabular-nums">${trade.tp0}</div>
+                <div className="text-[9px] text-[#666] mt-0.5">
+                  +{Math.abs((trade.tp0 - trade.entry) / trade.entry * 100).toFixed(1)}% · then stop to breakeven
+                </div>
+              </div>
+              <div className="bg-[#0a0a0a] border border-[#252525] rounded p-2">
+                <div className="text-[9px] text-[#666] mb-0.5">2 · TAKE 33%</div>
+                <div className="text-blue-300 font-bold tabular-nums">${trade.tp}</div>
+                <div className="text-[9px] text-[#666] mt-0.5">+{trade.tpPct}% · {trade.rrRatio}:1</div>
+              </div>
+              <div className="bg-[#0a0a0a] border border-[#252525] rounded p-2">
+                <div className="text-[9px] text-[#666] mb-0.5">3 · RUNNER 34%</div>
+                <div className="text-cyan-300 font-bold tabular-nums">${trade.tp2}</div>
+                <div className="text-[9px] text-[#666] mt-0.5">+{trade.tp2Pct}% · {trade.rrRatio2}:1</div>
+              </div>
+            </div>
+            <p className="text-[10px] text-[#777] font-mono mt-2 leading-snug">
+              Once step 1 fills, move the stop to your entry. From that point the trade
+              cannot lose — worst case is a small profit.
+            </p>
+          </div>
+        )}
+
         {/* ── WHY THIS TRADE ───────────────────────────────────────────
             The reason the setup exists, stated up front. A scanner that
             lists patterns without a driver is just noise. */}

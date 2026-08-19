@@ -242,7 +242,7 @@ function adaptQuote(raw) {
 
 function buildCard(ticker, raw, quote, setup, signalData, historical, market = 'stocks') {
   const price = raw.price;
-  const { direction, entry, entryLow, entryHigh, tp, tp2, sl, rrRatio, rrRatio2, probability, confirming, confidence, expectedDays, expectedDays2, expectedHours, expectedHours2, trendStrength, trendStrengthLabel, confirmation, tradeStyle } = setup;
+  const { direction, entry, entryLow, entryHigh, tp, tp0, rrRatio0, scalePlan, tp2, sl, rrRatio, rrRatio2, probability, confirming, confidence, expectedDays, expectedDays2, expectedHours, expectedHours2, trendStrength, trendStrengthLabel, confirmation, tradeStyle } = setup;
   const tpPct  = parseFloat(Math.abs((tp - entry)  / entry * 100).toFixed(1));
   const tp2Pct = tp2 != null ? parseFloat(Math.abs((tp2 - entry) / entry * 100).toFixed(1)) : null;
   const slPct  = parseFloat(Math.abs((sl - entry)  / entry * 100).toFixed(1));
@@ -303,6 +303,7 @@ function buildCard(ticker, raw, quote, setup, signalData, historical, market = '
     direction, probability, confirming, confidence,
     price, entry, entryLow, entryHigh, entryStatus, entryStatusText,
     tp, tpPct, tp2, tp2Pct,
+    tp0, rrRatio0, scalePlan,
     sl, slPct,
     // Horizon labels now reflect the recalibrated targets. The old copy said
     // "same day / no overnight risk", but targets wide enough to be profitable

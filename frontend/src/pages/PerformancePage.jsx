@@ -174,12 +174,23 @@ export default function PerformancePage() {
       )}
 
       {/* Summary cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-4">
         <Card title="Total signals">
           <div className="text-2xl font-bold text-cyan-300 tabular-nums">{stats.totalSignals}</div>
           <div className="text-[10px] text-[#555] font-mono">last {lookback}d · {stats.open} open · {stats.closed} closed</div>
         </Card>
-        <Card title="Overall win rate">
+        <Card title="Green rate" hint="Share of trades that finished in profit, including those that banked the first scale then stopped at breakeven. This is the number that answers 'how many of these made money'.">
+          <div className={`text-2xl font-bold tabular-nums ${
+            (stats.greenRate ?? 0) >= 0.65 ? 'text-green-400' :
+            (stats.greenRate ?? 0) >= 0.5  ? 'text-amber-400' : 'text-red-400'
+          }`}>
+            {stats.greenRate != null ? pct(stats.greenRate) : '—'}
+          </div>
+          <div className="text-[10px] text-[#555] font-mono">
+            {stats.greenCount ?? 0} green · {stats.scratchCount ?? 0} scaled-then-flat
+          </div>
+        </Card>
+        <Card title="Full target hit">
           <div className={`text-2xl font-bold tabular-nums ${rateColor(stats.overallWinRate || 0, stats.closed)}`}>
             {stats.overallWinRate != null ? pct(stats.overallWinRate) : '—'}
           </div>
