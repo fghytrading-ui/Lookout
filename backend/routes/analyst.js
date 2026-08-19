@@ -4,6 +4,7 @@ import { enrichTicker } from '../lib/news.js';
 import { fetchNextEarnings, evaluateEarningsRisk } from '../lib/earnings.js';
 import { backtestSetup } from '../lib/backtest.js';
 import { fetchWallStreetConsensus } from '../lib/wallStreet.js';
+import { fetchRecommendationTrend } from '../lib/finnhubData.js';
 import { getMultiTimeframeTrends, scoreTimeframeAlignment } from '../lib/multiTimeframe.js';
 import { classifySetup } from '../lib/setupClassifier.js';
 import { computeTradeGrade } from '../lib/tradeGrade.js';
@@ -815,14 +816,16 @@ router.get('/:ticker', async (req, res) => {
   // ── STOCK / FOREX / COMMODITY BRANCH (existing logic, unchanged) ──────
   try {
     // Parallel fetch of all data sources
-    const [full, weeklyTrend, news, earningsRaw, vix, wallStreet, fullForBacktest] = await Promise.all([
+    const [full, weeklyTrend, news, earningsRaw, vix, wallStreet, fullForBacktest, analystConsensus] = await Promise.all([
       fetchFull(ticker, '3mo'),
       getWeeklyTrend(ticker),
       enrichTicker(ticker),
       fetchNextEarnings(ticker),
       getVIX(),
       fetchWallStreetConsensus(ticker),
-      fetchFull(ticker, '6mo')   // 6 months of candles for backtest
+      fetchFull(ticker, '6mo'),  // 6 months of candles for backtest
+      // Real analyst ratings — same feed the scanner uses, so both pages agree
+      fetchRecommendationTrend(ticker).catch(() => null)
     ]);
 
     if (!full.candles || full.candles.length < 30) {
@@ -958,6 +961,7 @@ router.get('/:ticker', async (req, res) => {
       } : null,
 
       review,
+      analystConsensus,
       weeklyTrend,
       news: news.news,
       sentiment: news.sentiment,

@@ -265,6 +265,33 @@ export default function AnalystPage() {
             </div>
           )}
 
+          {/* Analyst ratings — real coverage data, same feed as the scanner */}
+          {data.analystConsensus && data.analystConsensus.total >= 5 && (
+            <div className="rounded-lg p-3 border border-[#1a1a1a] bg-[#0a0a0a]">
+              <div className="text-[10px] uppercase tracking-widest text-[#555] font-mono mb-2">
+                🎓 Analyst coverage
+              </div>
+              <div className="flex items-center gap-3 flex-wrap text-[11px] font-mono">
+                <span className={`px-2 py-1 rounded border font-bold ${
+                  data.analystConsensus.consensus === 'BULLISH' ? 'border-green-500/40 text-green-300 bg-green-500/10' :
+                  data.analystConsensus.consensus === 'BEARISH' ? 'border-red-500/40 text-red-300 bg-red-500/10' :
+                                                                   'border-[#2a2a2a] text-[#999]'
+                }`}>{data.analystConsensus.consensus}</span>
+                <span className="text-green-400">{data.analystConsensus.bullPct}% buy</span>
+                <span className="text-red-400">{data.analystConsensus.bearPct}% sell</span>
+                <span className="text-[#666]">· {data.analystConsensus.total} analysts covering</span>
+                {data.analystConsensus.shift && (
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
+                    data.analystConsensus.shift === 'upgrades'
+                      ? 'border-green-500/40 text-green-400' : 'border-red-500/40 text-red-400'
+                  }`}>
+                    {data.analystConsensus.shift === 'upgrades' ? '↑ upgrade wave this month' : '↓ downgrade wave this month'}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* ── TRADE GRADE (top-level synthesis) ────────────────────────────── */}
           {data.tradeGrade && data.tradeGrade.grade !== '—' && (
             <div className={`rounded-lg p-5 border-2 ${
