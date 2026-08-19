@@ -95,9 +95,20 @@ export function deriveSentimentFromNews(news) {
 }
 
 export async function enrichTicker(ticker) {
-  const news = await fetchNews(ticker, 12);
+  // Prefer Finnhub's company-news feed: ticker-tagged, properly structured and
+  // with exact publish timestamps. For AAPL it returns ~25 usable articles
+  // against roughly a dozen loosely-matched ones from Google News, and the
+  // reliable timestamps are what makes catalyst recency weighting work.
+  // Google News stays as the fallback when Finnhub is unavailable.
+  let news = null;
+  try {
+    const { fetchFinnhubCompanyNews } = await import('./finnhubData.js');
+    news = await fetchFinnhubCompanyNews(ticker, { days: 4, limit: 25 });
+  } catch { /* fall through */ }
+  if (!news || news.length < 3) news = await fetchNews(ticker, 12);
+
   const sentiment = deriveSentimentFromNews(news);
-  return { news, sentiment };
+  return { news, sentiment, newsSource: news?.length ? (news[0].summary !== undefined ? 'finnhub' : 'google') : null };
 }
 
 // Crypto-aware news fetcher — uses coin's full name + "crypto" instead of

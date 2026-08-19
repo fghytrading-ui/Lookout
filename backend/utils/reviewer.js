@@ -185,6 +185,29 @@ export function reviewTrade(card, historical, signalData, marketContext = {}) {
   // and made every card CAUTION, which left the top tier permanently empty.
   // Rationale gating happens once, at the ENTER NOW gate in the scanner.
 
+  // ── 1c. ANALYST CONSENSUS ────────────────────────────────────────────
+  // Real analyst positioning from Finnhub, not inferred from headlines. A wave
+  // of upgrades or downgrades inside the last month is a measurable catalyst,
+  // and trading directly against a near-unanimous consensus is a poor bet.
+  const rec = card.analystConsensus;
+  if (rec && rec.total >= 5) {
+    if (rec.shift === 'upgrades' && direction === 'LONG') {
+      strengths.push(`Analyst upgrade wave — ${rec.bullPct}% bullish across ${rec.total} analysts`);
+    }
+    if (rec.shift === 'downgrades' && direction === 'SHORT') {
+      strengths.push(`Analyst downgrade wave — ${rec.bearPct}% bearish across ${rec.total} analysts`);
+    }
+    if (rec.shift === 'downgrades' && direction === 'LONG') {
+      issues.push({ severity: 'caution', text: 'Analysts are cutting ratings this month — long fights the consensus shift' });
+    }
+    if (rec.shift === 'upgrades' && direction === 'SHORT') {
+      issues.push({ severity: 'caution', text: 'Analysts are raising ratings this month — short fights the consensus shift' });
+    }
+    if (direction === 'SHORT' && rec.bullPct >= 85) {
+      issues.push({ severity: 'caution', text: `${rec.bullPct}% of ${rec.total} analysts rate this a buy — shorting into near-unanimous coverage` });
+    }
+  }
+
   // ── 2. Extended move warning — don't chase (crypto runs hotter) ──────
   if (historical?.length >= 5) {
     const fiveBack = historical[historical.length - 5];

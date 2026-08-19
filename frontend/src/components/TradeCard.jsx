@@ -546,6 +546,27 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
           </div>
         )}
 
+        {/* Analyst consensus — real ratings data, not a headline guess */}
+        {trade.analystConsensus && trade.analystConsensus.total >= 5 && (
+          <div className="flex items-center gap-2 mb-2 px-3 py-2 rounded border bg-[#0a0a0a] border-[#1a1a1a] text-[11px] font-mono flex-wrap">
+            <span className="text-[#666] text-[10px] uppercase tracking-widest">Analysts</span>
+            <span className={`font-bold ${
+              trade.analystConsensus.consensus === 'BULLISH' ? 'text-green-400' :
+              trade.analystConsensus.consensus === 'BEARISH' ? 'text-red-400' : 'text-[#999]'
+            }`}>{trade.analystConsensus.consensus}</span>
+            <span className="text-[#888]">{trade.analystConsensus.bullPct}% buy</span>
+            <span className="text-[#555]">· {trade.analystConsensus.total} covering</span>
+            {trade.analystConsensus.shift && (
+              <span className={`text-[9px] px-1.5 py-0.5 rounded border ${
+                trade.analystConsensus.shift === 'upgrades'
+                  ? 'border-green-500/40 text-green-400' : 'border-red-500/40 text-red-400'
+              }`}>
+                {trade.analystConsensus.shift === 'upgrades' ? '↑ upgrade wave' : '↓ downgrade wave'}
+              </span>
+            )}
+          </div>
+        )}
+
         {/* Catalyst detail — the specific events found, newest first */}
         {trade.catalysts?.length > 0 && (
           <div className="bg-[#0a0a0a] border border-[#1a1a1a] rounded p-2.5 mb-2">

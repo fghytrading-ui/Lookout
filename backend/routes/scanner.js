@@ -11,6 +11,7 @@ import { getInventoryReleases, evaluateInventoryRisk } from '../lib/inventoryRel
 import { logSignal, getSetupTypeStats } from '../lib/signalLog.js';
 import { withLiveBar } from '../lib/liveBar.js';
 import { analyseCatalysts, catalystSignals } from '../lib/catalystEngine.js';
+import { fetchRecommendationTrend } from '../lib/finnhubData.js';
 import { buildThesis } from '../lib/thesis.js';
 import { getUpcomingMacro, buildEventTimeline } from '../lib/upcomingEvents.js';
 import {
@@ -510,12 +511,15 @@ router.get('/scan', async (req, res) => {
       try {
         // The three lookups are independent — run them together rather than
         // chained, which was tripling each card's latency.
-        const [enrichRes, extRes, earnRes] = await Promise.allSettled([
+        const [enrichRes, extRes, earnRes, recRes] = await Promise.allSettled([
           isCrypto
             ? enrichCryptoTicker(CRYPTO_NAMES[card.ticker] || card.ticker.replace('-USD', ''))
             : enrichTicker(card.ticker),
           isCrypto ? Promise.resolve(null) : fetchExtendedHours(card.ticker),
-          isCrypto ? Promise.resolve(null) : fetchNextEarnings(card.ticker)
+          isCrypto ? Promise.resolve(null) : fetchNextEarnings(card.ticker),
+          // Analyst consensus. A wave of upgrades or downgrades is a genuine,
+          // measurable catalyst that the chart alone cannot show.
+          isCrypto ? Promise.resolve(null) : fetchRecommendationTrend(card.ticker)
         ]);
 
         const enrichment = enrichRes.status === 'fulfilled' ? enrichRes.value : null;
@@ -534,6 +538,9 @@ router.get('/scan', async (req, res) => {
 
         card.earnings = isCrypto ? null
           : (earnRes.status === 'fulfilled' ? evaluateEarningsRisk(earnRes.value) : null);
+
+        const recs = recRes.status === 'fulfilled' ? recRes.value : null;
+        if (recs) card.analystConsensus = recs;
 
         // ── CATALYST ANALYSIS ──────────────────────────────────────────
         // Identify the actual event moving this name (M&A, guidance change,
