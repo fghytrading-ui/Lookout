@@ -116,7 +116,10 @@ export default function App() {
                   {s.active ? '✓' : '✗'}
                 </span>
                 <span className={`font-bold ${s.active ? 'text-[#ccc]' : 'text-[#555]'}`}>{s.name}</span>
-                <span className="text-[#555] text-[10px]">— {s.drives}</span>
+                <span className="text-[#555] text-[10px]">
+                  — {s.drives}
+                  {s.note && <span className="text-amber-500/70"> ({s.note})</span>}
+                </span>
               </div>
             ))}
           </div>

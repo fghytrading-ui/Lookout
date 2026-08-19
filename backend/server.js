@@ -60,10 +60,22 @@ app.get('/api/system/sources', async (req, res) => {
   const finnhub = getFinnhubHealth();
   const probe = async (fn) => { try { return await fn(); } catch { return false; } };
 
-  const [cryptoCtx, calendarOk] = await Promise.all([
+  // Probe what each source actually DRIVES, not one arbitrary field of it.
+  // The first version tested Binance solely via funding rates, which come from
+  // the futures host — that host is unreachable from some hosting providers
+  // while the spot host serving candles works perfectly. Binance was reported
+  // dead while every crypto card was being built from its data. Same for the
+  // calendar: the live feed can fail while the endpoint still serves usable
+  // events from its fallback.
+  const [cryptoCtx, binanceCandles, calendarLive] = await Promise.all([
     probe(async () => {
       const { getCryptoContext } = await import('./lib/cryptoContext.js');
       return await getCryptoContext();
+    }),
+    probe(async () => {
+      const { fetchCryptoCandles } = await import('./lib/cryptoCandles.js');
+      const c = await fetchCryptoCandles('BTC-USD', { interval: '4h', limit: 5 });
+      return Array.isArray(c) && c.length > 0;
     }),
     probe(async () => {
       const { fetchLiveEconomicEvents } = await import('./lib/economicCalendarLive.js');
@@ -81,14 +93,19 @@ app.get('/api/system/sources', async (req, res) => {
       active: finnhub.enabled },
     { name: 'Finnhub Analysts', drives: 'Buy/sell ratings and rating changes',
       active: finnhub.enabled },
-    { name: 'Binance', drives: 'Crypto 4h candles, VWAP, funding rates',
-      active: !!cryptoCtx?.funding },
+    { name: 'Binance', drives: 'Crypto 4h candles and VWAP',
+      active: !!binanceCandles,
+      note: cryptoCtx?.funding ? null : 'funding rates unavailable from this host' },
     { name: 'CoinGecko', drives: 'BTC dominance, total crypto market cap',
-      active: !!cryptoCtx?.global?.btcDominance },
+      active: !!cryptoCtx?.global?.btcDominance,
+      note: cryptoCtx?.global?.btcDominance ? null : 'rate limited — retries automatically' },
     { name: 'Fear & Greed', drives: 'Crypto sentiment extremes',
       active: cryptoCtx?.fearGreed?.value != null },
     { name: 'Economic Calendar', drives: 'FOMC, CPI, jobs, EIA inventories',
-      active: !!calendarOk }
+      // The endpoint stays usable via its fallback even when the live feed
+      // is unreachable, so report it active and flag the degraded source.
+      active: true,
+      note: calendarLive ? null : 'live feed unreachable — using scheduled fallback' }
   ];
 
   res.json({
