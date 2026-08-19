@@ -52,7 +52,30 @@ function formatWhen(hrs) {
  */
 export async function getUpcomingMacro({ windowHours = 48 } = {}) {
   try {
-    const events = await fetchLiveEconomicEvents();
+    // The live Forex Factory feed is unreachable from some hosting providers.
+    // Without a fallback the whole event system went silent in production —
+    // no card warned about an FOMC or CPI print landing mid-trade, which is a
+    // safety feature disappearing without any error. The calendar route
+    // already keeps a scheduled template for exactly this case; reuse it so
+    // the warnings survive when the live feed cannot be reached.
+    let events = await fetchLiveEconomicEvents();
+    if (!Array.isArray(events) || !events.length) {
+      const { getEconomicEvents } = await import('../routes/calendar.js');
+      const template = getEconomicEvents();
+      // Template entries carry a date and a UK time string rather than a
+      // timestamp, so build one the same way the live feed provides.
+      events = template.map(e => {
+        const hhmm = /(\d+):(\d+)(am|pm)/i.exec(e.time || '');
+        let hour = 13, min = 30;
+        if (hhmm) {
+          hour = parseInt(hhmm[1], 10) % 12 + (/pm/i.test(hhmm[3]) ? 12 : 0);
+          min = parseInt(hhmm[2], 10);
+        }
+        const d = new Date(`${e.date}T00:00:00Z`);
+        d.setUTCHours(hour, min, 0, 0);
+        return { title: e.name, timestamp: d.toISOString(), forecast: e.expected, previous: e.previous };
+      });
+    }
     if (!Array.isArray(events)) return [];
 
     const out = [];

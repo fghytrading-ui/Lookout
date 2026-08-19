@@ -14,7 +14,7 @@ function getMacroContext() {
   ];
 }
 
-function getEconomicEvents() {
+export function getEconomicEvents() {
   const now = new Date();
   const dayNames   = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
   const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
