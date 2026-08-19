@@ -73,8 +73,14 @@ app.get('/api/system/sources', async (req, res) => {
       return await getCryptoContext();
     }),
     probe(async () => {
+      // Use the SAME parameters the scanner uses so this reads the warm cache
+      // instead of issuing a distinct uncached request. The earlier version
+      // asked for 5 bars while the scanner asks for 200 — a different cache
+      // key — so every status check fired a fresh call that Binance
+      // rate-limited, reporting the feed dead while six crypto cards were
+      // being built from it.
       const { fetchCryptoCandles } = await import('./lib/cryptoCandles.js');
-      const c = await fetchCryptoCandles('BTC-USD', { interval: '4h', limit: 5 });
+      const c = await fetchCryptoCandles('BTC-USD', { interval: '4h', limit: 200 });
       return Array.isArray(c) && c.length > 0;
     }),
     probe(async () => {
