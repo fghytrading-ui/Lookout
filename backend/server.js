@@ -1,8 +1,11 @@
-import 'dotenv/config';
-import express from 'express';
-import cors from 'cors';
+// MUST stay first: loads .env before any module reads process.env.
+// See env.js for why a plain dotenv.config() here was not enough.
+import './env.js';
+
 import path from 'path';
 import { fileURLToPath } from 'url';
+import express from 'express';
+import cors from 'cors';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import quotesRouter from './routes/quotes.js';

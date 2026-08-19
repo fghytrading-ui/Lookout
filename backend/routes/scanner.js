@@ -787,7 +787,12 @@ router.get('/scan', async (req, res) => {
         const rr = card.rrRatio || 0;
         const expectancy = (hist.winRate * rr) - (1 - hist.winRate);
         card.expectancy = parseFloat(expectancy.toFixed(3));
-        card.breakEvenRR = parseFloat(((1 - hist.winRate) / Math.max(hist.winRate, 0.01)).toFixed(2));
+        // With zero recorded wins the breakeven R:R is undefined, and the
+        // clamped version rendered as an absurd "needs R:R >= 100". Report it
+        // as unreachable instead, which is what it actually means.
+        card.breakEvenRR = hist.winRate > 0
+          ? parseFloat(((1 - hist.winRate) / hist.winRate).toFixed(2))
+          : null;
         if (expectancy <= 0) {
           card.negativeExpectancy = true;
         }

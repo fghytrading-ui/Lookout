@@ -402,7 +402,9 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
                   {trade.expectancy > 0 ? '+' : ''}{trade.expectancy}R per trade
                 </span>
                 <span className="text-[#555]">
-                  · needs R:R ≥ {trade.breakEvenRR} to break even · this trade is {trade.rrRatio}
+                  {trade.breakEvenRR != null
+                    ? `· needs R:R ≥ ${trade.breakEvenRR} to break even · this trade is ${trade.rrRatio}`
+                    : `· this setup has no recorded wins yet — no reward-to-risk makes it profitable`}
                 </span>
                 {trade.expectancy <= 0 && (
                   <span className="px-1.5 py-0.5 rounded border border-red-500/40 text-red-400">
