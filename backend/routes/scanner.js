@@ -371,7 +371,16 @@ router.get('/scan', async (req, res) => {
 
     const tickerList = req.query.tickers
       ? req.query.tickers.split(',').map(t => t.trim().toUpperCase())
-      : watchlist.slice(0, 40);
+      // Scan the FULL watchlist. This was capped at the first 40 entries, so
+      // 50 of the 90 stocks were never examined even once — the entire
+      // healthcare, consumer, industrial and ETF sections of the list, plus
+      // MSTR, COIN, PLTR and the rest. The same names kept surfacing because
+      // they were the only ones ever considered, and genuinely better setups
+      // elsewhere in the list were invisible.
+      //
+      // Affordable now that daily candles cache for 10 minutes: the extra
+      // names are mostly cache hits after the first scan.
+      : watchlist;
 
     const isCrypto = market === 'crypto';
     const isCommodities = market === 'commodities';
