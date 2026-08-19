@@ -57,6 +57,48 @@ function PositionRow({ pos, livePrice, onRemove, onUpdate }) {
     <div className={`bg-[#0e0e0e] border rounded-lg p-4 fade-in ${
       nearSL ? 'border-red-500/70 warn-pulse' : isLong ? 'border-green-500/30' : 'border-red-500/30'
     }`}>
+      {/* SCALE-OUT PROMPT — the step that turns a trade green.
+          Once price reaches the first target you bank a third and move the
+          stop to entry; from then on the position cannot become a loss.
+          Without this reminder in the tracker the plan lives only on the
+          scan card and is easy to miss while a trade is running. */}
+      {pos.tp0 != null && price != null && (() => {
+        const reached = isLong ? price >= pos.tp0 : price <= pos.tp0;
+        const dist = isLong ? pos.tp0 - price : price - pos.tp0;
+        const distPct = (dist / price) * 100;
+        if (pos.scaledOut) {
+          return (
+            <div className="rounded p-2 border border-green-500/40 bg-green-500/10 mb-2">
+              <div className="text-[11px] font-mono text-green-300">
+                ✓ First third banked · stop at breakeven (${pos.entry}) — this trade can no longer lose
+              </div>
+            </div>
+          );
+        }
+        if (reached) {
+          return (
+            <div className="rounded p-2 border border-green-500/50 bg-green-500/15 mb-2 warn-pulse">
+              <div className="text-[11px] font-mono text-green-300 font-bold mb-1">
+                🎯 First target hit (${pos.tp0}) — take a third off and move your stop to ${pos.entry}
+              </div>
+              <button
+                onClick={() => onUpdate(pos.id, { scaledOut: true, sl: pos.entry })}
+                className="text-[10px] font-mono font-bold bg-green-500/20 hover:bg-green-500/30 border border-green-500/50 text-green-200 rounded px-3 py-1">
+                ✓ Done — move stop to breakeven
+              </button>
+            </div>
+          );
+        }
+        return (
+          <div className="rounded p-2 border border-[#242424] bg-[#0a0a0a] mb-2">
+            <div className="text-[10px] font-mono text-[#888]">
+              Next: take a third at <span className="text-green-400">${pos.tp0}</span>
+              <span className="text-[#555]"> · {distPct.toFixed(1)}% away, then stop moves to breakeven</span>
+            </div>
+          </div>
+        );
+      })()}
+
       {nearSL && (
         <div className="bg-red-500/15 border border-red-500/40 rounded px-3 py-1.5 mb-3 text-[11px] text-red-400 font-mono font-bold">
           ⚠ APPROACHING STOP LOSS — Within 2% of SL

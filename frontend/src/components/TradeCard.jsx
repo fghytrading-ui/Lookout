@@ -781,7 +781,14 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
               entry: trade.entry,
               shares: recShares,
               tp: trade.tp,
-              sl: trade.sl
+              sl: trade.sl,
+              // Carry the scale plan into the position. Without it the tracker
+              // cannot tell you when to bank the first third and move the stop
+              // to breakeven — which is the entire mechanism behind the trade
+              // finishing green rather than red.
+              tp0: trade.tp0,
+              tp2: trade.tp2,
+              scaledOut: false
             })}
             className={`w-full py-2 text-[11px] font-mono font-bold tracking-wider rounded transition-all mb-3 border ${
               trade.direction === 'LONG'
