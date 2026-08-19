@@ -351,14 +351,22 @@ function buildCard(ticker, raw, quote, setup, signalData, historical, market = '
   };
 }
 
+// Ranking rebuilt from tracked outcomes. The previous order sorted by
+// probability tier first, then confidence, with reward-to-risk only as a
+// tiebreaker — and both leading keys turned out to be inverted against
+// reality: HIGH probability won 24% while MEDIUM won 39%, and signals scoring
+// 85+ won 26% while those under 65 won 38%. Since this ordering also decided
+// which candidates survived truncation, the system was discarding better
+// setups and keeping worse ones.
+//
+// Reward-to-risk leads now because it is the term that actually drives
+// expectancy: at a ~30% win rate, R:R is what separates a profitable trade
+// from a losing one. Confidence is kept only as a tiebreaker.
 function sortTrades(arr) {
   return arr.sort((a, b) => {
-    // 1. HIGH probability first
-    if (a.probability !== b.probability) return a.probability === 'HIGH' ? -1 : 1;
-    // 2. Higher confidence score
-    if (b.confidence !== a.confidence) return b.confidence - a.confidence;
-    // 3. Better R:R as final tiebreaker
-    return b.rrRatio - a.rrRatio;
+    const rrDiff = (b.rrRatio || 0) - (a.rrRatio || 0);
+    if (Math.abs(rrDiff) > 0.15) return rrDiff;     // meaningful R:R edge wins
+    return (b.confidence || 0) - (a.confidence || 0);
   });
 }
 
@@ -504,9 +512,16 @@ router.get('/scan', async (req, res) => {
       }
     }
 
-    trades.enterNow      = sortTrades(trades.enterNow).slice(0, 6);
-    trades.waitForBounce = sortTrades(trades.waitForBounce).slice(0, 4);
-    trades.carryForward  = sortTrades(trades.carryForward).slice(0, 6);
+    // Candidates kept for full examination. This was 6/4/6 — sixteen out of
+    // roughly fifty-five valid setups — so about forty were discarded before
+    // their news, catalysts, analyst ratings or reviewer checks ever ran, on
+    // the strength of a ranking that was itself inverted. Widening the funnel
+    // means the reviewer chooses from what the market actually offered rather
+    // than from a poorly-chosen shortlist. Final display limits still apply
+    // further down, so the user still sees a focused list.
+    trades.enterNow      = sortTrades(trades.enterNow).slice(0, 14);
+    trades.waitForBounce = sortTrades(trades.waitForBounce).slice(0, 8);
+    trades.carryForward  = sortTrades(trades.carryForward).slice(0, 13);
 
     // ── Enrich ONLY the most important cards (saves API calls) ─────────────
     // Enrich EVERY surviving card. Enrichment used to be limited to a
@@ -524,7 +539,12 @@ router.get('/scan', async (req, res) => {
     // overlapped and the page never settled. Batching concurrently brings it
     // back under control while still pacing requests.
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-    const ENRICH_CONCURRENCY = 5;
+    // Raised 5 -> 9. Widening the review funnel from 16 to 35 candidates
+    // tripled the enrichment work and pushed a cold scan to ~79s. Each card's
+    // four lookups already run in parallel; batching more cards alongside them
+    // brings it back under control. Finnhub's own limiter still paces its
+    // share, and analyst data caches for 12h so repeat scans barely touch it.
+    const ENRICH_CONCURRENCY = 9;
 
     const enrichCard = async (card) => {
       try {
@@ -630,7 +650,11 @@ router.get('/scan', async (req, res) => {
     const weeklyTrendMap = {};
     // Weekly trend not used for crypto (BTC trend covers macro role instead)
     if (!isCrypto) {
-      const topForWeekly = reviewCandidates.slice(0, 12);
+      // Every reviewed card, not the first twelve. The weekly-trend check is a
+      // hard reject rule ("do not long against the weekly chart"), so applying
+      // it to only part of the list meant cards ranked lower silently skipped
+      // a safety check the others had to pass.
+      const topForWeekly = reviewCandidates;
       await Promise.allSettled(topForWeekly.map(async (c) => {
         weeklyTrendMap[c.ticker] = await getWeeklyTrend(c.ticker);
       }));
