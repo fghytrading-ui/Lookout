@@ -26,11 +26,28 @@ router.get('/batch', async (req, res) => {
 
     let quotes = {};
 
-    // 1. If Finnhub is enabled, use it for supported tickers (real-time, fast)
+    // 1. Finnhub for the tickers that actually need real-time pricing.
+    //
+    // Every supported ticker used to be sent, so a ~20-symbol ticker tape
+    // polling every 10 seconds consumed the entire 60-calls/minute budget on
+    // a decorative price strip — and the trades and open positions that
+    // genuinely need live pricing were left on delayed Yahoo data.
+    //
+    // The caller marks what matters with ?priority=. Those go to Finnhub
+    // first; the remainder is served by Yahoo, which is perfectly adequate
+    // for a scrolling tape.
     if (FINNHUB_ENABLED) {
-      const finnhubTickers = tickers.filter(isFinnhubSupported);
+      const priority = (req.query.priority || '')
+        .split(',').map(t => t.trim().toUpperCase()).filter(Boolean);
+      const supported = tickers.filter(isFinnhubSupported);
+      const ordered = [
+        ...supported.filter(t => priority.includes(t)),
+        ...supported.filter(t => !priority.includes(t))
+      ];
+      // Cap per request so one call cannot drain the minute's allowance
+      const forFinnhub = ordered.slice(0, priority.length ? Math.max(12, priority.length) : 12);
       try {
-        quotes = await fetchFinnhubBatch(finnhubTickers, { concurrency: 5 });
+        quotes = await fetchFinnhubBatch(forFinnhub, { concurrency: 5 });
       } catch (e) {
         // If Finnhub fails entirely, fall through to Yahoo for everything
       }

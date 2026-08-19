@@ -8,57 +8,64 @@ export const FINNHUB_ENABLED = !!API_KEY;
 
 const BASE = 'https://finnhub.io/api/v1';
 const cache = new Map();
-const TTL = 8_000; // 8s — Finnhub real-time, near-instant
+// 20s rather than 8s. The tape polls every 10s across ~20 symbols; at an
+// 8-second TTL almost every poll was a cache miss, spending the entire
+// minute's budget on a decorative price strip. Twenty-second-old Finnhub
+// data is still far fresher than the 15-minute-delayed Yahoo fallback.
+const TTL = 20_000;
 registerCache('finnhub-quotes', cache);
 
 // ── RATE LIMITER ─────────────────────────────────────────────────────────
-// The free tier allows 60 calls/min. The previous batch fetcher fired chunks
-// back-to-back with no pacing, so a 40-ticker refresh every 10s produced
-// ~240 calls/min — four times the cap. Finnhub throttled the key and the app
-// silently degraded to delayed Yahoo data without ever reporting it.
+// The free tier allows 60 calls/min. Two things were burning it:
 //
-// Token bucket: 60 tokens, refilled continuously at 1/sec. If no token is
-// available we skip the call entirely rather than spending it on a guaranteed
-// 429 — the caller falls back to Yahoo, and we stay under the cap so the key
-// recovers instead of staying throttled.
-const MAX_TOKENS = 55;              // headroom under the 60/min ceiling
-const REFILL_PER_MS = 55 / 60_000;  // tokens per millisecond
-let tokens = MAX_TOKENS;
-let lastRefill = Date.now();
+//  1. The original batch fetcher fired chunks with no pacing at all.
+//  2. The token bucket that replaced it still overshot. A full bucket (55)
+//     could be spent immediately AND refill through the same minute, so the
+//     real ceiling was ~110 calls/min — the key kept getting throttled while
+//     the limiter still reported budget remaining.
+//
+// This is an exact sliding window instead: every call timestamp is recorded
+// and a new call is only allowed when fewer than MAX_PER_MIN sit inside the
+// trailing 60 seconds. No burst can exceed the cap.
+const MAX_PER_MIN = 50;           // headroom under the 60/min ceiling
+let callTimes = [];               // timestamps of calls in the trailing minute
 
 // Throttle state, exposed so the UI can tell the truth about the data source
 let throttledUntil = 0;
 let lastThrottleReason = null;
 
-function refill() {
-  const now = Date.now();
-  tokens = Math.min(MAX_TOKENS, tokens + (now - lastRefill) * REFILL_PER_MS);
-  lastRefill = now;
+function pruneWindow() {
+  const cutoff = Date.now() - 60_000;
+  if (callTimes.length && callTimes[0] < cutoff) {
+    callTimes = callTimes.filter(t => t >= cutoff);
+  }
 }
 
 function takeToken() {
-  refill();
-  if (tokens >= 1) { tokens -= 1; return true; }
-  return false;
+  pruneWindow();
+  if (callTimes.length >= MAX_PER_MIN) return false;
+  callTimes.push(Date.now());
+  return true;
 }
 
 export function getFinnhubHealth() {
-  refill();
+  pruneWindow();
   const throttled = Date.now() < throttledUntil;
   return {
     enabled: FINNHUB_ENABLED,
     throttled,
     reason: throttled ? lastThrottleReason : null,
-    tokensAvailable: Math.floor(tokens),
-    capacity: MAX_TOKENS,
+    usedThisMinute: callTimes.length,
+    capacity: MAX_PER_MIN,
+    tokensAvailable: Math.max(0, MAX_PER_MIN - callTimes.length),
     retryInSec: throttled ? Math.ceil((throttledUntil - Date.now()) / 1000) : 0
   };
 }
 
-function markThrottled(reason, cooldownMs = 60_000) {
+function markThrottled(reason, cooldownMs = 90_000) {
   throttledUntil = Date.now() + cooldownMs;
   lastThrottleReason = reason;
-  tokens = 0;  // drain — stop hammering while the key recovers
+  callTimes = new Array(MAX_PER_MIN).fill(Date.now());  // block until window clears
 }
 
 // Fetch a single live quote — works for US stocks
@@ -83,16 +90,25 @@ export async function fetchFinnhubQuote(ticker) {
       timeout: 6000
     }));
   } catch (err) {
-    // 429 means we are already over the cap — back off for a full minute
+    // Only an actual rate-limit response should stop the whole integration.
     if (err.response?.status === 429) {
       markThrottled('Rate limit exceeded (60 calls/min free tier)');
     }
     throw err;
   }
 
+  // A per-symbol error is NOT a rate limit. Finnhub returns an error object
+  // for symbols the free tier cannot serve, and treating that as a global
+  // throttle meant one unsupported ETF in the ticker tape disabled real-time
+  // pricing for every symbol — the app then ran on delayed Yahoo data and
+  // displayed "FINNHUB LIMIT" while the key was healthy with 49 of 60 calls
+  // still available. Only genuine rate-limit wording trips the breaker.
   if (data?.error) {
-    markThrottled(String(data.error));
-    throw new Error(String(data.error));
+    const msg = String(data.error);
+    if (/rate limit|too many requests|limit reached/i.test(msg)) {
+      markThrottled(msg);
+    }
+    throw new Error(msg);
   }
 
   if (!data || data.c == null || data.c === 0) {

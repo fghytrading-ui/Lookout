@@ -222,7 +222,12 @@ export default function DashboardPage({ market = 'stocks', title = null }) {
   const fetchTickerPrices = useCallback(async (extraTickers = []) => {
     try {
       const tickers = [...new Set([...TICKER_TAPE, ...extraTickers])].join(',');
-      const r = await fetch(`/api/quotes/batch?tickers=${tickers}`);
+      // extraTickers are the live trades and open positions — the prices that
+      // must be real-time. Flagging them as priority keeps the limited
+      // real-time quota on those rather than on the decorative ticker tape.
+      const priority = [...new Set(extraTickers)].join(',');
+      const url = `/api/quotes/batch?tickers=${tickers}` + (priority ? `&priority=${priority}` : '');
+      const r = await fetch(url);
       const d = await r.json();
       setTickerPrices(d);
     } catch { /* silently fail */ }
