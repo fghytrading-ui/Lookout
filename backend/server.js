@@ -52,6 +52,53 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+// Full data-source roster. The old badge only reported the PRICE feed, so
+// the UI showed "FINNHUB + YAHOO" while CoinGecko, Binance, ForexFactory and
+// the analyst/news feeds were all running unmentioned. This reports every
+// source and what it drives, so the badge can tell the truth.
+app.get('/api/system/sources', async (req, res) => {
+  const finnhub = getFinnhubHealth();
+  const probe = async (fn) => { try { return await fn(); } catch { return false; } };
+
+  const [cryptoCtx, calendarOk] = await Promise.all([
+    probe(async () => {
+      const { getCryptoContext } = await import('./lib/cryptoContext.js');
+      return await getCryptoContext();
+    }),
+    probe(async () => {
+      const { fetchLiveEconomicEvents } = await import('./lib/economicCalendarLive.js');
+      const e = await fetchLiveEconomicEvents();
+      return Array.isArray(e) && e.length > 0;
+    })
+  ]);
+
+  const sources = [
+    { name: 'Yahoo Finance', drives: 'Prices, candles, pre/post market',
+      active: true },
+    { name: 'Finnhub Quotes', drives: 'Real-time US stock prices',
+      active: finnhub.enabled && !finnhub.throttled },
+    { name: 'Finnhub News', drives: 'Company news for catalyst detection',
+      active: finnhub.enabled },
+    { name: 'Finnhub Analysts', drives: 'Buy/sell ratings and rating changes',
+      active: finnhub.enabled },
+    { name: 'Binance', drives: 'Crypto 4h candles, VWAP, funding rates',
+      active: !!cryptoCtx?.funding },
+    { name: 'CoinGecko', drives: 'BTC dominance, total crypto market cap',
+      active: !!cryptoCtx?.global?.btcDominance },
+    { name: 'Fear & Greed', drives: 'Crypto sentiment extremes',
+      active: cryptoCtx?.fearGreed?.value != null },
+    { name: 'Economic Calendar', drives: 'FOMC, CPI, jobs, EIA inventories',
+      active: !!calendarOk }
+  ];
+
+  res.json({
+    sources,
+    activeCount: sources.filter(s => s.active).length,
+    totalCount: sources.length,
+    timestamp: new Date().toISOString()
+  });
+});
+
 app.get('/api/system/status', (req, res) => {
   const dataSource = POLYGON_ENABLED ? 'polygon'
                   : FINNHUB_ENABLED ? 'finnhub+yahoo'

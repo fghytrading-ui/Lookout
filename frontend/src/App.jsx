@@ -21,6 +21,8 @@ const NAV = [
 export default function App() {
   const [view, setView] = useState('dashboard');
   const [dataSource, setDataSource] = useState(null);
+  const [sources, setSources] = useState(null);
+  const [showSources, setShowSources] = useState(false);
 
   useEffect(() => {
     fetch('/api/system/status')
@@ -31,6 +33,12 @@ export default function App() {
     // the server lost its disk to a Render free-tier restart. Runs on every
     // app load so the learning history survives even if the user never opens
     // the Performance page.
+    // Full source roster — the badge previously named only the price feed,
+    // which made it look like just two sources were running.
+    fetch('/api/system/sources')
+      .then(r => r.json())
+      .then(setSources)
+      .catch(() => {});
     syncSignalBackup().catch(() => {});
   }, []);
 
@@ -49,7 +57,10 @@ export default function App() {
               <div className="text-[9px] text-[#333] font-mono tracking-widest hidden sm:block">TRADING INTELLIGENCE</div>
             </div>
             {dataSource && (
-              <span className={`text-[9px] font-mono px-2 py-0.5 rounded border ml-2 ${
+              <button
+                onClick={() => setShowSources(v => !v)}
+                title="Click to see every live data source"
+                className={`text-[9px] font-mono px-2 py-0.5 rounded border ml-2 cursor-pointer ${
                 dataSource === 'polygon'       ? 'border-green-500/40 text-green-300 bg-green-500/10' :
                 dataSource === 'finnhub+yahoo' ? 'border-cyan-500/40 text-cyan-300 bg-cyan-500/10' :
                 dataSource === 'throttled'     ? 'border-amber-500/50 text-amber-300 bg-amber-500/10' :
@@ -64,7 +75,8 @@ export default function App() {
                 {dataSource === 'finnhub+yahoo' && '⚡ FINNHUB + YAHOO'}
                 {dataSource === 'throttled'     && '⚠ DELAYED — FINNHUB LIMIT'}
                 {dataSource === 'yahoo'         && '🟡 YAHOO'}
-              </span>
+                {sources && <span className="ml-1 opacity-70">· {sources.activeCount}/{sources.totalCount} feeds</span>}
+              </button>
             )}
           </div>
 
@@ -86,6 +98,30 @@ export default function App() {
           </div>
         </div>
       </nav>
+
+      {/* Data-source panel — every feed and what it drives */}
+      {showSources && sources && (
+        <div className="mx-4 mt-3 p-3 rounded border border-[#1a1a1a] bg-[#0a0a0a]">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[10px] uppercase tracking-widest text-[#666] font-mono">
+              Live data sources — {sources.activeCount} of {sources.totalCount} active
+            </span>
+            <button onClick={() => setShowSources(false)}
+              className="text-[10px] text-[#555] hover:text-[#999] font-mono">close ✕</button>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+            {sources.sources.map(s => (
+              <div key={s.name} className="flex items-start gap-2 text-[11px] font-mono">
+                <span className={s.active ? 'text-green-400' : 'text-red-400'}>
+                  {s.active ? '✓' : '✗'}
+                </span>
+                <span className={`font-bold ${s.active ? 'text-[#ccc]' : 'text-[#555]'}`}>{s.name}</span>
+                <span className="text-[#555] text-[10px]">— {s.drives}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* ── Active view ─────────────────────────────────────────────────── */}
       {view === 'dashboard'   && <DashboardPage />}
