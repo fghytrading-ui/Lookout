@@ -14,6 +14,7 @@ import { analyseCatalysts, catalystSignals } from '../lib/catalystEngine.js';
 import { fetchRecommendationTrend } from '../lib/finnhubData.js';
 import { buildThesis } from '../lib/thesis.js';
 import { getUpcomingMacro, buildEventTimeline } from '../lib/upcomingEvents.js';
+import { getMarketUniverse } from '../lib/marketUniverse.js';
 import {
   analyzeSignals, generateTradeSetup, calculateSMA,
   TIME_SPANS, getTimespanKey, getExitWindow, generateAnalystNotes
@@ -369,17 +370,26 @@ router.get('/scan', async (req, res) => {
                     : market === 'crypto' ? CRYPTO_WATCHLIST
                     : WATCHLIST;
 
+    // ── SCAN UNIVERSE ───────────────────────────────────────────────
+    // Stocks are scanned against a universe rebuilt from the live market each
+    // session — today's most active names, biggest gainers and losers, and the
+    // growth/value screens — rather than a fixed list. A hardcoded watchlist
+    // guarantees the same names recur regardless of what is actually moving;
+    // this way a stock appears because it is doing something today. The
+    // curated list stays in as a quality floor.
+    let universeMeta = null;
+    let dynamicList = null;
+    if (market === 'stocks' && !req.query.tickers) {
+      try {
+        universeMeta = await getMarketUniverse(WATCHLIST, { max: 150 });
+        if (universeMeta?.tickers?.length) dynamicList = universeMeta.tickers;
+      } catch { /* fall back to the curated watchlist */ }
+    }
+
     const tickerList = req.query.tickers
       ? req.query.tickers.split(',').map(t => t.trim().toUpperCase())
-      // Scan the FULL watchlist. This was capped at the first 40 entries, so
-      // 50 of the 90 stocks were never examined even once — the entire
-      // healthcare, consumer, industrial and ETF sections of the list, plus
-      // MSTR, COIN, PLTR and the rest. The same names kept surfacing because
-      // they were the only ones ever considered, and genuinely better setups
-      // elsewhere in the list were invisible.
-      //
-      // Affordable now that daily candles cache for 10 minutes: the extra
-      // names are mostly cache hits after the first scan.
+      : dynamicList ? dynamicList
+      // Fallback: the full curated watchlist (all 90, not a slice of it).
       : watchlist;
 
     const isCrypto = market === 'crypto';
@@ -835,6 +845,12 @@ router.get('/scan', async (req, res) => {
       entryTiming,
       enterNowEmptyReason,
       scannedCount: tickerList.length,
+      universe: universeMeta ? {
+        total: universeMeta.total,
+        fromScreens: universeMeta.fromScreens,
+        fromWatchlist: universeMeta.fromWatchlist,
+        sources: universeMeta.sources
+      } : null,
       passedFilter: allCards.length,
       timestamp: new Date().toISOString()
     });

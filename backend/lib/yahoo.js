@@ -253,12 +253,12 @@ export async function fetchBatch(tickers, { concurrency = 3, delayMs = 600 } = {
   return results;
 }
 
-// Concurrency raised 3 -> 6 and the inter-chunk pause cut 600ms -> 350ms.
-// The watchlist went from 40 names to all 90, which pushed a cold scan to
-// ~110s at the old pacing — unacceptable when the host sleeps and most visits
-// start cold. Yahoo tolerates the higher rate given daily candles now cache
-// for 10 minutes, so warm scans barely touch the network at all.
-export async function fetchFullBatch(tickers, { concurrency = 6, delayMs = 350 } = {}) {
+// Pacing tuned for a ~200-name universe. At concurrency 3 / 600ms a full scan
+// took over two and a half minutes, which is unusable when the host sleeps and
+// most visits start cold. Yahoo tolerates this rate because daily candles cache
+// for 10 minutes, so only the first scan of each window actually hits the
+// network; the retry/backoff path still handles any 429s that do occur.
+export async function fetchFullBatch(tickers, { concurrency = 12, delayMs = 120 } = {}) {
   const results = {};
   const chunks  = [];
   for (let i = 0; i < tickers.length; i += concurrency) chunks.push(tickers.slice(i, i + concurrency));
