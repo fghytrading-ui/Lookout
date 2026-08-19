@@ -214,18 +214,6 @@ export function getAggregateStats({ lookbackDays = 30 } = {}) {
   const closed = allRecent.filter(s => s.status === 'CLOSED');
   const open = allRecent.filter(s => s.status === 'OPEN');
 
-  // Expectancy in units of risk: (winRate x R:R) - (1 - winRate).
-  // This, not hit rate, decides whether a strategy makes money. A 28% hit
-  // rate at R:R 3.0 is profitable; a 65% hit rate at R:R 0.4 is not.
-  const expectancy = (arr) => {
-    if (!arr.length) return null;
-    const wins = arr.filter(s => s.outcome === 'WIN').length;
-    const w = wins / arr.length;
-    const rr = arr.reduce((a, s) => a + (s.rrRatio || 0), 0) / arr.length;
-    return { winRate: w, avgRR: rr, expectancy: (w * rr) - (1 - w),
-             breakEvenWinRate: rr > 0 ? 1 / (1 + rr) : null };
-  };
-
   const byField = (field) => {
     const map = {};
     for (const s of closed) {
@@ -262,16 +250,6 @@ export function getAggregateStats({ lookbackDays = 30 } = {}) {
     overallWinRate: closed.length
       ? closed.filter(s => s.outcome === 'WIN').length / closed.length
       : null,
-    // The headline number that actually matters
-    expectancy: expectancy(closed),
-    expectancyByMarket: Object.fromEntries(
-      [...new Set(closed.map(s => s.market))]
-        .map(m => [m, expectancy(closed.filter(s => s.market === m))])
-    ),
-    expectancyByDirection: Object.fromEntries(
-      [...new Set(closed.map(s => s.direction))]
-        .map(d => [d, expectancy(closed.filter(s => s.direction === d))])
-    ),
     byMarket: byField('market'),
     bySetupType: byField('setupType'),
     byVerdict: byField('reviewVerdict'),
