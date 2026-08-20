@@ -481,6 +481,21 @@ router.get('/scan', async (req, res) => {
       const setup      = generateTradeSetup(quote, historical, signalData, { market, tradeStyle });
       if (!setup) continue;
 
+      // ── SHORTS REQUIRE A BEARISH MARKET ─────────────────────────────
+      // Across 164 resolved signals, longs won 31% while shorts won 15% —
+      // and every short category was negative: Trend Continuation Short went
+      // 0 for 22, Rally Short 1 for 8. The pattern is consistent with
+      // shorting into a market that keeps rising, where a falling stock is
+      // usually a pullback inside an uptrend rather than the start of a
+      // decline. Shorts are now only generated when the broad market is
+      // genuinely bearish, which is the regime where they historically work.
+      //
+      // Crypto is exempt: it has its own BTC-trend gate, and crypto shorts
+      // have actually been the better side there.
+      if (setup.direction === 'SHORT' && !isCrypto && marketRegime !== 'BEARISH') {
+        continue;
+      }
+
       // Regime filter is now a confidence-boost signal (added in analyzeSignals),
       // not a hard reject — we still allow counter-trend setups if they are strong.
 
@@ -492,6 +507,15 @@ router.get('/scan', async (req, res) => {
       }
       // Classify the setup type — tells user WHAT KIND of trade this is
       card.setupType = classifySetup(quote, historical, { ...signalData, direction: setup.direction });
+
+      // ── RETIRED SETUPS ──────────────────────────────────────────────
+      // Patterns with no wins at a meaningful sample size are not shown at
+      // all. Reversal Long is 0 for 10 — catching a falling knife — and the
+      // automatic block only engages at 15 samples, so it kept appearing
+      // while never once working. Blocking these from ENTER NOW was not
+      // enough: they stayed visible and could still be taken.
+      const RETIRED_SETUPS = ['🔄 Reversal Long'];
+      if (RETIRED_SETUPS.includes(card.setupType?.label)) continue;
       // Flag whether indicators included a live forming bar, so the UI can be
       // honest about how current the analysis is
       card.liveBar = historical[historical.length - 1]?.isLive === true

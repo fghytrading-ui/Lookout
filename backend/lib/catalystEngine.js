@@ -27,6 +27,9 @@ const CATALYSTS = [
   { id: 'deal_collapse', dir: 'bearish', impact: 10, blocks: true,
     label: 'Deal collapsed / terminated',
     patterns: [/\b(deal|merger|acquisition|takeover) (is )?(off|dead|collapsed?|terminated|abandoned|scrapped)\b/i,
+               // "<Deal> called off" with no trailing noun — a very common
+               // headline form that the deal-first pattern above misses.
+               /\b(deal|merger|acquisition|takeover|buyout)\b.{0,20}\b(called|nixed|shelved|pulled)\s+off\b/i,
                /\bcalls? off\b.{0,30}\b(deal|merger|acquisition)\b/i,
                /\b(walks?|walked) away from\b/i, /\bblocks? .{0,25}(merger|acquisition|deal)\b/i,
                /\bantitrust (suit|challenge|lawsuit) .{0,20}(block|halt)/i,
