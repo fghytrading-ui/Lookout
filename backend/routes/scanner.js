@@ -10,13 +10,14 @@ import { fetchCryptoCandlesBatch, computeSessionVWAP } from '../lib/cryptoCandle
 import { getInventoryReleases, evaluateInventoryRisk } from '../lib/inventoryReleases.js';
 import { logSignal, getSetupTypeStats } from '../lib/signalLog.js';
 import { withLiveBar } from '../lib/liveBar.js';
+import { fetchIntradayBatch } from '../lib/intradayCandles.js';
 import { analyseCatalysts, catalystSignals } from '../lib/catalystEngine.js';
 import { fetchRecommendationTrend } from '../lib/finnhubData.js';
 import { buildThesis } from '../lib/thesis.js';
 import { getUpcomingMacro, buildEventTimeline } from '../lib/upcomingEvents.js';
 import { getMarketUniverse } from '../lib/marketUniverse.js';
 import {
-  analyzeSignals, generateTradeSetup, calculateSMA,
+  analyzeSignals, generateTradeSetup, calculateSMA, calculateATR,
   TIME_SPANS, getTimespanKey, getExitWindow, generateAnalystNotes
 } from '../utils/signals.js';
 import { getEntryTiming } from '../utils/market.js';
@@ -311,10 +312,20 @@ function buildCard(ticker, raw, quote, setup, signalData, historical, market = '
     // "same day / no overnight risk", but targets wide enough to be profitable
     // take ~1-2 sessions to reach — claiming otherwise would have had users
     // closing winners early or being surprised by an overnight hold.
+    // Horizon is stated from the computed estimate rather than a fixed phrase.
+    // With a 2.2% minimum stop and a 2:1 floor, targets land at 5-9% of price,
+    // which genuinely takes several sessions — and the tracked data agrees:
+    // trades held 24-48h won 50% while those resolving inside six hours won
+    // 10%. Claiming "1 to 2 sessions" would understate the hold and push the
+    // user to close winners early.
     timeSpan: tradeStyle === 'crypto' ? 'Short-term — 1 to 3 sessions (12–60h)'
+            : (expectedDays != null)
+              ? `Short-term — about ${expectedDays} session${expectedDays === 1 ? '' : 's'}`
             : tradeStyle === 'sameDay' ? 'Short-term — 1 to 2 sessions'
             : TIME_SPANS[tsKey].label,
     exitWindow: tradeStyle === 'crypto' ? 'Within the next 1–3 active sessions — 24/7 market'
+              : (expectedDays2 != null)
+                ? `Scale at target 1 within ~${expectedDays} session${expectedDays === 1 ? '' : 's'}; runner up to ~${expectedDays2}`
               : tradeStyle === 'sameDay' ? 'Typically next session; hard exit after 2 sessions'
               : getExitWindow(tsKey),
     // Intraday-specific timing windows (UK time)
@@ -418,6 +429,15 @@ router.get('/scan', async (req, res) => {
     // Single call per ticker: quote + 3mo candles (Yahoo for everything)
     const fullMap = await fetchFullBatch(tickerList);
 
+    // Equities move to hourly bars. Daily candles give one price per session,
+    // which is enough to read trend but blind for timing an entry — and the
+    // outcome data put 62% of losses inside six hours having travelled only
+    // 24% toward target, the signature of a badly-timed entry rather than a
+    // bad target. Hourly bars let RSI, MACD and support/resistance respond
+    // within the session. Daily candles are kept for the duration estimate,
+    // where hourly ATR does not scale correctly.
+    const dailyAtrMap = {};
+
     // For crypto: replace daily Yahoo candles with intraday 4h Binance klines.
     // Quote (price/52w/avgVol) stays from Yahoo — works fine.
     // Candles drive ATR/RSI/MACD/SMA which now operate at 4h resolution.
@@ -455,6 +475,21 @@ router.get('/scan', async (req, res) => {
     // shared across every card — a setup can look perfect and still be a bad
     // trade because CPI drops in six hours.
     const upcomingMacro = await getUpcomingMacro({ windowHours: 48 }).catch(() => []);
+
+    // MACRO BLACKOUT — a top-tier release inside six hours. Stops and position
+    // sizing mean little through a CPI or FOMC print: price gaps straight
+    // through the level. New entries are barred until it clears, while the
+    // candidates remain visible so the user can prepare rather than face an
+    // unexplained empty board.
+    const blackoutEvent = (upcomingMacro || [])
+      .filter(e => e.impact >= 9 && e.hoursUntil <= 6 && e.hoursUntil > -1)
+      .sort((a, b) => b.impact - a.impact)[0] || null;
+    const macroBlackout = blackoutEvent ? {
+      event: blackoutEvent.label,
+      when: blackoutEvent.when,
+      hoursUntil: blackoutEvent.hoursUntil,
+      message: `${blackoutEvent.label} ${blackoutEvent.when} — no new entries until it clears. Price gaps through stops on these releases.`
+    } : null;
 
     const trades = { enterNow: [], waitForBounce: [], carryForward: [] };
 
@@ -524,6 +559,8 @@ router.get('/scan', async (req, res) => {
       // Stash for the reviewer pass (stripped before sending to client)
       card._historical = historical;
       card._signalData = signalData;
+      card._quote = quote;                         // reused by hourly refinement
+      card._dailyAtr = signalData.atr;             // duration maths stays in sessions
       const chg  = raw.changePercent || 0;
       const hasGap = setup.warnings.some(w => w.text?.includes('Gap-up'));
 
@@ -548,6 +585,67 @@ router.get('/scan', async (req, res) => {
     trades.carryForward  = sortTrades(trades.carryForward).slice(0, 13);
 
     // ── Enrich ONLY the most important cards (saves API calls) ─────────────
+    // ── HOURLY REFINEMENT ───────────────────────────────────────────
+    // Screening runs on daily bars because it is cheap and cached, but daily
+    // bars are blind for timing an entry: 62% of tracked losses resolved
+    // inside six hours having travelled only 24% toward target, which is an
+    // entry-timing failure rather than a bad target.
+    //
+    // Fetching hourly bars for the whole 150-name universe was the obvious
+    // approach and it broke everything — request volume doubled, Yahoo
+    // returned 267 rate-limit retries, and BOTH series started failing, so a
+    // scan produced zero setups and took five minutes. Refinement is
+    // therefore limited to the candidates that already survived screening:
+    // roughly 35 requests instead of 150, on exactly the names where entry
+    // precision actually matters.
+    //
+    // Levels are only replaced when the hourly setup agrees on direction and
+    // still clears every gate; otherwise the daily setup stands.
+    if (market === 'stocks') {
+      const refineTargets = [...trades.enterNow, ...trades.waitForBounce, ...trades.carryForward];
+      const hourlyMap = await fetchIntradayBatch(refineTargets.map(c => c.ticker)).catch(() => ({}));
+      let refined = 0;
+      for (const card of refineTargets) {
+        const hourly = hourlyMap[card.ticker];
+        if (!hourly || hourly.length < 120) continue;
+        try {
+          const quote = card._quote;
+          if (!quote) continue;
+          const hSignals = analyzeSignals(quote, hourly, marketRegime);
+          const hSetup = generateTradeSetup(quote, hourly, hSignals, {
+            market, tradeStyle: 'intradayStock', dailyAtr: card._dailyAtr
+          });
+          if (!hSetup || hSetup.direction !== card.direction) continue;
+          // Reject a refinement that turns a short-term trade into a
+          // multi-week hold. Hourly bars can place a target far enough out
+          // that the duration estimate runs to 20+ sessions — accurate, but
+          // no longer the trade being offered. Keep the daily setup instead.
+          if (!(hSetup.expectedDays > 0) || hSetup.expectedDays > 8) continue;
+          card.entry = hSetup.entry;   card.entryLow = hSetup.entryLow; card.entryHigh = hSetup.entryHigh;
+          card.tp = hSetup.tp;         card.tp2 = hSetup.tp2;           card.tp0 = hSetup.tp0;
+          card.sl = hSetup.sl;         card.rrRatio = hSetup.rrRatio;   card.rrRatio2 = hSetup.rrRatio2;
+          card.rrRatio0 = hSetup.rrRatio0; card.scalePlan = hSetup.scalePlan;
+          card.tpPct  = parseFloat(Math.abs((hSetup.tp  - hSetup.entry) / hSetup.entry * 100).toFixed(1));
+          card.tp2Pct = parseFloat(Math.abs((hSetup.tp2 - hSetup.entry) / hSetup.entry * 100).toFixed(1));
+          card.slPct  = parseFloat(Math.abs((hSetup.sl  - hSetup.entry) / hSetup.entry * 100).toFixed(1));
+          card.expectedDays = hSetup.expectedDays; card.expectedDays2 = hSetup.expectedDays2;
+          card.expectedHours = hSetup.expectedHours; card.expectedHours2 = hSetup.expectedHours2;
+          card.confirmation = hSetup.confirmation;
+          card.timeSpan = `Short-term — about ${hSetup.expectedDays} session${hSetup.expectedDays === 1 ? '' : 's'}`;
+          card.exitWindow = `Scale at target 1 within ~${hSetup.expectedDays} session${hSetup.expectedDays === 1 ? '' : 's'}; runner up to ~${hSetup.expectedDays2}`;
+          card.timingSource = 'hourly';
+          // Deliberately NOT swapping _signalData/_historical. The reviewer's
+          // thresholds — five-bar extended move, today's range against ATR,
+          // volatility limits — are all calibrated against daily bars. Handing
+          // it the hourly series made "five days" mean five hours and rejected
+          // every candidate. Hourly improves WHERE the levels sit; the daily
+          // series still governs whether the trade is sane.
+          refined++;
+        } catch { /* keep the daily setup */ }
+      }
+      if (refined) console.log(`  ✓ Refined ${refined}/${refineTargets.length} setups on hourly bars`);
+    }
+
     // Enrich EVERY surviving card. Enrichment used to be limited to a
     // handful to save API calls, but the catalyst analysis and trade thesis
     // are now the core of the decision — a card with no reason attached
@@ -725,6 +823,8 @@ router.get('/scan', async (req, res) => {
         delete card._historical;
         delete card._signalData;
         delete card._catalystAnalysis;
+        delete card._quote;
+        delete card._dailyAtr;
         card.review = review;
         card.weeklyTrend = weeklyTrendMap[card.ticker] || null;
 
@@ -760,7 +860,8 @@ router.get('/scan', async (req, res) => {
       // Mixed market: tighter than normal — PASS only (CAUTION dropped from
       // eligibility since it wins at the same rate as PASS in tracked data).
       if (isMixed) {
-        if (card.setupBlocked) { demoted.push(card); return false; }
+        if (macroBlackout) { demoted.push(card); return false; }
+      if (card.setupBlocked) { demoted.push(card); return false; }
         const passes = card.probability === 'HIGH' && card.review?.verdict === 'PASS' && rr >= 1.7 && hasConfirmation;
         if (passes) return true;
         demoted.push(card);
@@ -769,6 +870,7 @@ router.get('/scan', async (req, res) => {
       // FEEDBACK LOOP v2 tightening: data showed PASS and CAUTION win at the
       // same 31% rate, so CAUTION no longer earns the ENTER NOW slot. Blocked
       // setups (auto-flagged by historical <25% win rate) are also barred.
+      if (macroBlackout) { demoted.push(card); return false; }
       if (card.setupBlocked) { demoted.push(card); return false; }
       // Negative expectancy = a trade that loses money if repeated. Never a
       // top pick, however clean the chart looks.
@@ -892,6 +994,7 @@ router.get('/scan', async (req, res) => {
       inventoryReleases,
       entryTiming,
       enterNowEmptyReason,
+      macroBlackout,
       scannedCount: tickerList.length,
       universe: universeMeta ? {
         total: universeMeta.total,

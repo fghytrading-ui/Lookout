@@ -290,12 +290,12 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
               <span className={`text-[11px] font-mono font-bold tracking-wider ${
                 trade.tradeStyle === 'crypto' ? 'text-purple-300' : 'text-amber-300'
               }`}>
-                {trade.tradeStyle === 'crypto' ? '₿ CRYPTO — 24/7 MARKET' : '⏰ SHORT-TERM — 1 TO 2 SESSIONS'}
+                {trade.tradeStyle === 'crypto' ? '₿ CRYPTO — 24/7 MARKET' : `⏰ ${(trade.timeSpan || 'SHORT-TERM').toUpperCase()}`}
               </span>
               <span className={`text-[9px] font-mono ${
                 trade.tradeStyle === 'crypto' ? 'text-purple-400/70' : 'text-amber-400/70'
               }`}>
-                {trade.tradeStyle === 'crypto' ? 'No bell — close within 1–3 sessions' : 'May hold overnight — size accordingly'}
+                {trade.tradeStyle === 'crypto' ? 'No bell — close within 1–3 sessions' : 'Holds overnight — size accordingly'}
               </span>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-[11px] font-mono">

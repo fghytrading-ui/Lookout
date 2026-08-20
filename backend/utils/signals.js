@@ -279,10 +279,17 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
   }
 
   // ── Volatility band: not too dead, not too crazy ────────────────────
+  // Thresholds are per-bar, so they must track the bar size. An hourly equity
+  // bar carries roughly 0.75% ATR against ~2.5% on a daily bar; applying the
+  // daily floor of 0.7% to hourly data would have rejected nearly every stock
+  // as "too quiet" the moment the timeframe changed.
   const atrPct = (atr / price) * 100;
   const isCrypto = market === 'crypto';
-  if (atrPct < (isCrypto ? 1.5 : 0.7)) return null;  // Crypto needs more vol to matter
-  if (atrPct > (isCrypto ? 18.0 : 10.0)) return null; // Crypto can run hotter
+  const isHourly = opts.tradeStyle === 'intradayStock';
+  const minAtrPct = isCrypto ? 1.5 : isHourly ? 0.22 : 0.7;
+  const maxAtrPct = isCrypto ? 18.0 : isHourly ? 4.0 : 10.0;
+  if (atrPct < minAtrPct) return null;
+  if (atrPct > maxAtrPct) return null;
 
   const hasSkipShort = warnings.some(w => w.type === 'skip-short');
   const bullish = signals.filter(s => s.type === 'bullish').length;
@@ -389,6 +396,21 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
     tp1Mult = 1.50 + (trendStrength * 0.20);
     tp2Mult = 2.40 + (trendStrength * 0.35);
     slMult  = 0.68;
+  } else if (tradeStyle === 'intradayStock') {
+    // Hourly equity bars. ATR per hourly bar measures ~0.75% of price against
+    // ~2.5% on a daily bar — roughly sqrt(6.5) smaller, as expected from 6.5
+    // bars per session. Multipliers are scaled by that factor so the resulting
+    // stop and target land at the same PRICE distances as before; the gain is
+    // not different levels but sharper entry timing, because RSI, MACD and
+    // support/resistance now respond within the session instead of once a day.
+    // Sized against the 2.2%-of-price stop floor, which dominates on hourly
+    // bars: at ~0.75% ATR that floor is ~2.9 ATR, so a 2:1 trade needs a
+    // target near 6 ATR. The first attempt used 3.8 ATR and produced no
+    // setups at all — every candidate failed the minimum R:R once the floor
+    // widened its stop.
+    tp1Mult = 6.20 + (trendStrength * 0.70);
+    tp2Mult = 9.80 + (trendStrength * 1.30);
+    slMult  = 2.90;
   } else if (tradeStyle === 'crypto') {
     // 4h ATR is ~1/sqrt(6) of daily ATR — multipliers scaled accordingly.
     // SL = 1.5 × ATR_4h ≈ 1.6% BTC stop (tight but not wick-bait)
@@ -420,6 +442,12 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
     // for those held 24-48h.
     sameDay: { slCapPct: 0.045, slMinPct: 0.022, slFloorATR: 0.9, slRangeMin: 0.9, slRangeMax: 1.8,
                maxDaysTP1: 6,  maxDaysTP2: 12, minTP1ATR: 1.6, minTP2ATR: 2.6, minRR: 2.0 },
+    // Same percentage guardrails as sameDay — slCapPct and slMinPct are shares
+    // of price and so are timeframe-independent — but the ATR-denominated
+    // fields are scaled for hourly bars. "days" here counts BARS: 39 hourly
+    // bars is about six sessions, matching the daily ceiling it replaces.
+    intradayStock: { slCapPct: 0.045, slMinPct: 0.022, slFloorATR: 2.9, slRangeMin: 2.9, slRangeMax: 5.5,
+               maxDaysTP1: 72, maxDaysTP2: 210, minTP1ATR: 5.5, minTP2ATR: 8.5, minRR: 2.0 },
     // Crypto runs on 4-hour candles. "days" in this object = bars held.
     // ATR here is per-4h-bar (~1/sqrt(6) of daily ATR), so multipliers are larger.
     // Ceilings: TP1 within 16 bars (~64h), TP2 within 30 bars (~5d).
@@ -583,11 +611,25 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
     if (tp - tp2 < atr * 0.8) tp2 = round(Math.max(tp - atr * 1.0, entry - MAX_DIST_TP2));
   }
 
-  // Recompute days-to-target after caps
+  // Recompute days-to-target after caps.
+  //
+  // Time-to-target uses a random-walk estimate: distance scales with the
+  // square root of time, so days = (distance / ATR)^2. That only holds when
+  // ATR is measured over the same unit as the answer. On hourly bars it is
+  // not: hourly ATR runs about 3.3x smaller than daily, against the 2.55x
+  // pure scaling would predict, because intraday ranges exclude overnight
+  // gaps and mean-revert within the session. Feeding hourly ATR into the
+  // formula therefore produced "48 hours" for a move that daily bars put at
+  // two days — and 48 TRADING hours is seven sessions, not two.
+  //
+  // Callers on an intraday timeframe pass the daily ATR for this calculation
+  // only. Entry timing still comes from the hourly series; just the duration
+  // estimate is measured in the unit it is reported in.
   const tpDistance  = Math.abs(tp - entry);
   const tp2Distance = Math.abs(tp2 - entry);
-  const expectedDays  = Math.max(1, Math.round((tpDistance  / atr) ** 2));
-  const expectedDays2 = Math.max(2, Math.round((tp2Distance / atr) ** 2));
+  const timeAtr = opts.dailyAtr > 0 ? opts.dailyAtr : atr;
+  const expectedDays  = Math.max(1, Math.round((tpDistance  / timeAtr) ** 2));
+  const expectedDays2 = Math.max(2, Math.round((tp2Distance / timeAtr) ** 2));
 
   // ── Reject if targets are now so close they're not meaningful ──
   // Same-day: smaller targets allowed (0.5 ATR TP1, 0.9 ATR TP2)
@@ -635,7 +677,7 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
   if (direction === 'SHORT' && sma20 && sma50 && price < sma20 && sma20 < sma50) confidence += 3;
 
   // ── INTRADAY-SPECIFIC CONFIDENCE ADJUSTMENTS (sameDay + crypto) ──
-  const isIntraday = tradeStyle === 'sameDay' || tradeStyle === 'crypto';
+  const isIntraday = tradeStyle === 'sameDay' || tradeStyle === 'crypto' || tradeStyle === 'intradayStock';
   if (isIntraday) {
     // a) REMOVED: the old "closer TP = higher confidence" bonus (+10 for a
     //    target under 0.8 ATR). It was the single most damaging rule in the
@@ -722,7 +764,13 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
   // (intraday session is ~6.5 hours)
   // Crypto: candles are 4h bars, so each "day" in the math = 4 actual hours.
   // Stocks: "day" = trading session ≈ 6.5h.
-  const hoursPerDay    = tradeStyle === 'crypto' ? 4 : 6.5;
+  // Each "day" in the time-to-target maths is one bar: 4h for crypto, 1h for
+  // hourly equities, one 6.5h session for daily equities.
+  // With a daily-ATR time estimate the answer is already in sessions, so an
+  // hourly-bar setup converts at the normal 6.5h session length.
+  const hoursPerDay    = tradeStyle === 'crypto' ? 4
+                       : (tradeStyle === 'intradayStock' && !(opts.dailyAtr > 0)) ? 1
+                       : 6.5;
   const expectedHours  = isIntraday ? Math.max(1, Math.round(expectedDays  * hoursPerDay)) : null;
   const expectedHours2 = isIntraday ? Math.max(2, Math.round(expectedDays2 * hoursPerDay)) : null;
 
