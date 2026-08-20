@@ -76,11 +76,37 @@ async function yahooGet(url, params, retries = 4) {
   }
 }
 
+// ── IN-FLIGHT REQUEST COALESCING ─────────────────────────────────────────
+// The cache only helps once a response has landed. With several people
+// loading at the same time — or one person's scan overlapping the next — the
+// same ticker was fetched repeatedly in parallel because every caller missed
+// the cache before any of them had filled it. Five simultaneous scans took
+// 33-84s each for that reason.
+//
+// Callers now share a single in-flight promise per key: the first request
+// does the work, everyone else awaits the same result.
+const inFlight = new Map();
+
+function coalesce(key, work) {
+  const pending = inFlight.get(key);
+  if (pending) return pending;
+  const p = work().finally(() => inFlight.delete(key));
+  inFlight.set(key, p);
+  return p;
+}
+
 // ── Core fetch (quote + candles in one call) ──────────────────────────────
 export async function fetchFull(ticker, range = '3mo') {
   const cacheKey = `full:${ticker}:${range}`;
   const cached = cacheGet(cacheKey);
   if (cached) return cached;
+  return coalesce(cacheKey, () => fetchFullUncached(ticker, range, cacheKey));
+}
+
+async function fetchFullUncached(ticker, range, cacheKey) {
+  // Re-check: another caller may have completed while we queued
+  const fresh = cacheGet(cacheKey);
+  if (fresh) return fresh;
 
   const url  = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}`;
   const data = await yahooGet(url, { interval: '1d', range, includePrePost: true });
@@ -149,6 +175,18 @@ export async function fetchHistorical(ticker, range = '3mo') {
 
 // Weekly candles for multi-timeframe trend confirmation
 export async function fetchWeekly(ticker) {
+  // Weekly candles were fetched fresh every time — uncached and uncoalesced —
+  // once per reviewed card, so widening the review funnel multiplied them.
+  // They change once a week; cache and share them like everything else.
+  const cacheKey = `weekly:${ticker}`;
+  const hit = cacheGet(cacheKey);
+  if (hit) return hit;
+  return coalesce(cacheKey, () => fetchWeeklyUncached(ticker, cacheKey));
+}
+
+async function fetchWeeklyUncached(ticker, cacheKey) {
+  const fresh = cacheGet(cacheKey);
+  if (fresh) return fresh;
   const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}`;
   const data = await yahooGet(url, { interval: '1wk', range: '2y' });
   const result = data?.chart?.result?.[0];
@@ -164,6 +202,7 @@ export async function fetchWeekly(ticker) {
       volume: q.volume[i] ?? 0
     });
   }
+  cacheSet(cacheKey, candles);
   return candles;
 }
 
