@@ -3,8 +3,14 @@ import { fetchFull } from './yahoo.js';
 
 const r2 = (n) => Math.round(n * 100) / 100;
 
-// Find the closest candle to a target date
-function findCandleNear(candles, target) {
+// Find the closest candle to a target date, but only if it is genuinely close.
+//
+// Without the tolerance this clamped to the OLDEST available bar whenever the
+// series did not reach back to the target — so an analyst request carrying six
+// months of candles reported the same ~6-month return for both "YTD" and
+// "1 Year" (TSLA showed -13.16% for both). Returning null instead lets the UI
+// hide a figure it cannot honestly compute.
+function findCandleNear(candles, target, maxDaysAway = 10) {
   if (!candles.length) return null;
   const targetTime = target.getTime();
   let best = candles[0];
@@ -13,7 +19,7 @@ function findCandleNear(candles, target) {
     const diff = Math.abs(new Date(c.date).getTime() - targetTime);
     if (diff < bestDiff) { best = c; bestDiff = diff; }
   }
-  return best;
+  return bestDiff <= maxDaysAway * 86_400_000 ? best : null;
 }
 
 function pctChange(from, to) {
@@ -49,6 +55,20 @@ function computeBeta(candles, spyCandles) {
 }
 
 export async function getPerformanceMetrics(ticker, candles) {
+  // Callers pass whatever range they already had (the analyst passes 6mo),
+  // which is not enough for YTD or 1Y. Pull a longer series when needed.
+  let series = candles || [];
+  const spanDays = series.length > 1
+    ? (new Date(series[series.length - 1].date) - new Date(series[0].date)) / 86_400_000
+    : 0;
+  if (spanDays < 370) {
+    try {
+      const long = await fetchFull(ticker, '2y');
+      if (long?.candles?.length > series.length) series = long.candles;
+    } catch { /* keep what we were given */ }
+  }
+  candles = series;
+
   const now = new Date();
   const weekAgo  = new Date(now); weekAgo.setDate(weekAgo.getDate() - 7);
   const monthAgo = new Date(now); monthAgo.setDate(monthAgo.getDate() - 30);
