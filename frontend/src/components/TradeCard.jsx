@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import Sparkline from './Sparkline.jsx';
 import ShareMenu from './ShareMenu.jsx';
 import { formatTradeText } from '../utils/share.js';
@@ -143,6 +143,17 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
 
   const cardRef = useRef(null);
 
+  // Cards open collapsed. A full card runs to roughly forty rows, so a phone
+  // showed barely one at a time and comparing setups meant scrolling past
+  // everything in between. The summary below carries what is needed to judge
+  // and rank a trade at a glance; the full detail is one tap away and is
+  // unchanged.
+  const [expanded, setExpanded] = useState(false);
+
+  const entryPct = trade.entry && trade.price
+    ? ((trade.entry - trade.price) / trade.price) * 100
+    : null;
+
   return (
     <div ref={cardRef} className={`relative bg-[#0e0e0e] border ${borderColor} rounded-lg overflow-hidden trade-card fade-in ${
       trade.isTopPick ? 'ring-2 ring-yellow-400 shadow-[0_0_20px_rgba(250,204,21,0.3)]' :
@@ -151,15 +162,19 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
 
       {/* TOP PICK badge */}
       {trade.isTopPick && (
-        <div className="absolute top-2 right-2 z-10 bg-gradient-to-r from-yellow-400 to-amber-400 text-black text-[10px] font-bold px-2 py-0.5 rounded font-mono tracking-widest shadow-lg">
-          👑 TOP PICK
+        <div className="ml-7 px-4 pt-2 -mb-1">
+          <span className="inline-block bg-gradient-to-r from-yellow-400 to-amber-400 text-black text-[9px] font-bold px-2 py-0.5 rounded font-mono tracking-widest shadow">
+            👑 TOP PICK
+          </span>
         </div>
       )}
 
       {/* NEW badge — appears only if not also TOP PICK */}
       {isNew && !trade.isTopPick && (
-        <div className="absolute top-2 right-2 z-10 bg-amber-400 text-black text-[9px] font-bold px-2 py-0.5 rounded font-mono tracking-widest animate-pulse">
-          ★ NEW SETUP
+        <div className="ml-7 px-4 pt-2 -mb-1">
+          <span className="inline-block bg-amber-400 text-black text-[9px] font-bold px-2 py-0.5 rounded font-mono tracking-widest animate-pulse">
+            ★ NEW SETUP
+          </span>
         </div>
       )}
 
@@ -172,6 +187,92 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
 
       {/* Card body */}
       <div className="ml-7 p-4">
+
+        {/* ── COMPACT SUMMARY — always visible, tap to expand ───────────── */}
+        <button
+          onClick={() => setExpanded(v => !v)}
+          aria-expanded={expanded}
+          className="w-full text-left group"
+        >
+          {/* Line 1 — who, how strong, live price */}
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div className="flex items-center gap-2 flex-wrap min-w-0">
+              <span className="text-xl font-bold font-condensed tracking-wider">{trade.ticker}</span>
+              <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border font-mono tracking-wider ${
+                trade.probability === 'HIGH'
+                  ? 'bg-green-500/15 border-green-500/40 text-green-300'
+                  : 'bg-amber-500/15 border-amber-500/40 text-amber-300'
+              }`}>{trade.probability}</span>
+              <span className={`text-[11px] font-mono font-bold ${
+                trade.confidence >= 80 ? 'text-green-400'
+                : trade.confidence >= 65 ? 'text-amber-400' : 'text-orange-400'
+              }`}>{trade.confidence}%</span>
+              <span className={`text-[11px] font-mono font-bold ${rrColor}`}>{trade.rrRatio}:1</span>
+            </div>
+            <div className="flex items-center gap-1.5 flex-shrink-0">
+              <div className="w-1.5 h-1.5 rounded-full bg-green-400 live-dot" />
+              <span className="font-mono font-bold text-base tabular-nums">{priceFmt(trade.price)}</span>
+              <span className={`text-[11px] font-mono tabular-nums ${
+                trade.changePercent >= 0 ? 'text-green-400' : 'text-red-400'
+              }`}>
+                {trade.changePercent >= 0 ? '+' : ''}{trade.changePercent?.toFixed(1)}%
+              </span>
+            </div>
+          </div>
+
+          {/* Line 2 — the numbers you actually trade from */}
+          <div className="flex items-center gap-x-3 gap-y-1 flex-wrap mt-1.5 text-[11px] font-mono">
+            <span className="text-[#666]">Entry <span className="text-[#ddd]">{priceFmt(trade.entry)}</span></span>
+            <span className="text-[#2a2a2a]">|</span>
+            <span className="text-[#666]">1st <span className="text-green-400">{priceFmt(trade.tp0)}</span></span>
+            <span className="text-[#666]">TP <span className="text-blue-400">{priceFmt(trade.tp)}</span></span>
+            <span className="text-[#666]">SL <span className="text-red-400">{priceFmt(trade.sl)}</span></span>
+            {trade.timeSpan && (
+              <>
+                <span className="text-[#2a2a2a]">|</span>
+                <span className="text-[#555]">{trade.timeSpan.replace('Short-term — ', '')}</span>
+              </>
+            )}
+          </div>
+
+          {/* Line 3 — the single most important reason, plus flags */}
+          <div className="flex items-center gap-2 flex-wrap mt-1.5">
+            {trade.primaryCatalyst ? (
+              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded border border-cyan-500/30 text-cyan-300 bg-cyan-500/5">
+                ⚡ {trade.primaryCatalyst.label} · {trade.primaryCatalyst.age}
+              </span>
+            ) : trade.thesis?.quality === 'technical' ? (
+              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded border border-[#252525] text-[#777]">
+                📐 Technical setup
+              </span>
+            ) : null}
+            {trade.review?.verdict && (
+              <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${
+                trade.review.verdict === 'PASS'
+                  ? 'border-green-500/30 text-green-400'
+                  : 'border-amber-500/30 text-amber-400'
+              }`}>{trade.review.verdict}</span>
+            )}
+            {trade.eventTimeline?.warning && (
+              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded border border-amber-500/40 text-amber-300">
+                ⚠ event due
+              </span>
+            )}
+            {trade.earnings && trade.earnings.status !== 'OK' && (
+              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded border border-red-500/40 text-red-300">
+                📅 earnings
+              </span>
+            )}
+            <span className="ml-auto text-[10px] font-mono text-[#555] group-hover:text-cyan-400 flex items-center gap-1">
+              {expanded ? 'Less' : 'Full detail'}
+              <span className={`inline-block transition-transform ${expanded ? 'rotate-180' : ''}`}>▾</span>
+            </span>
+          </div>
+        </button>
+
+        {/* ── FULL DETAIL — unchanged, revealed on tap ──────────────────── */}
+        {expanded && (
+        <div className="mt-4 pt-4 border-t border-[#1a1a1a]">
 
         {/* Header row */}
         <div className="flex items-start justify-between gap-2 mb-3 flex-wrap sm:flex-nowrap">
@@ -844,6 +945,8 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
             )}
           </div>
         </div>
+        </div>
+        )}
       </div>
     </div>
   );
