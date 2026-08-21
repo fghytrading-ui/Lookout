@@ -63,7 +63,7 @@ export default function TradeSection({ trades, type, onRefresh, newTickers, acco
         </div>
       ) : (
         <div className={`border border-t-0 ${cfg.border} rounded-b p-4`}>
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 items-start">
             {trades.map((trade, i) => (
               <TradeCard
                 key={`${trade.ticker}-${i}`}
