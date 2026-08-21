@@ -1,17 +1,79 @@
 import { Router } from 'express';
 import { fetchLiveEconomicEvents } from '../lib/economicCalendarLive.js';
+import { fetchFull } from '../lib/yahoo.js';
 
 const router = Router();
 
-function getMacroContext() {
-  return [
-    { type: 'policy',       icon: '🏦', text: 'Fed holding rates at 4.25–4.50%. Next FOMC: June 18, 2025' },
-    { type: 'energy',       icon: '🛢', text: 'WTI Crude ~$63/bbl. OPEC+ extending output cuts through Q3' },
-    { type: 'geopolitical', icon: '⚠', text: 'Middle East tensions elevated — safe-haven flows into Gold & Treasuries' },
-    { type: 'macro',        icon: '📊', text: 'CPI trending lower. Markets pricing 2× cuts in H2 2025' },
-    { type: 'dollar',       icon: '💵', text: 'DXY near 101. Dollar weakness supporting commodity and EM plays' },
-    { type: 'technicals',   icon: '📈', text: 'SPX holding above 200 SMA. QQQ near key resistance at 490' }
-  ];
+// Macro context was a hardcoded array written in 2025 and still being served
+// as current market context — it claimed "Next FOMC: June 18, 2025", WTI at
+// ~$63 (live: $86), DXY near 101 (live: 98.8) and QQQ resistance at 490 (live:
+// $713). Stale numbers presented as fact are worse than no numbers, because
+// the page invites you to plan trades around them.
+//
+// Everything here is now derived from live quotes, and any line whose data
+// fails to load is dropped rather than guessed. Claims that cannot be verified
+// from market data — central-bank policy, OPEC decisions, geopolitics — have
+// been removed instead of being asserted from memory.
+const sma = (candles, n) => {
+  if (!candles || candles.length < n) return null;
+  const slice = candles.slice(-n);
+  return slice.reduce((a, c) => a + c.close, 0) / n;
+};
+const pct = (n) => `${n >= 0 ? '+' : ''}${n.toFixed(2)}%`;
+
+async function getMacroContext() {
+  const [wti, dxy, spy, qqq, vix, gold] = await Promise.all(
+    ['CL=F', 'DX-Y.NYB', 'SPY', 'QQQ', '^VIX', 'GC=F']
+      .map(t => fetchFull(t, '1y').catch(() => null))
+  );
+
+  const out = [];
+
+  if (wti?.quote?.price) {
+    out.push({ type: 'energy', icon: '🛢',
+      text: `WTI Crude $${wti.quote.price.toFixed(2)}/bbl, ${pct(wti.quote.changePercent)} today` });
+  }
+
+  if (dxy?.quote?.price) {
+    const d200 = sma(dxy.candles, 200);
+    const tone = d200 ? (dxy.quote.price > d200
+      ? 'dollar strength — a headwind for commodities and EM'
+      : 'dollar weakness — supportive for commodities and EM') : null;
+    out.push({ type: 'dollar', icon: '💵',
+      text: `DXY ${dxy.quote.price.toFixed(2)}, ${pct(dxy.quote.changePercent)} today${tone ? ` · ${tone}` : ''}` });
+  }
+
+  if (gold?.quote?.price) {
+    out.push({ type: 'metals', icon: '🥇',
+      text: `Gold $${Math.round(gold.quote.price)}/oz, ${pct(gold.quote.changePercent)} today` });
+  }
+
+  if (spy?.quote?.price) {
+    const s200 = sma(spy.candles, 200);
+    out.push({ type: 'technicals', icon: '📈',
+      text: s200
+        ? `SPY $${spy.quote.price.toFixed(2)} — ${spy.quote.price > s200 ? 'above' : 'below'} its 200 SMA ($${s200.toFixed(2)})`
+        : `SPY $${spy.quote.price.toFixed(2)}, ${pct(spy.quote.changePercent)} today` });
+  }
+
+  if (qqq?.quote?.price) {
+    const q50 = sma(qqq.candles, 50);
+    out.push({ type: 'technicals', icon: '💻',
+      text: q50
+        ? `QQQ $${qqq.quote.price.toFixed(2)} — ${qqq.quote.price > q50 ? 'above' : 'below'} its 50 SMA ($${q50.toFixed(2)})`
+        : `QQQ $${qqq.quote.price.toFixed(2)}, ${pct(qqq.quote.changePercent)} today` });
+  }
+
+  if (vix?.quote?.price) {
+    const v = vix.quote.price;
+    const regime = v < 15 ? 'calm — trend-following favoured'
+                 : v < 20 ? 'normal volatility'
+                 : v < 30 ? 'elevated — size down and widen stops'
+                          : 'high fear — expect violent two-way moves';
+    out.push({ type: 'volatility', icon: '📊', text: `VIX ${v.toFixed(2)} · ${regime}` });
+  }
+
+  return out;
 }
 
 export function getEconomicEvents() {
@@ -79,7 +141,7 @@ router.get('/events', async (req, res) => {
   const events = liveEvents && liveEvents.length ? liveEvents : getEconomicEvents();
   const isLive = !!(liveEvents && liveEvents.length);
 
-  const macro     = getMacroContext();
+  const macro     = await getMacroContext().catch(() => []);
   const catalysts = getTonightsCatalysts(events);
   res.json({
     events,
@@ -91,8 +153,9 @@ router.get('/events', async (req, res) => {
   });
 });
 
-router.get('/macro', (req, res) => {
-  res.json({ context: getMacroContext(), timestamp: new Date().toISOString() });
+router.get('/macro', async (req, res) => {
+  const context = await getMacroContext().catch(() => []);
+  res.json({ context, timestamp: new Date().toISOString() });
 });
 
 export default router;
