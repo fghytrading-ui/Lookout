@@ -12,6 +12,15 @@ html, body {
   overflow-x: hidden;
 }
 
+/* overflow-x:hidden makes html/body a scroll container, which silently
+   kills position:sticky on the header and the dashboard sub-bar — they
+   scrolled away instead of pinning. `clip` blocks sideways scroll the
+   same way without creating a scroll container, so sticky works again.
+   Kept behind @supports so older browsers fall back to the line above. */
+@supports (overflow-x: clip) {
+  html, body { overflow-x: clip; }
+}
+
 /* Scrollbars */
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: #0f0f0f; }
@@ -98,6 +107,7 @@ html, body {
 /* Mobile-specific: prevent horizontal page scroll */
 @media (max-width: 640px) {
   body { overflow-x: hidden; }
+  @supports (overflow-x: clip) { body { overflow-x: clip; } }
   /* Slightly tighter card padding on phones */
   .trade-card .p-4 { padding: 0.875rem; }
   /* Make sure number columns stay readable */
