@@ -413,6 +413,7 @@ router.get('/scan', async (req, res) => {
 
     const isCrypto = market === 'crypto';
     const isCommodities = market === 'commodities';
+    const isForexMarket = market === 'forex';
     const tradeStyle = isCrypto ? 'crypto' : 'sameDay';
 
     // Fetch macro context — crypto uses BTC trend + Fear&Greed, not VIX/SPY
@@ -513,7 +514,14 @@ router.get('/scan', async (req, res) => {
       // Extended-hours data is fetched per-card in the enrichment pass below
       // (it needs a separate intraday request, so it is limited to the cards
       // that actually survive filtering rather than the whole watchlist).
-      const setup      = generateTradeSetup(quote, historical, signalData, { market, tradeStyle });
+      // Forex needs its own calibration (see the forex entry in signals.js CAL),
+      // but FOREX_WATCHLIST also carries BTC/ETH/SOL/XRP — those keep the
+      // crypto profile, so the choice is per ticker rather than per scan.
+      // Yahoo FX pairs are suffixed '=X'; the crypto entries are '-USD'.
+      const tickerStyle = isForexMarket
+        ? (ticker.endsWith('=X') ? 'forex' : 'crypto')
+        : tradeStyle;
+      const setup      = generateTradeSetup(quote, historical, signalData, { market, tradeStyle: tickerStyle });
       if (!setup) continue;
 
       // ── SHORTS REQUIRE A BEARISH MARKET ─────────────────────────────
@@ -1030,22 +1038,52 @@ router.get('/watchlist', (req, res) => res.json({ tickers: WATCHLIST }));
 // GET /api/scanner/extended-movers — pre-market / post-market biggest moves
 router.get('/extended-movers', async (req, res) => {
   try {
-    const { fetchBatch } = await import('../lib/yahoo.js');
-    const quotesMap = await fetchBatch(WATCHLIST.slice(0, 40));
+    // fetchBatch reads the DAILY chart meta, which never carries
+    // preMarketPrice/postMarketPrice — so this endpoint always returned an
+    // empty list and the extended-hours section never rendered at all.
+    // fetchExtendedHours derives the move from 5m includePrePost bars, which
+    // is the only source that actually has it.
+    const { fetchExtendedHours, fetchBatch } = await import('../lib/yahoo.js');
+    // Was capped at 40, which cut the list off mid-watchlist and silently
+    // excluded the high-beta names (COIN, MSTR, PLTR...) that actually move
+    // after hours. Results are cached per ticker, and this endpoint is only
+    // called during pre/post-market sessions.
+    const tickers = WATCHLIST;
+
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+    const EXT_CONCURRENCY = 8;
+    const results = [];
+    for (let i = 0; i < tickers.length; i += EXT_CONCURRENCY) {
+      const chunk = tickers.slice(i, i + EXT_CONCURRENCY);
+      const got = await Promise.all(chunk.map(async t => {
+        try { return { ticker: t, ext: await fetchExtendedHours(t) }; }
+        catch { return { ticker: t, ext: null }; }
+      }));
+      results.push(...got);
+      if (i + EXT_CONCURRENCY < tickers.length) await sleep(120);
+    }
 
     const movers = [];
-    for (const [ticker, q] of Object.entries(quotesMap)) {
-      if (q.error) continue;
-      const regClose = q.price;
-      const pre  = q.preMarketPrice;
-      const post = q.postMarketPrice;
-      if (pre && regClose) {
-        const pct = ((pre - regClose) / regClose) * 100;
-        if (Math.abs(pct) >= 0.8) movers.push({ ticker, name: q.longName, session: 'pre',  price: pre,  regClose, pct });
-      } else if (post && regClose) {
-        const pct = ((post - regClose) / regClose) * 100;
-        if (Math.abs(pct) >= 0.8) movers.push({ ticker, name: q.longName, session: 'post', price: post, regClose, pct });
-      }
+    for (const { ticker, ext } of results) {
+      if (!ext || !Number.isFinite(ext.movePct)) continue;
+      if (Math.abs(ext.movePct) < 0.8) continue;
+      movers.push({
+        ticker,
+        name: null,
+        session: ext.session,
+        price: ext.price,
+        regClose: ext.referenceClose,
+        pct: ext.movePct
+      });
+    }
+
+    // Names are cosmetic — pull them only for the handful we actually show.
+    const shown = [...movers].sort((a, b) => Math.abs(b.pct) - Math.abs(a.pct)).slice(0, 10);
+    if (shown.length) {
+      try {
+        const names = await fetchBatch(shown.map(m => m.ticker));
+        for (const m of movers) m.name = names[m.ticker]?.longName || m.ticker;
+      } catch { for (const m of movers) m.name = m.ticker; }
     }
 
     movers.sort((a, b) => Math.abs(b.pct) - Math.abs(a.pct));

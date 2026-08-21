@@ -286,8 +286,13 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
   const atrPct = (atr / price) * 100;
   const isCrypto = market === 'crypto';
   const isHourly = opts.tradeStyle === 'intradayStock';
-  const minAtrPct = isCrypto ? 1.5 : isHourly ? 0.22 : 0.7;
-  const maxAtrPct = isCrypto ? 18.0 : isHourly ? 4.0 : 10.0;
+  // Currency pairs are an order of magnitude quieter than equities: EURUSD and
+  // GBPUSD run ~0.46% daily ATR against ~2.5% for a stock. The 0.7% equity
+  // floor rejected 7 of the 8 majors, so the Forex board could only ever show
+  // the crypto entries in its watchlist and never an actual pair.
+  const isForex  = opts.tradeStyle === 'forex';
+  const minAtrPct = isCrypto ? 1.5 : isHourly ? 0.22 : isForex ? 0.25 : 0.7;
+  const maxAtrPct = isCrypto ? 18.0 : isHourly ? 4.0 : isForex ? 3.0 : 10.0;
   if (atrPct < minAtrPct) return null;
   if (atrPct > maxAtrPct) return null;
 
@@ -386,7 +391,14 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
   // CRYPTO:   24/7 intraday — wider stops (volatility eats tight ones), wider TPs
   // SWING:    multi-day targets
   let tp1Mult, tp2Mult, slMult;
-  if (tradeStyle === 'sameDay') {
+  if (tradeStyle === 'forex') {
+    // Identical ATR multiples to sameDay — these are denominated in ATR and so
+    // carry across instruments unchanged. Only the percentage-of-price
+    // guardrails in CAL below need rescaling for FX.
+    tp1Mult = 1.50 + (trendStrength * 0.20);
+    tp2Mult = 2.40 + (trendStrength * 0.35);
+    slMult  = 0.68;
+  } else if (tradeStyle === 'sameDay') {
     // RECALIBRATED FROM TRACKED OUTCOMES (52 closed signals, expectancy -0.25R).
     // The old numbers (TP1 0.65-1.25 ATR against a 0.7 ATR stop) capped R:R at
     // ~1.8, but a 29% win rate needs R:R > 2.47 just to break even — every
@@ -448,6 +460,14 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
     // bars is about six sessions, matching the daily ceiling it replaces.
     intradayStock: { slCapPct: 0.045, slMinPct: 0.022, slFloorATR: 2.9, slRangeMin: 2.9, slRangeMax: 5.5,
                maxDaysTP1: 72, maxDaysTP2: 210, minTP1ATR: 5.5, minTP2ATR: 8.5, minRR: 2.0 },
+    // Forex. slMinPct/slCapPct are shares of PRICE, so they cannot be reused
+    // from sameDay: 2.2% of EURUSD is ~4.7 ATR, which would demand a ~4.4%
+    // target to clear minRR — a move majors take months to make, so every pair
+    // failed. The equity floor is really "stop >= ~0.9 daily ATR" expressed as
+    // a percentage (2.2% / 2.5% ATR); applied to FX's ~0.5% ATR that is ~0.45%.
+    // The cap is scaled by the same ratio. ATR-denominated fields are unchanged.
+    forex:   { slCapPct: 0.012, slMinPct: 0.0045, slFloorATR: 0.9, slRangeMin: 0.9, slRangeMax: 1.8,
+               maxDaysTP1: 6,  maxDaysTP2: 12, minTP1ATR: 1.6, minTP2ATR: 2.6, minRR: 2.0 },
     // Crypto runs on 4-hour candles. "days" in this object = bars held.
     // ATR here is per-4h-bar (~1/sqrt(6) of daily ATR), so multipliers are larger.
     // Ceilings: TP1 within 16 bars (~64h), TP2 within 30 bars (~5d).
