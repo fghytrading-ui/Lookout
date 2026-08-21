@@ -120,6 +120,7 @@ async function fetchFullUncached(ticker, range, cacheKey) {
   const times = result.timestamp || [];
 
   const candles = [];
+  const rawCloses = [];   // unadjusted closes — adjclose skews the day change
   for (let i = 0; i < times.length; i++) {
     if (q.open?.[i] == null || q.close?.[i] == null) continue;
     candles.push({
@@ -128,10 +129,37 @@ async function fetchFullUncached(ticker, range, cacheKey) {
       low:    q.low[i],   close: ac[i] ?? q.close[i],
       volume: q.volume[i] ?? 0
     });
+    rawCloses.push(q.close[i]);
   }
 
-  const prev   = meta.chartPreviousClose || meta.previousClose || (candles.length > 1 ? candles[candles.length - 2].close : meta.regularMarketPrice);
   const price  = meta.regularMarketPrice;
+
+  // meta.chartPreviousClose is the close before the START of the requested
+  // range, not yesterday's close. Every caller using range='3mo'/'6mo' — which
+  // includes the whole scan universe via fetchFullBatch — was therefore
+  // measuring "today's move" against a three-to-six-month-old price. TSLA read
+  // -13.16% on a day it was +5.14%; COIN read -3.65% on a +8.20% day.
+  //
+  // That is not cosmetic: reviewer.js rejects a LONG whose changePercent is
+  // negative ("don't catch falling knives") and a SHORT whose changePercent is
+  // positive, so a flipped sign silently discarded good setups and admitted
+  // bad ones.
+  //
+  // Derive the reference from the candle series instead. Yahoo keeps the final
+  // daily bar in step with the live price, so if the last close matches price
+  // that bar is the current session and the one before it is the true previous
+  // close; otherwise the last bar is already a completed prior session.
+  let prev = null;
+  if (rawCloses.length >= 2 && Number.isFinite(price)) {
+    const lastClose = rawCloses[rawCloses.length - 1];
+    const lastBarIsCurrentSession =
+      Math.abs(price - lastClose) <= Math.max(0.01, Math.abs(price) * 0.0002);
+    prev = lastBarIsCurrentSession ? rawCloses[rawCloses.length - 2] : lastClose;
+  }
+  // range='1d' returns a single bar, and there chartPreviousClose IS yesterday.
+  if (!Number.isFinite(prev) || prev <= 0) {
+    prev = meta.chartPreviousClose || meta.previousClose || price;
+  }
   const chg    = price - (prev || price);
   const chgPct = prev ? (chg / prev) * 100 : 0;
 
