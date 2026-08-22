@@ -9,6 +9,7 @@ import { getCryptoContext, tickerToBinanceSymbol, getCryptoEntryTiming } from '.
 import { fetchCryptoCandlesBatch, computeSessionVWAP } from '../lib/cryptoCandles.js';
 import { getInventoryReleases, evaluateInventoryRisk } from '../lib/inventoryReleases.js';
 import { logSignal, getSetupTypeStats } from '../lib/signalLog.js';
+import { assessSetupEvidence } from '../lib/evidence.js';
 import { withLiveBar } from '../lib/liveBar.js';
 import { fetchIntradayBatch } from '../lib/intradayCandles.js';
 import { analyseCatalysts, catalystSignals } from '../lib/catalystEngine.js';
@@ -543,14 +544,13 @@ router.get('/scan', async (req, res) => {
       // Classify the setup type — tells user WHAT KIND of trade this is
       card.setupType = classifySetup(quote, historical, { ...signalData, direction: setup.direction });
 
-      // ── RETIRED SETUPS ──────────────────────────────────────────────
-      // Patterns with no wins at a meaningful sample size are not shown at
-      // all. Reversal Long is 0 for 10 — catching a falling knife — and the
-      // automatic block only engages at 15 samples, so it kept appearing
-      // while never once working. Blocking these from ENTER NOW was not
-      // enough: they stayed visible and could still be taken.
-      const RETIRED_SETUPS = ['🔄 Reversal Long'];
-      if (RETIRED_SETUPS.includes(card.setupType?.label)) continue;
+      // Setups are no longer retired by name. A hard-coded list ('Reversal
+      // Long' was on it, struck off at 0 wins from 10) removes a pattern
+      // permanently on evidence that is not conclusive — with no wins yet the
+      // true rate can still be as high as ~30%, which is about breakeven — and
+      // a pattern deleted in code can never earn its way back no matter what
+      // the market does later. The statistical block further down handles this
+      // properly and re-decides on every scan.
       // Flag whether indicators included a live forming bar, so the UI can be
       // honest about how current the analysis is
       card.liveBar = historical[historical.length - 1]?.isLive === true
@@ -940,8 +940,29 @@ router.get('/scan', async (req, res) => {
       if (hist) {
         card.historicalStats = hist;
         let adj = 0;
-        // "Block" tier — statistically bad setup, quarantine it
-        if (hist.winRate < 0.25 && hist.sampleSize >= 15) {
+        // "Block" tier. This was `winRate < 0.25 && sampleSize >= 15`, a
+        // threshold that never actually reaches significance — 10 wins from 50
+        // still sits inside the noise band around a ~30% breakeven — so it
+        // could bury a good setup on evidence that proved nothing, and a buried
+        // setup stops producing signals and can never clear its own name.
+        //
+        // Now a setup is only quarantined when even the optimistic end of its
+        // confidence interval is below the win rate it needs to break even, and
+        // the verdict is recomputed on every scan, so it releases itself as
+        // soon as the evidence stops supporting the block.
+        const evidence = assessSetupEvidence({
+          wins: hist.wins ?? Math.round(hist.winRate * hist.sampleSize),
+          sampleSize: hist.sampleSize,
+          rrRatio: card.rrRatio || 0
+        });
+        card.setupEvidence = {
+          winRate: evidence.winRate,
+          upperBound: parseFloat(evidence.upperBound.toFixed(3)),
+          breakeven: parseFloat(evidence.breakeven.toFixed(3)),
+          sampleSize: evidence.sampleSize,
+          proven: evidence.proven
+        };
+        if (evidence.proven) {
           adj = -25;
           card.setupBlocked = true;  // barred from ENTER NOW below
         } else if (hist.winRate < 0.35) adj = -15;
@@ -991,10 +1012,8 @@ router.get('/scan', async (req, res) => {
     // Signals are logged BEFORE this point on purpose — the tracker must keep
     // recording these patterns, otherwise removing them from the board would
     // freeze their statistics and they could never earn their way back.
-    const provenLoser = (c) => {
-      const h = c.historicalStats;
-      return !!h && h.sampleSize >= 15 && h.winRate < 0.25;
-    };
+    // Same evidence standard as the block tier — never a bare threshold.
+    const provenLoser = (c) => c.setupBlocked === true;
     const droppedForRecord = [];
     for (const key of ['enterNow', 'waitForBounce', 'carryForward']) {
       const keep = [];
@@ -1014,7 +1033,10 @@ router.get('/scan', async (req, res) => {
       return Object.entries(byType).map(([label, v]) => ({
         label, count: v.count,
         winRate: Math.round(v.winRate * 100),
-        sampleSize: v.sampleSize
+        sampleSize: v.sampleSize,
+        // Blocks are provisional: this is re-tested on every scan and lifts
+        // itself as soon as the evidence no longer supports it.
+        provisional: true
       }));
     })();
 

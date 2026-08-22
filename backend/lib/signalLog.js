@@ -196,6 +196,8 @@ export function getSetupTypeStats(setupType, { market = null, lookbackDays = 60,
 
   return {
     winRate: wins / sample.length,
+    wins,                       // raw counts — needed for a significance test
+    losses,
     lossRate: losses / sample.length,
     tpHitRate: tpHits / sample.length,
     slHitRate: slHits / sample.length,
