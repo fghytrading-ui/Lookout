@@ -149,11 +149,45 @@ function nextRelevantEvent(macroEvents = [], earnings = null) {
   return macro ? { kind: 'macro', name: macro.label || macro.title, when: macro.when } : null;
 }
 
-export function buildIntradayTiming({ tradeStyle, macroEvents = [], earnings = null } = {}) {
+export function buildIntradayTiming({
+  tradeStyle, macroEvents = [], earnings = null,
+  expectedDays = null, expectedDays2 = null
+} = {}) {
   if (tradeStyle !== 'sameDay' && tradeStyle !== 'crypto') return null;
 
   const et = getNYTime();
   const ev = nextRelevantEvent(macroEvents, earnings);
+
+  // Which session do these times refer to? Outside market hours "2:30pm UK"
+  // reads as today, which on a Saturday is simply wrong — the card has to name
+  // the session it means. Mirrors the walk used by getEntryTiming.
+  const session = getSession();
+  const marketLive = session === 'MARKET_OPEN';
+  let dayPrefix = '';
+  if (tradeStyle === 'sameDay' && !marketLive) {
+    const next = new Date(et);
+    if (session === 'AFTER_HOURS' || session === 'HOLIDAY' ||
+        (session === 'CLOSED' && et.getHours() >= 16)) next.setDate(next.getDate() + 1);
+    let guard = 0;
+    while ((next.getDay() === 0 || next.getDay() === 6 || isMarketHoliday(next)) && guard++ < 14) {
+      next.setDate(next.getDate() + 1);
+    }
+    const sameDate = next.toDateString() === et.toDateString();
+    dayPrefix = sameDate ? '' : `${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][next.getDay()]} `;
+  }
+
+  // Hold length must agree with the card's own estimate. These were fixed
+  // strings ("End of next session", "1-2 sessions") sitting beside a headline
+  // that said "about 4 sessions" — the same card gave three different answers.
+  const sess = (n) => `${n} session${n === 1 ? '' : 's'}`;
+  const exitBy = expectedDays2 != null
+    ? `Scale at target 1 by ~${sess(expectedDays)}; close the runner by ~${sess(expectedDays2)}`
+    : expectedDays != null
+      ? `Close by ~${sess(expectedDays)}${expectedDays > 1 ? ' (holds overnight)' : ''}`
+      : 'End of next session (may hold overnight)';
+  const totalSpan = expectedDays != null
+    ? (expectedDays2 != null ? `${expectedDays}–${expectedDays2} sessions` : sess(expectedDays))
+    : '1–2 sessions';
 
   if (tradeStyle === 'crypto') {
     return {
@@ -168,11 +202,11 @@ export function buildIntradayTiming({ tradeStyle, macroEvents = [], earnings = n
   }
 
   return {
-    entryFrom:       ukTimeForET(et, 9, 30),                       // US open
+    entryFrom:       `${dayPrefix}${ukTimeForET(et, 9, 30)}`,      // US open
     entryUntil:      ukTimeForET(et, 14, 0),                       // stop opening late
-    mustExitBy:      'End of next session (may hold overnight)',
-    totalSession:    '1–2 sessions',
-    bestEntryWindow: `${ukTimeForET(et, 9, 30)} – ${ukTimeForET(et, 11, 30)} (opening drive — deepest liquidity)`,
+    mustExitBy:      exitBy,
+    totalSession:    totalSpan,
+    bestEntryWindow: `${dayPrefix}${ukTimeForET(et, 9, 30)} – ${ukTimeForET(et, 11, 30)} (opening drive — deepest liquidity)`,
     avoidWindow:     `${ukTimeForET(et, 14, 0)} – ${ukTimeForET(et, 16, 0)} (final two hours)`,
     eventNote: ev
       ? (ev.kind === 'earnings'

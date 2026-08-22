@@ -335,7 +335,10 @@ function buildCard(ticker, raw, quote, setup, signalData, historical, market = '
     intradayTiming: buildIntradayTiming({
       tradeStyle,
       macroEvents: opts.macroEvents,
-      earnings:    opts.earnings
+      earnings:    opts.earnings,
+      // Hold length comes from the setup's own estimate so the timing block
+      // cannot contradict the headline above it.
+      expectedDays, expectedDays2
     }),
     rrRatio, rrRatio2,
     volRatio, expectedDays, expectedDays2,
@@ -729,7 +732,8 @@ router.get('/scan', async (req, res) => {
         // Earnings only become known here, so recompute the entry window now
         // that it can account for them.
         const refreshed = buildIntradayTiming({
-          tradeStyle: card.tradeStyle, macroEvents: upcomingMacro, earnings: card.earnings
+          tradeStyle: card.tradeStyle, macroEvents: upcomingMacro, earnings: card.earnings,
+          expectedDays: card.expectedDays, expectedDays2: card.expectedDays2
         });
         if (refreshed) card.intradayTiming = refreshed;
 
