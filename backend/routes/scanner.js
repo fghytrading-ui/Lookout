@@ -20,7 +20,7 @@ import {
   analyzeSignals, generateTradeSetup, calculateSMA, calculateATR,
   TIME_SPANS, getTimespanKey, getExitWindow, generateAnalystNotes
 } from '../utils/signals.js';
-import { getEntryTiming } from '../utils/market.js';
+import { getEntryTiming, buildIntradayTiming } from '../utils/market.js';
 
 // Determine broad market regime from SPY's trend
 async function getMarketRegime() {
@@ -243,7 +243,7 @@ function adaptQuote(raw) {
   };
 }
 
-function buildCard(ticker, raw, quote, setup, signalData, historical, market = 'stocks') {
+function buildCard(ticker, raw, quote, setup, signalData, historical, market = 'stocks', opts = {}) {
   const price = raw.price;
   const { direction, entry, entryLow, entryHigh, tp, tp0, rrRatio0, scalePlan, tp2, sl, rrRatio, rrRatio2, probability, confirming, confidence, expectedDays, expectedDays2, expectedHours, expectedHours2, trendStrength, trendStrengthLabel, confirmation, tradeStyle } = setup;
   const tpPct  = parseFloat(Math.abs((tp - entry)  / entry * 100).toFixed(1));
@@ -328,22 +328,14 @@ function buildCard(ticker, raw, quote, setup, signalData, historical, market = '
                 ? `Scale at target 1 within ~${expectedDays} session${expectedDays === 1 ? '' : 's'}; runner up to ~${expectedDays2}`
               : tradeStyle === 'sameDay' ? 'Typically next session; hard exit after 2 sessions'
               : getExitWindow(tsKey),
-    // Intraday-specific timing windows (UK time)
-    intradayTiming: tradeStyle === 'crypto' ? {
-      entryFrom: '13:30 UK',
-      entryUntil: '20:00 UK',
-      mustExitBy: 'Within ~24h (no hard close — close on TP/SL or next peak)',
-      totalSession: '24/7 (peak ~6.5h)',
-      bestEntryWindow: '14:30 – 18:00 UK (NY equity open + ETF inflows + CME futures volume)',
-      avoidWindow: '20:00 – 08:00 UK + all weekend (US-close drainage, Asia thin, weekend wicks)'
-    } : tradeStyle === 'sameDay' ? {
-      entryFrom: '2:30 PM UK',
-      entryUntil: '7:00 PM UK',
-      mustExitBy: 'End of next session (may hold overnight)',
-      totalSession: '1–2 sessions',
-      bestEntryWindow: '2:30 – 4:30 PM UK',
-      avoidWindow: '7:00 – 9:00 PM UK'
-    } : null,
+    // Intraday entry/exit windows — derived from the live ET session clock
+    // (so they stay right across daylight-saving changes) and annotated with
+    // whatever high-impact event actually falls inside the window.
+    intradayTiming: buildIntradayTiming({
+      tradeStyle,
+      macroEvents: opts.macroEvents,
+      earnings:    opts.earnings
+    }),
     rrRatio, rrRatio2,
     volRatio, expectedDays, expectedDays2,
     expectedHours, expectedHours2,
@@ -542,7 +534,7 @@ router.get('/scan', async (req, res) => {
       // Regime filter is now a confidence-boost signal (added in analyzeSignals),
       // not a hard reject — we still allow counter-trend setups if they are strong.
 
-      const card = buildCard(ticker, raw, quote, setup, signalData, historical, market);
+      const card = buildCard(ticker, raw, quote, setup, signalData, historical, market, { macroEvents: upcomingMacro });
       // VWAP — crypto-only, intraday level pros use as bias filter and magnet
       if (isCrypto) {
         const vwap = computeSessionVWAP(historical);
@@ -734,6 +726,13 @@ router.get('/scan', async (req, res) => {
         // ── UPCOMING EVENTS ────────────────────────────────────────────
         // What is still to come inside the holding window — this name's
         // earnings plus any market-moving macro release.
+        // Earnings only become known here, so recompute the entry window now
+        // that it can account for them.
+        const refreshed = buildIntradayTiming({
+          tradeStyle: card.tradeStyle, macroEvents: upcomingMacro, earnings: card.earnings
+        });
+        if (refreshed) card.intradayTiming = refreshed;
+
         card.eventTimeline = buildEventTimeline({
           ticker: card.ticker,
           macro: upcomingMacro,

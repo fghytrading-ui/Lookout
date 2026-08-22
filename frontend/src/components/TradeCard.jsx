@@ -406,6 +406,13 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
                 </div>
                 <div className="text-green-300 font-bold tabular-nums">{trade.intradayTiming.entryFrom}{trade.intradayTiming.entryUntil ? ` – ${trade.intradayTiming.entryUntil}` : ''}</div>
                 <div className="text-[9px] text-green-500/60 mt-0.5">Best: {trade.intradayTiming.bestEntryWindow}</div>
+                {/* A scheduled event inside the window changes when to enter,
+                    so it belongs next to the times rather than further down. */}
+                {trade.intradayTiming.eventNote && (
+                  <div className="text-[9px] text-amber-300/90 mt-1 leading-snug">
+                    ⚠ {trade.intradayTiming.eventNote}
+                  </div>
+                )}
               </div>
               <div className="bg-cyan-500/10 border border-cyan-500/25 rounded p-2">
                 <div className="text-[9px] uppercase tracking-widest text-cyan-500/70 mb-1">⏱ Typical Hold</div>

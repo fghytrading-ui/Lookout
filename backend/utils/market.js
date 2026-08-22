@@ -99,3 +99,81 @@ export function getSession() {
   if (mins >= 960 && mins < 1200) return 'AFTER_HOURS';
   return 'CLOSED';
 }
+
+// ── INTRADAY ENTRY / EXIT WINDOWS ────────────────────────────────────────
+// These used to be fixed strings ("2:30 PM UK", "Best: 2:30 – 4:30 PM UK")
+// baked into every card. Two problems: they silently went an hour wrong for
+// the ~4 weeks a year when US and UK clocks change on different dates, and
+// they were identical for every ticker no matter what was actually scheduled.
+//
+// The session anchors below are the same trading logic as before — enter on
+// the opening drive, stop opening new positions in the last two hours — but
+// resolved against the real ET session clock, and annotated with any event
+// that lands inside the window.
+
+// Format a given ET hour/minute on a NY day as a UK time string.
+export function ukTimeForET(nyDay, etHour, etMinute = 0) {
+  const y = nyDay.getFullYear(), m = nyDay.getMonth(), d = nyDay.getDate();
+  // Try the EST offset first, then correct to EDT if the ET hour disagrees.
+  let utc = new Date(Date.UTC(y, m, d, etHour + 5, etMinute));
+  const check = parseInt(utc.toLocaleString('en-US',
+    { timeZone: 'America/New_York', hour: '2-digit', hour12: false }), 10);
+  if (check !== etHour) utc = new Date(Date.UTC(y, m, d, etHour + 4, etMinute));
+  return utc.toLocaleString('en-GB', {
+    timeZone: 'Europe/London', hour: 'numeric', minute: '2-digit', hour12: true
+  }).replace(/\s?(AM|PM|am|pm)/i, (x) => x.trim().toLowerCase()) + ' UK';
+}
+
+// Pick the first genuinely market-moving event due inside the trade horizon,
+// so the entry advice can say "wait for the print" instead of ignoring it.
+// getUpcomingMacro scores impact 1-10 (FOMC 10, CPI/NFP 9) and already
+// supplies a formatted `when` and an `hoursUntil`.
+function nextRelevantEvent(macroEvents = [], earnings = null) {
+  const macro = (macroEvents || [])
+    .filter(e => e && Number(e.impact) >= 7 && Number(e.hoursUntil) > 0)
+    .sort((a, b) => a.hoursUntil - b.hoursUntil)[0];
+
+  // Earnings inside the hold window outrank a macro print further out.
+  if (earnings && (earnings.status === 'BLOCK' || earnings.status === 'WARN')
+      && Number.isFinite(earnings.daysAway)) {
+    const earningsHrs = earnings.daysAway * 24;
+    if (!macro || earningsHrs < macro.hoursUntil) {
+      return { kind: 'earnings', name: 'Earnings', when: earnings.daysAway <= 1
+        ? 'within a day' : `in ${earnings.daysAway} days` };
+    }
+  }
+  return macro ? { kind: 'macro', name: macro.label || macro.title, when: macro.when } : null;
+}
+
+export function buildIntradayTiming({ tradeStyle, macroEvents = [], earnings = null } = {}) {
+  if (tradeStyle !== 'sameDay' && tradeStyle !== 'crypto') return null;
+
+  const et = getNYTime();
+  const ev = nextRelevantEvent(macroEvents, earnings);
+
+  if (tradeStyle === 'crypto') {
+    return {
+      entryFrom:        ukTimeForET(et, 9, 30),
+      entryUntil:       ukTimeForET(et, 15, 0),
+      mustExitBy:       'Within ~24h (no hard close — close on TP/SL or next peak)',
+      totalSession:     '24/7 (peak liquidity tracks the US equity session)',
+      bestEntryWindow:  `${ukTimeForET(et, 9, 30)} – ${ukTimeForET(et, 13, 0)} (NY open + ETF inflows + CME volume)`,
+      avoidWindow:      `after ${ukTimeForET(et, 16, 0)} and all weekend (US-close drainage, Asia thin, weekend wicks)`,
+      eventNote: ev ? `${ev.name} ${ev.when} — expect a volatility spike; enter after it prints` : null
+    };
+  }
+
+  return {
+    entryFrom:       ukTimeForET(et, 9, 30),                       // US open
+    entryUntil:      ukTimeForET(et, 14, 0),                       // stop opening late
+    mustExitBy:      'End of next session (may hold overnight)',
+    totalSession:    '1–2 sessions',
+    bestEntryWindow: `${ukTimeForET(et, 9, 30)} – ${ukTimeForET(et, 11, 30)} (opening drive — deepest liquidity)`,
+    avoidWindow:     `${ukTimeForET(et, 14, 0)} – ${ukTimeForET(et, 16, 0)} (final two hours)`,
+    eventNote: ev
+      ? (ev.kind === 'earnings'
+          ? `Earnings ${ev.when} — enter before it, or wait until the reaction settles`
+          : `${ev.name} ${ev.when} — hold off until the print, then enter on the reaction`)
+      : null
+  };
+}
