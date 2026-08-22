@@ -1,5 +1,11 @@
 // Setup Type Classifier — identifies WHAT KIND of swing trade this is.
-// Each setup type has different characteristics, win rates, and behavior.
+// Each setup type has different characteristics and behavior.
+//
+// These used to carry a `historicalWinRate` constant (65/60/55/50) that was
+// never measured — it was the same number for every ticker and contradicted
+// the system's own tracked record for the same pattern. Real per-setup win
+// rates come from signalLog.getSetupTypeStats() and are attached to each card
+// as `historicalStats`; that is the only win rate the UI should ever show.
 // Tagging the trade helps the user understand the play and apply appropriate risk.
 
 import { calculateRSI, calculateSMA } from '../utils/signals.js';
@@ -48,7 +54,6 @@ export function classifySetup(quote, historical, signalData) {
         type: 'PULLBACK_LONG',
         label: '📈 Pullback Long',
         description: 'Price pulled back to support in an uptrend — classic high-probability swing entry',
-        historicalWinRate: 65,
         idealHold: 'Typically 12–30 hours',
         risk: 'medium',
         reasoning: `Stock pulled back ${pullbackPct.toFixed(1)}% from 20-day high. RSI ${rsi.toFixed(0)} is in the buy zone. Uptrend intact (price > 50 SMA > 200 SMA).`,
@@ -73,7 +78,6 @@ export function classifySetup(quote, historical, signalData) {
         type: 'BREAKOUT_LONG',
         label: '🚀 Breakout Long',
         description: 'Price breaking above 20-day high with strong volume — momentum continuation',
-        historicalWinRate: 50,
         idealHold: 'Typically 8–24 hours',
         risk: 'medium-high',
         reasoning: `Price within 2% of 20-day high (${high20.toFixed(2)}). Volume is ${volRatio.toFixed(1)}× average — institutions are buying.`,
@@ -95,7 +99,6 @@ export function classifySetup(quote, historical, signalData) {
         type: 'REVERSAL_LONG',
         label: '🔄 Reversal Long',
         description: 'Oversold bounce attempt off support — mean-reversion play',
-        historicalWinRate: 55,
         idealHold: 'Typically 12–24 hours',
         risk: 'high',
         reasoning: `RSI ${rsi.toFixed(0)} is oversold. ${nearLow52 ? 'Near 52-week low.' : ''} ${isBullishToday ? 'Today closing above its open shows buyers stepping in.' : ''}`,
@@ -110,7 +113,6 @@ export function classifySetup(quote, historical, signalData) {
       type: 'TREND_LONG',
       label: '📊 Trend Continuation Long',
       description: 'Established uptrend with momentum — riding the wave',
-      historicalWinRate: 60,
       idealHold: 'Typically 18–36 hours',
       risk: 'medium',
       reasoning: `Price above 20 SMA, 20 above 50 (clean uptrend). RSI ${rsi.toFixed(0)} shows momentum without exhaustion.`,
@@ -132,7 +134,6 @@ export function classifySetup(quote, historical, signalData) {
         type: 'BREAKDOWN_SHORT',
         label: '💥 Breakdown Short',
         description: 'Price breaking below 20-day low with volume — momentum to the downside',
-        historicalWinRate: 50,
         idealHold: 'Typically 8–24 hours',
         risk: 'medium-high',
         reasoning: `Price within 2% of 20-day low (${low20.toFixed(2)}). Volume ${volRatio.toFixed(1)}× average — selling pressure confirmed.`,
@@ -152,7 +153,6 @@ export function classifySetup(quote, historical, signalData) {
         type: 'PULLBACK_SHORT',
         label: '📉 Rally Short',
         description: 'Price rallied into resistance in a downtrend — sell the bounce',
-        historicalWinRate: 60,
         idealHold: 'Typically 12–30 hours',
         risk: 'medium',
         reasoning: `Stock bounced ${distFromLow.toFixed(1)}% from 20-day low. RSI ${rsi.toFixed(0)} entering sell zone. Downtrend intact (price < 50 SMA).`,
@@ -170,7 +170,6 @@ export function classifySetup(quote, historical, signalData) {
         type: 'REVERSAL_SHORT',
         label: '🔄 Reversal Short',
         description: 'Overbought rejection — mean-reversion to the downside',
-        historicalWinRate: 55,
         idealHold: 'Typically 12–24 hours',
         risk: 'high',
         reasoning: `RSI ${rsi.toFixed(0)} is overbought. Today closing below its open shows sellers stepping in.`,
@@ -185,7 +184,6 @@ export function classifySetup(quote, historical, signalData) {
       type: 'TREND_SHORT',
       label: '📊 Trend Continuation Short',
       description: 'Established downtrend with momentum',
-      historicalWinRate: 60,
       idealHold: 'Typically 18–36 hours',
       risk: 'medium',
       reasoning: `Price below 20 SMA, 20 below 50 (clean downtrend). RSI ${rsi.toFixed(0)} confirms selling pressure.`,

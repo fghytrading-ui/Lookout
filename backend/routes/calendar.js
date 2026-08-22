@@ -76,70 +76,64 @@ async function getMacroContext() {
   return out;
 }
 
-export function getEconomicEvents() {
-  const now = new Date();
-  const dayNames   = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-  const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+// getEconomicEvents() (a hand-written weekly event template) was removed —
+// it was the source of the fabricated calendar described above.
 
-  const weeklyTemplates = {
-    1: [{ name: 'NY Empire State Mfg Index', time: '1:30pm UK', impact: 'medium', expected: '–5.0', previous: '–8.1' }],
-    2: [
-      { name: 'Core CPI (MoM)',  time: '1:30pm UK', impact: 'high',   expected: '0.3%', previous: '0.4%' },
-      { name: 'CPI (YoY)',       time: '1:30pm UK', impact: 'high',   expected: '2.4%', previous: '2.4%' }
-    ],
-    3: [
-      { name: 'Core PPI (MoM)',              time: '1:30pm UK', impact: 'high',   expected: '0.3%',  previous: '0.1%'  },
-      { name: 'Crude Oil Inventories (EIA)', time: '3:30pm UK', impact: 'medium', expected: '–1.2M', previous: '0.8M'  },
-      { name: 'Retail Sales (MoM)',          time: '1:30pm UK', impact: 'high',   expected: '0.1%',  previous: '–0.9%' }
-    ],
-    4: [
-      { name: 'Initial Jobless Claims',      time: '1:30pm UK', impact: 'medium', expected: '228K',   previous: '228K'   },
-      { name: 'Philadelphia Fed Mfg Index',  time: '1:30pm UK', impact: 'medium', expected: '–10.9',  previous: '–26.4'  },
-      { name: 'Building Permits',            time: '1:30pm UK', impact: 'medium', expected: '1.45M',  previous: '1.48M'  }
-    ],
-    5: [
-      { name: 'Michigan Consumer Sentiment',      time: '3:00pm UK', impact: 'high',   expected: '52.0', previous: '52.2' },
-      { name: 'Michigan Inflation Expectations',  time: '3:00pm UK', impact: 'medium', expected: '6.5%', previous: '6.5%' }
-    ]
-  };
+// The scenarios were one fixed pair of sentences reused for every event:
+// "beats expectations -> risk-on". That is backwards for the events that
+// matter most. A hot CPI beats expectations and is risk-OFF, because it pushes
+// rate expectations up; the same is true of PPI, and unemployment and jobless
+// claims are inverted metrics where a higher number is the bad one.
+//
+// Each event is classified by how a HIGHER-than-expected print actually reads.
+// Anything unrecognised gets no scenario at all rather than a confident guess.
+const EVENT_POLARITY = [
+  { match: /\bCPI\b|Consumer Price|Core PCE|\bPPI\b|Producer Price|Inflation Expectations/i,
+    higherIs: 'hawkish' },
+  { match: /Federal Funds Rate|Interest Rate Decision|\bFOMC\b/i, higherIs: 'hawkish' },
+  { match: /Unemployment Rate|Jobless Claims/i, higherIs: 'weak' },
+  { match: /Non[- ]?Farm|\bNFP\b|\bGDP\b|Retail Sales|\bPMI\b|Consumer Sentiment|Durable Goods|Industrial Production/i,
+    higherIs: 'strong' }
+];
 
-  const events = [];
-  let tradingDays = 0, offset = 0;
-  while (tradingDays < 7 && offset < 14) {
-    const date = new Date(now);
-    date.setDate(date.getDate() + offset++);
-    const wd = date.getDay();
-    if (wd === 0 || wd === 6) continue;
-    tradingDays++;
-    (weeklyTemplates[wd] || []).forEach(tmpl => {
-      events.push({
-        ...tmpl,
-        date: date.toISOString().split('T')[0],
-        dayName: dayNames[wd],
-        monthName: monthNames[date.getMonth()],
-        dayNum: date.getDate()
-      });
-    });
+function scenariosFor(name) {
+  const hit = EVENT_POLARITY.find(p => p.match.test(name || ''));
+  if (!hit) return { longScenario: null, shortScenario: null };
+
+  if (hit.higherIs === 'hawkish') {
+    return {
+      longScenario:  `A COOLER ${name} than forecast is the bullish outcome — it eases rate pressure, lifting equities and gold.`,
+      shortScenario: `A HOTTER ${name} than forecast is the bearish outcome — rate expectations rise, hitting growth stocks hardest.`
+    };
   }
-  return events.sort((a, b) => new Date(a.date) - new Date(b.date));
+  if (hit.higherIs === 'weak') {
+    return {
+      longScenario:  `A LOWER ${name} than forecast points to a resilient economy — supportive for equities.`,
+      shortScenario: `A HIGHER ${name} than forecast signals labour-market weakness — risk-off, bid for bonds and gold.`
+    };
+  }
+  return {
+    longScenario:  `A STRONGER ${name} than forecast is risk-on — bullish equities, bearish safe havens.`,
+    shortScenario: `A WEAKER ${name} than forecast is risk-off — bearish growth stocks, bullish gold and bonds.`
+  };
 }
 
 function getTonightsCatalysts(events) {
   const today = new Date().toISOString().split('T')[0];
   return events
     .filter(e => e.date === today && e.impact === 'high')
-    .map(e => ({
-      ...e,
-      longScenario:  `If ${e.name} beats expectations: expect risk-on momentum — bullish for equities, bearish for safe havens.`,
-      shortScenario: `If ${e.name} misses expectations: expect risk-off rotation — bearish for growth stocks, bullish for Gold and bonds.`
-    }));
+    .map(e => ({ ...e, ...scenariosFor(e.name || e.title) }));
 }
 
 router.get('/events', async (req, res) => {
   // Try live Forex Factory data first
+  // Previously fell back to a fixed weekly template with invented forecast
+  // figures, and the UI simply dropped its "LIVE" badge — so fabricated events
+  // were indistinguishable from real ones. If the feed is down we now say so
+  // and show nothing rather than inventing a calendar.
   const liveEvents = await fetchLiveEconomicEvents();
-  const events = liveEvents && liveEvents.length ? liveEvents : getEconomicEvents();
   const isLive = !!(liveEvents && liveEvents.length);
+  const events = isLive ? liveEvents : [];
 
   const macro     = await getMacroContext().catch(() => []);
   const catalysts = getTonightsCatalysts(events);

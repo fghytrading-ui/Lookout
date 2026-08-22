@@ -60,10 +60,16 @@ export default function EconomicCalendar({ events, isLive }) {
           <p className="text-[10px] text-[#444] font-mono mt-0.5">Economic events with expected vs previous — next 7 trading days</p>
         </div>
         <div className="flex items-center gap-2">
-          {isLive && (
+          {/* An outage used to show as the LIVE badge quietly disappearing,
+              which is indistinguishable from a quiet week. Say it plainly. */}
+          {isLive ? (
             <span className="text-[10px] font-mono px-2 py-0.5 rounded border border-green-500/40 text-green-300 bg-green-500/10 flex items-center gap-1">
               <span className="w-1.5 h-1.5 rounded-full bg-green-400 live-dot" />
               LIVE
+            </span>
+          ) : (
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded border border-amber-500/40 text-amber-300 bg-amber-500/10">
+              ⚠ FEED UNAVAILABLE
             </span>
           )}
           {highCount > 0 && (

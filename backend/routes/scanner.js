@@ -976,6 +976,59 @@ router.get('/scan', async (req, res) => {
       try { logSignal(card, { market }); } catch {}
     }
 
+    // ── DROP SETUPS THE TRACKED RECORD PROVES ARE LOSERS ───────────────
+    // setupBlocked already barred these from ENTER NOW, but they still filled
+    // WAIT FOR BOUNCE and CARRY FORWARD — so a pattern that has won 13 of 90
+    // attempts (79% of them stopped out) was still most of what the board
+    // showed. Flagging a losing trade and then displaying it anyway is not a
+    // filter; a trader looking at the board takes what is on it.
+    //
+    // The bar is deliberately evidence-based rather than opinionated: at least
+    // 15 resolved signals AND a win rate under 25%. Anything thinner than that
+    // keeps its confidence penalty and stays visible, because a handful of
+    // losses is not proof.
+    //
+    // Signals are logged BEFORE this point on purpose — the tracker must keep
+    // recording these patterns, otherwise removing them from the board would
+    // freeze their statistics and they could never earn their way back.
+    const provenLoser = (c) => {
+      const h = c.historicalStats;
+      return !!h && h.sampleSize >= 15 && h.winRate < 0.25;
+    };
+    const droppedForRecord = [];
+    for (const key of ['enterNow', 'waitForBounce', 'carryForward']) {
+      const keep = [];
+      for (const c of trades[key]) {
+        if (provenLoser(c)) droppedForRecord.push(c); else keep.push(c);
+      }
+      trades[key] = keep;
+    }
+    const droppedSummary = (() => {
+      if (!droppedForRecord.length) return null;
+      const byType = {};
+      for (const c of droppedForRecord) {
+        const k = c.setupType?.label || 'unclassified';
+        byType[k] = byType[k] || { count: 0, winRate: c.historicalStats.winRate, sampleSize: c.historicalStats.sampleSize };
+        byType[k].count++;
+      }
+      return Object.entries(byType).map(([label, v]) => ({
+        label, count: v.count,
+        winRate: Math.round(v.winRate * 100),
+        sampleSize: v.sampleSize
+      }));
+    })();
+
+    // The reason text is built earlier in the pass, so it cannot know about
+    // anything removed here. Without this, a board emptied by the filter would
+    // read as a broken scanner rather than a deliberate refusal.
+    if (droppedSummary && trades.enterNow.length === 0) {
+      const detail = droppedSummary
+        .map(d => `${d.count} ${d.label} (${d.winRate}% over ${d.sampleSize} tracked)`)
+        .join('; ');
+      const note = `Held back ${droppedForRecord.length} setup${droppedForRecord.length === 1 ? '' : 's'} whose tracked record does not support taking them — ${detail}.`;
+      enterNowEmptyReason = enterNowEmptyReason ? `${enterNowEmptyReason} ${note}` : note;
+    }
+
     // Mark the single best trade across all categories as TOP PICK
     // Only consider PASS verdict trades for TOP PICK (no caution flags)
     const allCards = [...trades.enterNow, ...trades.waitForBounce, ...trades.carryForward];
@@ -1001,6 +1054,7 @@ router.get('/scan', async (req, res) => {
       inventoryReleases,
       entryTiming,
       enterNowEmptyReason,
+      droppedForRecord: droppedSummary,
       macroBlackout,
       scannedCount: tickerList.length,
       universe: universeMeta ? {

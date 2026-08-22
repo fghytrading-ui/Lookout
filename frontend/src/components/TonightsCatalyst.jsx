@@ -29,16 +29,25 @@ export default function TonightsCatalyst({ catalysts }) {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 gap-2">
-              <div className="bg-green-500/8 border border-green-500/20 rounded p-2.5">
-                <div className="text-[9px] uppercase tracking-widest text-green-500/60 font-mono mb-1">🟢 BEAT SCENARIO — LONG PLAY</div>
-                <p className="text-[11px] text-green-300/80 font-mono leading-relaxed">{event.longScenario}</p>
+            {/* Labelled by OUTCOME, not by beat/miss: a hot CPI beats forecast
+                and is bearish, so "beat = long play" was wrong for inflation
+                prints. Hidden entirely when the event is unrecognised. */}
+            {(event.longScenario || event.shortScenario) && (
+              <div className="grid grid-cols-1 gap-2">
+                {event.longScenario && (
+                  <div className="bg-green-500/8 border border-green-500/20 rounded p-2.5">
+                    <div className="text-[9px] uppercase tracking-widest text-green-500/60 font-mono mb-1">🟢 BULLISH OUTCOME</div>
+                    <p className="text-[11px] text-green-300/80 font-mono leading-relaxed">{event.longScenario}</p>
+                  </div>
+                )}
+                {event.shortScenario && (
+                  <div className="bg-red-500/8 border border-red-500/20 rounded p-2.5">
+                    <div className="text-[9px] uppercase tracking-widest text-red-500/60 font-mono mb-1">🔴 BEARISH OUTCOME</div>
+                    <p className="text-[11px] text-red-300/80 font-mono leading-relaxed">{event.shortScenario}</p>
+                  </div>
+                )}
               </div>
-              <div className="bg-red-500/8 border border-red-500/20 rounded p-2.5">
-                <div className="text-[9px] uppercase tracking-widest text-red-500/60 font-mono mb-1">🔴 MISS SCENARIO — SHORT PLAY</div>
-                <p className="text-[11px] text-red-300/80 font-mono leading-relaxed">{event.shortScenario}</p>
-              </div>
-            </div>
+            )}
 
             <div className="mt-2 text-[9px] text-[#333] font-mono">
               ⚠ Binary events carry elevated risk. Reduce position size. Never hold through the print without defined stops.

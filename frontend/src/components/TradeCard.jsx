@@ -490,12 +490,14 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
           <div className="bg-[#0a0a0a] border border-cyan-500/20 rounded p-2.5 mb-2">
             <div className="flex items-center justify-between mb-1 flex-wrap gap-1">
               <span className="text-[12px] font-mono font-bold text-cyan-300">{trade.setupType.label}</span>
-              <span className="text-[9px] font-mono text-[#666]">
-                Historical win rate: <span className={`font-bold ${
-                  trade.setupType.historicalWinRate >= 60 ? 'text-green-400' :
-                  trade.setupType.historicalWinRate >= 50 ? 'text-amber-400' : 'text-orange-400'
-                }`}>{trade.setupType.historicalWinRate}%</span>
-                <span className="text-[#444] ml-1">· {trade.setupType.idealHold}</span>
+              {/* The old "Historical win rate: 60%" here was a constant typed
+                  into setupClassifier.js — the same figure for every ticker,
+                  never measured. It sat directly above this system's REAL
+                  tracked record for the same pattern (14% over 90 trades), so
+                  the card asserted two different win rates at once. Only the
+                  measured one, rendered below, is shown now. */}
+              <span className="text-[9px] font-mono text-[#444]">
+                {trade.setupType.idealHold}
               </span>
             </div>
             <p className="text-[10px] text-[#888] font-mono leading-snug">{trade.setupType.description}</p>
