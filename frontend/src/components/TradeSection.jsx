@@ -30,6 +30,19 @@ const SECTION_CONFIG = {
 export default function TradeSection({ trades, type, onRefresh, newTickers, accountSize, riskPct, entryTiming, onTakeTrade, emptyReason }) {
   const cfg = SECTION_CONFIG[type] || SECTION_CONFIG.carry;
 
+  // "ENTER NOW" is a claim about right now, so it has to track the session.
+  // On a weekend or after the close you cannot enter anything, and the header
+  // saying otherwise contradicts the cards underneath it (which already say
+  // "AT NEXT OPEN"). The entry windows lower down are separate — those are
+  // best-time-of-day guidance and stay as they are.
+  const marketOpen = entryTiming?.urgency === 'now';
+  const label = (type === 'enter' && entryTiming && !marketOpen)
+    ? entryTiming.label.toUpperCase()          // e.g. "ENTER MON 24 2:30PM UK"
+    : cfg.label;
+  const sub = (type === 'enter' && entryTiming && !marketOpen)
+    ? entryTiming.detail
+    : cfg.sub;
+
   return (
     <section className="mb-8">
       {/* Section header */}
@@ -37,9 +50,9 @@ export default function TradeSection({ trades, type, onRefresh, newTickers, acco
         <span className="text-xl">{cfg.icon}</span>
         <div className="flex-1">
           <h2 className={`text-sm font-bold tracking-widest font-condensed ${cfg.accent}`}>
-            {cfg.label}
+            {label}
           </h2>
-          <p className="text-[10px] text-[#444] font-mono mt-0.5">{cfg.sub}</p>
+          <p className="text-[10px] text-[#444] font-mono mt-0.5">{sub}</p>
         </div>
         <span className={`text-xs font-mono px-2 py-0.5 rounded border ${cfg.border} ${cfg.accent}`}>
           {trades.length} setup{trades.length !== 1 ? 's' : ''}
