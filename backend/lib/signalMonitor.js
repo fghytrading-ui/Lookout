@@ -24,14 +24,36 @@ async function fetchCandlesSince(signal) {
       const limit = Math.min(200, Math.max(24, Math.ceil(hoursElapsed) + 4));
       const candles = await fetchCryptoCandles(signal.ticker, { interval: '1h', limit });
       if (!candles) return [];
+      // Only bars that OPEN at or after the signal. The old filter allowed
+      // ts - 1h, which let in the bar the signal was formed inside — price
+      // action that had already happened when the signal was written.
       const ts = signal.signaledAt;
-      return candles.filter(c => new Date(c.date).getTime() >= ts - 60 * 60 * 1000);
+      return candles.filter(c => new Date(c.date).getTime() >= ts);
     }
-    // Stocks / forex / commodities — daily candles from Yahoo
+
+    // Stocks / forex / commodities — daily candles from Yahoo.
+    //
+    // This filter was `>= signaledAt - 24h`, and a daily bar is stamped at
+    // midnight. A signal written at 22:00 therefore matched its OWN day's bar
+    // — a bar covering the entire session that had already closed before the
+    // signal existed — and often the previous day's too. That day's low then
+    // took out a stop sitting a few percent below an entry set at the day's
+    // close, so the trade was recorded as stopped out roughly 22 hours BEFORE
+    // it was signalled.
+    //
+    // It affected 167 of 306 closed signals. Those recorded a 6.6% win rate
+    // against 50.8% for the ones scored on genuine forward bars, which is why
+    // the tracked record looked worse than random and made the entry logic
+    // appear to have negative edge.
+    //
+    // A daily bar cannot represent "the rest of the signal's day" because it
+    // includes the morning, so the first bar that can honestly be scored is
+    // the next session's. Compare on the market's own calendar date.
     const { candles } = await fetchFull(signal.ticker, '1mo');
     if (!candles?.length) return [];
-    const ts = signal.signaledAt;
-    return candles.filter(c => new Date(c.date).getTime() >= ts - 24 * 60 * 60 * 1000);
+    const signalDay = new Date(signal.signaledAt)
+      .toLocaleDateString('en-CA', { timeZone: 'America/New_York' });   // YYYY-MM-DD
+    return candles.filter(c => c.date > signalDay);
   } catch {
     return [];
   }
@@ -39,7 +61,7 @@ async function fetchCandlesSince(signal) {
 
 // Walk candles and determine outcome.
 // Returns { reason, closePrice, mfe, mae, closedAt } or null if still open.
-function determineOutcome(signal, candles) {
+export function determineOutcome(signal, candles) {
   if (!candles || candles.length === 0) {
     if (Date.now() > signal.expiresAt) {
       return { reason: 'EXPIRED', closePrice: signal.entry, mfe: 0, mae: 0, closedAt: signal.expiresAt };
