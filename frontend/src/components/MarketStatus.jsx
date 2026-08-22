@@ -6,7 +6,8 @@ export default function MarketStatus({ status, lastUpdated, scanning }) {
     PRE_MARKET:   { label: 'PRE-MARKET',     dot: 'bg-amber-400',           text: 'text-amber-400',  border: 'border-amber-500/30' },
     AFTER_HOURS:  { label: 'AFTER HOURS',    dot: 'bg-blue-400',            text: 'text-blue-400',   border: 'border-blue-500/30'  },
     CLOSED:       { label: 'MARKET CLOSED',  dot: 'bg-red-500',             text: 'text-red-400',    border: 'border-red-500/30'   },
-    WEEKEND:      { label: 'WEEKEND',        dot: 'bg-gray-500',            text: 'text-gray-400',   border: 'border-gray-600/30'  }
+    WEEKEND:      { label: 'WEEKEND',        dot: 'bg-gray-500',            text: 'text-gray-400',   border: 'border-gray-600/30'  },
+    HOLIDAY:      { label: 'MARKET HOLIDAY', dot: 'bg-gray-500',            text: 'text-gray-400',   border: 'border-gray-600/30'  }
   };
 
   const cfg = sessionConfig[session] || sessionConfig['CLOSED'];

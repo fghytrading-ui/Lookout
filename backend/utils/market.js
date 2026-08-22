@@ -3,11 +3,7 @@ function getNYTime() {
 }
 
 export function isMarketOpen() {
-  const et = getNYTime();
-  const day = et.getDay();
-  if (day === 0 || day === 6) return false;
-  const mins = et.getHours() * 60 + et.getMinutes();
-  return mins >= 570 && mins < 960;
+  return getSession() === 'MARKET_OPEN';
 }
 
 // Convert a date to UK time string showing London hour for US market open
@@ -73,10 +69,15 @@ export function getEntryTiming() {
 
   // For AFTER_HOURS, CLOSED, WEEKEND — find next market open
   const next = new Date(et);
-  if (session === 'AFTER_HOURS' || (session === 'CLOSED' && et.getHours() >= 16)) {
+  if (session === 'AFTER_HOURS' || session === 'HOLIDAY' || (session === 'CLOSED' && et.getHours() >= 16)) {
     next.setDate(next.getDate() + 1);
   }
-  while (next.getDay() === 0 || next.getDay() === 6) next.setDate(next.getDate() + 1);
+  // Skip weekends AND market holidays — landing on Christmas and calling it
+  // the next open is the same error as ignoring Saturday.
+  let guard = 0;
+  while ((next.getDay() === 0 || next.getDay() === 6 || isMarketHoliday(next)) && guard++ < 14) {
+    next.setDate(next.getDate() + 1);
+  }
 
   const isTomorrow = next.toDateString() === new Date(et.getTime() + 86400000).toDateString();
   const dayLabel = isTomorrow ? 'TOMORROW' : `${dayNames[next.getDay()]} ${next.getDate()}`;
@@ -93,10 +94,13 @@ export function getSession() {
   const et = getNYTime();
   const day = et.getDay();
   if (day === 0 || day === 6) return 'WEEKEND';
+  if (isMarketHoliday(et)) return 'HOLIDAY';
   const mins = et.getHours() * 60 + et.getMinutes();
-  if (mins >= 240 && mins < 570)  return 'PRE_MARKET';
-  if (mins >= 570 && mins < 960)  return 'MARKET_OPEN';
-  if (mins >= 960 && mins < 1200) return 'AFTER_HOURS';
+  // On a half-day the closing bell is 1pm ET, so after-hours starts then.
+  const close = isEarlyClose(et) ? 780 : 960;
+  if (mins >= 240 && mins < 570)   return 'PRE_MARKET';
+  if (mins >= 570 && mins < close) return 'MARKET_OPEN';
+  if (mins >= close && mins < 1200) return 'AFTER_HOURS';
   return 'CLOSED';
 }
 
@@ -176,4 +180,79 @@ export function buildIntradayTiming({ tradeStyle, macroEvents = [], earnings = n
           : `${ev.name} ${ev.when} — hold off until the print, then enter on the reaction`)
       : null
   };
+}
+
+// ── US MARKET HOLIDAYS ───────────────────────────────────────────────────
+// getSession only ruled out Saturday and Sunday, so on Christmas Day or
+// Thanksgiving the board reported MARKET_OPEN and told the user to enter a
+// trade into a shut exchange — the same fault as the weekend case.
+//
+// These are computed from the NYSE rules rather than kept as a date table,
+// so the calendar cannot silently go stale a year from now.
+
+const nthWeekdayOfMonth = (y, month, weekday, n) => {
+  const first = new Date(Date.UTC(y, month, 1));
+  const offset = (weekday - first.getUTCDay() + 7) % 7;
+  return new Date(Date.UTC(y, month, 1 + offset + (n - 1) * 7));
+};
+const lastWeekdayOfMonth = (y, month, weekday) => {
+  const last = new Date(Date.UTC(y, month + 1, 0));
+  const offset = (last.getUTCDay() - weekday + 7) % 7;
+  return new Date(Date.UTC(y, month + 1, 0 - offset));
+};
+// Anonymous Gregorian algorithm.
+const easterSunday = (y) => {
+  const a = y % 19, b = Math.floor(y / 100), c = y % 100;
+  const d = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3), h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4), k = c % 4;
+  const l = (32 + 2 * e + 2 * i - h - k) % 7;
+  const m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const month = Math.floor((h + l - 7 * m + 114) / 31) - 1;
+  const day = ((h + l - 7 * m + 114) % 31) + 1;
+  return new Date(Date.UTC(y, month, day));
+};
+// A fixed-date holiday falling at the weekend is observed on the adjacent weekday.
+const observed = (d) => {
+  const day = d.getUTCDay();
+  if (day === 6) return new Date(d.getTime() - 86400000);
+  if (day === 0) return new Date(d.getTime() + 86400000);
+  return d;
+};
+const ymd = (d) => d.toISOString().slice(0, 10);
+
+function marketHolidays(y) {
+  const easter = easterSunday(y);
+  return new Set([
+    observed(new Date(Date.UTC(y, 0, 1))),                    // New Year's Day
+    nthWeekdayOfMonth(y, 0, 1, 3),                            // MLK Day
+    nthWeekdayOfMonth(y, 1, 1, 3),                            // Presidents' Day
+    new Date(easter.getTime() - 2 * 86400000),                // Good Friday
+    lastWeekdayOfMonth(y, 4, 1),                              // Memorial Day
+    observed(new Date(Date.UTC(y, 5, 19))),                   // Juneteenth
+    observed(new Date(Date.UTC(y, 6, 4))),                    // Independence Day
+    nthWeekdayOfMonth(y, 8, 1, 1),                            // Labor Day
+    nthWeekdayOfMonth(y, 10, 4, 4),                           // Thanksgiving
+    observed(new Date(Date.UTC(y, 11, 25)))                   // Christmas
+  ].map(ymd));
+}
+
+export function isMarketHoliday(nyDate = getNYTime()) {
+  const key = `${nyDate.getFullYear()}-${String(nyDate.getMonth() + 1).padStart(2, '0')}-${String(nyDate.getDate()).padStart(2, '0')}`;
+  return marketHolidays(nyDate.getFullYear()).has(key);
+}
+
+// NYSE closes at 1pm ET the day after Thanksgiving and on Christmas Eve,
+// and the day before Independence Day when that falls on a weekday.
+export function isEarlyClose(nyDate = getNYTime()) {
+  const y = nyDate.getFullYear();
+  const key = `${y}-${String(nyDate.getMonth() + 1).padStart(2, '0')}-${String(nyDate.getDate()).padStart(2, '0')}`;
+  const dayAfterThanksgiving = new Date(nthWeekdayOfMonth(y, 10, 4, 4).getTime() + 86400000);
+  const christmasEve = new Date(Date.UTC(y, 11, 24));
+  const julyThird = new Date(Date.UTC(y, 6, 3));
+  const weekday = (d) => d.getUTCDay() !== 0 && d.getUTCDay() !== 6;
+  const dates = [dayAfterThanksgiving];
+  if (weekday(christmasEve)) dates.push(christmasEve);
+  if (weekday(julyThird)) dates.push(julyThird);
+  return dates.map(ymd).includes(key);
 }
