@@ -419,10 +419,17 @@ export default function AnalystPage() {
               <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
                 <span className="text-lg font-condensed font-bold tracking-wider text-cyan-300">{data.setupType.label}</span>
                 <div className="flex items-center gap-3 text-[11px] font-mono">
-                  <span><span className="text-[#555]">Win rate:</span> <span className={`font-bold ${
-                    data.setupType.historicalWinRate >= 60 ? 'text-green-400' :
-                    data.setupType.historicalWinRate >= 50 ? 'text-amber-400' : 'text-orange-400'
-                  }`}>{data.setupType.historicalWinRate}%</span></span>
+                  {/* The old "Win rate" here read setupType.historicalWinRate,
+                      a constant that was never measured and has been removed —
+                      it would now render "undefined%". Only the tracked record
+                      is shown, and only when a sample exists. */}
+                  {data.historicalStats && (
+                    <span><span className="text-[#555]">Tracked:</span> <span className={`font-bold ${
+                      data.historicalStats.winRate >= 0.5 ? 'text-green-400' :
+                      data.historicalStats.winRate >= 0.35 ? 'text-amber-400' : 'text-orange-400'
+                    }`}>{Math.round(data.historicalStats.winRate * 100)}%</span>
+                    <span className="text-[#555]"> (n={data.historicalStats.sampleSize})</span></span>
+                  )}
                   <span><span className="text-[#555]">Hold:</span> <span className="text-[#ccc]">{data.setupType.idealHold}</span></span>
                   <span><span className="text-[#555]">Risk:</span> <span className={`font-bold ${
                     data.setupType.risk === 'high' ? 'text-red-400' :

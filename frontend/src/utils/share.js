@@ -56,7 +56,15 @@ export function formatTradeText(trade, opts = {}) {
 
   lines.push(`${dirEmoji} ${trade.ticker} ${trade.direction} — Project Look Out`);
   if (trade.name) lines.push(`${trade.name}`);
-  if (trade.setupType) lines.push(`${trade.setupType.label} · ${trade.setupType.idealHold} · ${trade.setupType.historicalWinRate}% historical`);
+  // historicalWinRate was an invented constant and has been removed; the real
+  // tracked record lives on historicalStats and is only present once there is
+  // a sample to quote.
+  if (trade.setupType) {
+    const rec = trade.historicalStats
+      ? ` · ${Math.round(trade.historicalStats.winRate * 100)}% tracked (n=${trade.historicalStats.sampleSize})`
+      : '';
+    lines.push(`${trade.setupType.label} · ${trade.setupType.idealHold}${rec}`);
+  }
   lines.push('');
 
   if (trade.price != null) {
