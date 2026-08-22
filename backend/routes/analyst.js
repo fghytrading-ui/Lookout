@@ -9,6 +9,7 @@ import { getMultiTimeframeTrends, scoreTimeframeAlignment } from '../lib/multiTi
 import { classifySetup } from '../lib/setupClassifier.js';
 import { computeTradeGrade } from '../lib/tradeGrade.js';
 import { getPerformanceMetrics } from '../lib/performanceMetrics.js';
+import { ukTimeForET } from '../utils/market.js';
 import { analyzeSignals, generateTradeSetup, calculateSMA, calculateMACD, TIME_SPANS, getTimespanKey, getExitWindow } from '../utils/signals.js';
 import { reviewTrade } from '../utils/reviewer.js';
 import { fetchCryptoCandles, computeSessionVWAP } from '../lib/cryptoCandles.js';
@@ -559,7 +560,7 @@ function generateBestPlay({ setup, review, weeklyTrend, reliability, price, verd
 
   return {
     headline, action,
-    timeframe: 'Same session — exit by 9pm UK',
+    timeframe: `Same session — exit by ${ukTimeForET(new Date(), 16, 0)}`,   // US close, DST-correct
     sizing: reliability.score >= 75 ? 'Full position (1% risk)' :
             reliability.score >= 60 ? 'Half position (0.5% risk)' :
             'Quarter position (0.25% risk)'

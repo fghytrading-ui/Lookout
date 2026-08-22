@@ -1,3 +1,4 @@
+import { ukTimeForET } from './market.js';
 // Forex market awareness — sessions, opening hours, overlap windows.
 // Forex trades 24/5: Sunday 5pm ET → Friday 5pm ET
 // Four major sessions overlap to create different liquidity profiles.
@@ -5,15 +6,23 @@
 // Returns active session info in UK time
 export function getForexSession() {
   const now = new Date();
+  // Forex opens/closes at 5pm New York time, so the boundary must be tested on
+  // the NY clock. Testing "22:00 UK" only lines up while both sides are on the
+  // same daylight-saving footing — in the March gap the true boundary is 9pm
+  // UK, and the market read as closed for an hour while it was trading.
+  const nyHour = parseInt(new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'America/New_York', hour: '2-digit', hour12: false }).format(now), 10) % 24;
+  const nyDay = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' })).getDay();
+  const reopenUK = ukTimeForET(now, 17, 0);
   // Convert to UTC for cleaner session math (sessions are defined in UTC equivalents)
   const utcHour = now.getUTCHours();
   const utcMin  = now.getUTCMinutes();
   const ukNow = new Date(now.toLocaleString('en-US', { timeZone: 'Europe/London' }));
-  const day = ukNow.getDay(); // Note: forex weekend = Sat all day, Sun before 10pm UK
+  const day = ukNow.getDay();
 
   // Determine if forex market is open at all
-  // Closes Friday 10pm UK / Saturday 12am UK → reopens Sunday 10pm UK
-  const isWeekendClosed = (day === 5 && (ukNow.getHours() >= 22)) || day === 6 || (day === 0 && ukNow.getHours() < 22);
+  // Closes Friday 5pm ET, reopens Sunday 5pm ET (Sydney).
+  const isWeekendClosed = (nyDay === 5 && nyHour >= 17) || nyDay === 6 || (nyDay === 0 && nyHour < 17);
 
   if (isWeekendClosed) {
     return {
@@ -21,9 +30,9 @@ export function getForexSession() {
       session: 'WEEKEND',
       activeSessions: [],
       label: 'Forex Closed',
-      detail: 'Markets reopen Sunday 10pm UK (Sydney session)',
+      detail: `Markets reopen Sunday ${reopenUK} (Sydney session)`,
       liquidity: 'NONE',
-      nextOpen: 'Sunday 10pm UK'
+      nextOpen: `Sunday ${reopenUK}`
     };
   }
 
@@ -35,10 +44,27 @@ export function getForexSession() {
   // OVERLAPS (highest liquidity):
   //   Tokyo + London: 08:00–09:00 UTC
   //   London + NY:    13:00–17:00 UTC  ← THE MOST ACTIVE WINDOW
-  const inSydney  = utcHour >= 21 || utcHour < 6;
-  const inTokyo   = utcHour < 9;
-  const inLondon  = utcHour >= 8 && utcHour < 17;
-  const inNY      = utcHour >= 13 && utcHour < 22;
+  // Sessions are defined by each centre's OWN local clock, not by fixed UTC
+  // hours. London trades 8am-5pm London time, which is 07:00-16:00 UTC in
+  // summer and 08:00-17:00 UTC in winter; New York trades 8am-5pm ET, which
+  // shifts the other way. Hardcoding UTC made every session boundary an hour
+  // wrong for part of the year, including the London/NY overlap that the
+  // liquidity read is based on.
+  const localHour = (tz) => {
+    const h = new Intl.DateTimeFormat('en-GB', {
+      timeZone: tz, hour: '2-digit', hour12: false
+    }).format(now);
+    return parseInt(h, 10) % 24;
+  };
+  const sydneyH = localHour('Australia/Sydney');
+  const tokyoH  = localHour('Asia/Tokyo');
+  const londonH = localHour('Europe/London');
+  const nyH     = localHour('America/New_York');
+
+  const inSydney  = sydneyH >= 8 && sydneyH < 17;
+  const inTokyo   = tokyoH  >= 9 && tokyoH  < 18;
+  const inLondon  = londonH >= 8 && londonH < 17;
+  const inNY      = nyH     >= 8 && nyH     < 17;
 
   const activeSessions = [];
   if (inSydney) activeSessions.push('Sydney');
@@ -94,7 +120,7 @@ export function getForexEntryTiming() {
   const s = getForexSession();
   if (!s.isOpen) {
     return {
-      label: 'ENTER SUN 10pm UK',
+      label: `ENTER SUN ${ukTimeForET(new Date(), 17, 0)}`,
       detail: 'Forex market closed for the weekend — reopens Sunday evening',
       urgency: 'wait'
     };

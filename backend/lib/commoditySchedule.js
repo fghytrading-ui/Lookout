@@ -1,38 +1,45 @@
 // Commodity-specific market schedules — inventory reports, agency updates, OPEC.
 // Returns the next ~7 days of relevant events.
+//
+// Release times are stored as the ET clock time the agency actually publishes
+// at (EIA crude is 10:30am ET), then formatted to UK at render. They used to
+// be hardcoded UK strings, which are only right while US and UK clocks are in
+// step — during the ~3 weeks each March when the US has moved and the UK has
+// not, every one of them was an hour late.
+import { ukTimeForET } from '../utils/market.js';
 
-// Map weekday → events. CME data times.
+// Map weekday → events. Times are ET (agency publication time).
 const RECURRING = {
   // Mondays
   1: [
-    { name: 'Cocoa & Coffee Inventory', time: '3:30pm UK', impact: 'low', affects: ['CC=F', 'KC=F'] }
+    { name: 'Cocoa & Coffee Inventory', et: { h: 10, m: 30 }, impact: 'low', affects: ['CC=F', 'KC=F'] }
   ],
   // Tuesdays
   2: [
-    { name: 'API Crude Oil Inventory (private)', time: '9:30pm UK', impact: 'medium', affects: ['CL=F','BZ=F','USO'] }
+    { name: 'API Crude Oil Inventory (private)', et: { h: 16, m: 30 }, impact: 'medium', affects: ['CL=F','BZ=F','USO'] }
   ],
   // Wednesdays — BIG day for commodities
   3: [
-    { name: 'EIA Crude Oil Inventory', time: '3:30pm UK', impact: 'high', affects: ['CL=F','BZ=F','USO'] },
-    { name: 'EIA Gasoline & Distillate Stocks', time: '3:30pm UK', impact: 'medium', affects: ['RB=F','HO=F'] }
+    { name: 'EIA Crude Oil Inventory', et: { h: 10, m: 30 }, impact: 'high', affects: ['CL=F','BZ=F','USO'] },
+    { name: 'EIA Gasoline & Distillate Stocks', et: { h: 10, m: 30 }, impact: 'medium', affects: ['RB=F','HO=F'] }
   ],
   // Thursdays
   4: [
-    { name: 'EIA Natural Gas Storage', time: '3:30pm UK', impact: 'high', affects: ['NG=F','UNG'] },
-    { name: 'USDA Export Sales', time: '1:30pm UK', impact: 'medium', affects: ['ZC=F','ZS=F','ZW=F'] }
+    { name: 'EIA Natural Gas Storage', et: { h: 10, m: 30 }, impact: 'high', affects: ['NG=F','UNG'] },
+    { name: 'USDA Export Sales', et: { h: 8,  m: 30 }, impact: 'medium', affects: ['ZC=F','ZS=F','ZW=F'] }
   ],
   // Fridays
   5: [
-    { name: 'CFTC Commitments of Traders', time: '8:30pm UK', impact: 'medium', affects: 'all' },
-    { name: 'Baker Hughes Oil Rig Count', time: '6:00pm UK', impact: 'medium', affects: ['CL=F','BZ=F'] }
+    { name: 'CFTC Commitments of Traders', et: { h: 15, m: 30 }, impact: 'medium', affects: 'all' },
+    { name: 'Baker Hughes Oil Rig Count', et: { h: 13, m: 0  }, impact: 'medium', affects: ['CL=F','BZ=F'] }
   ]
 };
 
 // Monthly events (approximate dates)
 const MONTHLY = [
-  { day: 12, name: 'OPEC Monthly Oil Report', time: '12:00pm UK', impact: 'high', affects: ['CL=F','BZ=F'] },
-  { day: 15, name: 'IEA Monthly Oil Report', time: '9:00am UK', impact: 'high', affects: ['CL=F','BZ=F'] },
-  { day: 10, name: 'USDA WASDE Crop Report', time: '5:00pm UK', impact: 'high', affects: ['ZC=F','ZS=F','ZW=F','SB=F'] }
+  { day: 12, name: 'OPEC Monthly Oil Report', et: { h: 7,  m: 0  }, impact: 'high', affects: ['CL=F','BZ=F'] },
+  { day: 15, name: 'IEA Monthly Oil Report', et: { h: 4,  m: 0  }, impact: 'high', affects: ['CL=F','BZ=F'] },
+  { day: 10, name: 'USDA WASDE Crop Report', et: { h: 12, m: 0  }, impact: 'high', affects: ['ZC=F','ZS=F','ZW=F','SB=F'] }
 ];
 
 // One-off OPEC+ meetings (would be loaded from API in production)
@@ -58,6 +65,9 @@ export function getCommoditySchedule(daysAhead = 7) {
       for (const ev of RECURRING[wd]) {
         events.push({
           ...ev,
+          // Format the stored ET publication time against THIS date, so the
+          // UK time shown tracks daylight saving on both sides.
+          time: ev.et ? ukTimeForET(d, ev.et.h, ev.et.m) : ev.time,
           date: isoDate,
           dayName: dayNames[wd],
           monthName: monthNames[d.getMonth()],
@@ -71,6 +81,7 @@ export function getCommoditySchedule(daysAhead = 7) {
       if (ev.day === dayNum) {
         events.push({
           ...ev,
+          time: ev.et ? ukTimeForET(d, ev.et.h, ev.et.m) : ev.time,
           date: isoDate,
           dayName: dayNames[wd],
           monthName: monthNames[d.getMonth()],
