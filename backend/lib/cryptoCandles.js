@@ -37,29 +37,61 @@ export async function fetchCryptoCandles(yahooTicker, { interval = '4h', limit =
   const cached = cache.get(cacheKey);
   if (cached && Date.now() - cached.ts < TTL) return cached.data;
 
-  try {
-    const { data } = await axios.get('https://api.binance.com/api/v3/klines', {
-      params: { symbol, interval, limit },
-      headers: HEADERS,
-      timeout: 8000
-    });
-    if (!Array.isArray(data) || data.length === 0) return null;
+  // Binance geo-blocks cloud hosts. On Render that meant no crypto candles at
+  // all, so the scanner silently dropped to Yahoo daily bars and lost the 4h
+  // resolution the whole crypto calibration is built on. Coinbase and Kraken
+  // serve the same OHLC and are reachable from US infrastructure.
+  const providers = [
+    {
+      name: 'binance',
+      run: async () => {
+        const { data } = await axios.get('https://api.binance.com/api/v3/klines', {
+          params: { symbol, interval, limit }, headers: HEADERS, timeout: 8000
+        });
+        if (!Array.isArray(data) || !data.length) return null;
+        return data.map(k => ({
+          date: new Date(k[0]).toISOString(),
+          open: parseFloat(k[1]), high: parseFloat(k[2]),
+          low: parseFloat(k[3]),  close: parseFloat(k[4]),
+          volume: parseFloat(k[5])
+        }));
+      }
+    },
+    {
+      name: 'coinbase',
+      run: async () => {
+        const gran = { '1h': 3600, '4h': 21600, '1d': 86400 }[interval];
+        const product = symbol.replace(/USDT$/, '-USD');
+        if (!gran) return null;
+        const { data } = await axios.get(
+          `https://api.exchange.coinbase.com/products/${product}/candles`,
+          { params: { granularity: gran }, headers: HEADERS, timeout: 8000 });
+        if (!Array.isArray(data) || !data.length) return null;
+        // Coinbase returns [time, low, high, open, close, volume], newest first.
+        return data
+          .map(k => ({
+            date: new Date(k[0] * 1000).toISOString(),
+            low: k[1], high: k[2], open: k[3], close: k[4], volume: k[5]
+          }))
+          .sort((a, b) => new Date(a.date) - new Date(b.date))
+          .slice(-limit);
+      }
+    }
+  ];
 
-    const candles = data.map(k => ({
-      date: new Date(k[0]).toISOString(),       // open time
-      open: parseFloat(k[1]),
-      high: parseFloat(k[2]),
-      low:  parseFloat(k[3]),
-      close: parseFloat(k[4]),
-      volume: parseFloat(k[5])                   // base asset volume per bar (real per-bar vol)
-    }));
-
-    cache.set(cacheKey, { data: candles, ts: Date.now() });
-    return candles;
-  } catch (err) {
-    // Fall back gracefully — caller decides whether to use Yahoo daily candles instead
-    return null;
+  let lastErr = null;
+  for (const p of providers) {
+    try {
+      const candles = await p.run();
+      if (candles && candles.length) {
+        if (p.name !== 'binance') console.log(`[crypto] ${symbol} candles via ${p.name} (Binance unreachable)`);
+        cache.set(cacheKey, { data: candles, ts: Date.now() });
+        return candles;
+      }
+    } catch (err) { lastErr = err; }
   }
+  // Caller decides whether to use Yahoo daily candles instead.
+  return null;
 }
 
 // Batch fetch with mild concurrency to stay well under Binance rate limits

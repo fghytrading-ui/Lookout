@@ -18,18 +18,67 @@ const HEADERS = {
 // Returns { rates: {BTCUSDT: 0.0001, ...}, marketAvg: <avg of major coins>, tier: 'NEUTRAL'|... }
 // One unauthenticated call returns ALL symbols — no rate limit issue.
 const FUNDING_SYMBOLS = ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT','DOGEUSDT','AVAXUSDT','LINKUSDT','ADAUSDT','DOTUSDT'];
+// Binance geo-blocks cloud hosts, so on Render this returned nothing and the
+// funding signal was simply absent in production while working on a laptop.
+// Bybit and OKX serve the same perpetual funding data and are reachable from
+// US-hosted infrastructure, so each provider is tried until one answers.
+const FUNDING_PROVIDERS = [
+  {
+    name: 'binance',
+    fetch: async () => {
+      const { data } = await axios.get('https://fapi.binance.com/fapi/v1/premiumIndex',
+        { headers: HEADERS, timeout: 8000 });
+      const out = {};
+      for (const row of data || []) {
+        if (FUNDING_SYMBOLS.includes(row.symbol)) out[row.symbol] = parseFloat(row.lastFundingRate);
+      }
+      return out;
+    }
+  },
+  {
+    name: 'bybit',
+    fetch: async () => {
+      const { data } = await axios.get('https://api.bybit.com/v5/market/tickers',
+        { params: { category: 'linear' }, headers: HEADERS, timeout: 8000 });
+      const out = {};
+      for (const row of data?.result?.list || []) {
+        if (FUNDING_SYMBOLS.includes(row.symbol) && row.fundingRate != null) {
+          out[row.symbol] = parseFloat(row.fundingRate);
+        }
+      }
+      return out;
+    }
+  },
+  {
+    name: 'okx',
+    fetch: async () => {
+      const out = {};
+      // OKX is one instrument per call, so only the majors are pulled.
+      for (const sym of FUNDING_SYMBOLS.slice(0, 6)) {
+        const inst = `${sym.replace('USDT', '')}-USDT-SWAP`;
+        try {
+          const { data } = await axios.get('https://www.okx.com/api/v5/public/funding-rate',
+            { params: { instId: inst }, headers: HEADERS, timeout: 8000 });
+          const r = data?.data?.[0]?.fundingRate;
+          if (r != null) out[sym] = parseFloat(r);
+        } catch { /* try the next symbol */ }
+      }
+      return out;
+    }
+  }
+];
+
 async function fetchFundingRates() {
   try {
-    const { data } = await axios.get('https://fapi.binance.com/fapi/v1/premiumIndex', {
-      headers: HEADERS, timeout: 6000
-    });
-    const rates = {};
-    for (const row of data) {
-      if (FUNDING_SYMBOLS.includes(row.symbol)) {
-        rates[row.symbol] = parseFloat(row.lastFundingRate);
-      }
+    let rates = {}, source = null;
+    for (const p of FUNDING_PROVIDERS) {
+      try {
+        const got = await p.fetch();
+        if (got && Object.keys(got).length) { rates = got; source = p.name; break; }
+      } catch { /* provider unreachable — try the next */ }
     }
     if (Object.keys(rates).length === 0) return null;
+    if (source && source !== 'binance') console.log(`[crypto] funding via ${source} (Binance unreachable)`);
     // Average across majors — market-wide positioning gauge
     const vals = Object.values(rates);
     const marketAvg = vals.reduce((a, b) => a + b, 0) / vals.length;
@@ -41,7 +90,7 @@ async function fetchFundingRates() {
     else if (marketAvg > -0.0001) { tier = 'NEUTRAL';        advice = 'Balanced positioning — no contrarian edge'; }
     else if (marketAvg > -0.0003) { tier = 'BEARISH';        advice = 'Negative funding — bears in control, watch for short squeeze'; }
     else                          { tier = 'CROWDED SHORTS'; advice = 'Extreme negative funding — short squeeze risk, contrarian long edge'; }
-    return { rates, marketAvg, tier, advice, timestamp: new Date().toISOString() };
+    return { rates, marketAvg, tier, advice, source, timestamp: new Date().toISOString() };
   } catch { return null; }
 }
 

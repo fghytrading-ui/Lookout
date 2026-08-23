@@ -7,7 +7,15 @@ const cache = new Map();
 const TTL = 30 * 60 * 1000; // 30 min — calendar updates a few times per day
 registerCache('economic-calendar-live', cache);
 
-const FF_URL = 'https://nfs.faireconomy.media/ff_calendar_thisweek.json';
+// Several mirrors of the same free Forex Factory feed. Render's egress reaches
+// some hosts and not others — the single URL used before simply failed there,
+// and the whole economic calendar went dark in production while working
+// perfectly on a laptop. Each is tried in turn and the first that answers wins.
+const FF_URLS = [
+  'https://nfs.faireconomy.media/ff_calendar_thisweek.json',
+  'https://cdn-nfs.faireconomy.media/ff_calendar_thisweek.json',
+  'https://nfs.faireconomy.media/ff_calendar_nextweek.json'
+];
 const HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36',
   'Accept': 'application/json'
@@ -56,7 +64,17 @@ export async function fetchLiveEconomicEvents() {
   if (cached && Date.now() - cached.ts < TTL) return cached.data;
 
   try {
-    const { data } = await axios.get(FF_URL, { headers: HEADERS, timeout: 8000 });
+    // Try each mirror; 8s was also tight for a cold free-tier dyno, so the
+    // timeout is raised and a failure moves on rather than killing the feed.
+    let data = null, usedUrl = null, lastErr = null;
+    for (const url of FF_URLS) {
+      try {
+        const res = await axios.get(url, { headers: HEADERS, timeout: 15000 });
+        if (Array.isArray(res.data) && res.data.length) { data = res.data; usedUrl = url; break; }
+      } catch (e) { lastErr = e; }
+    }
+    if (!data) throw (lastErr || new Error('no calendar mirror reachable'));
+    if (usedUrl !== FF_URLS[0]) console.log(`[calendar] primary feed unreachable, using ${usedUrl}`);
     if (!Array.isArray(data)) throw new Error('Unexpected response shape');
 
     const events = data

@@ -99,19 +99,26 @@ app.get('/api/system/sources', async (req, res) => {
       active: finnhub.enabled },
     { name: 'Finnhub Analysts', drives: 'Buy/sell ratings and rating changes',
       active: finnhub.enabled },
-    { name: 'Binance', drives: 'Crypto 4h candles and VWAP',
+    // Named for what it delivers, not one vendor: Binance geo-blocks cloud
+    // hosts, so candles fall back to Coinbase and funding to Bybit/OKX. Report
+    // which provider actually answered rather than implying Binance is down.
+    { name: 'Crypto Exchange', drives: 'Crypto 4h candles, VWAP and funding rates',
       active: !!binanceCandles,
-      note: cryptoCtx?.funding ? null : 'funding rates unavailable from this host' },
+      note: cryptoCtx?.funding?.source && cryptoCtx.funding.source !== 'binance'
+        ? `funding via ${cryptoCtx.funding.source} (Binance blocks this host)`
+        : (cryptoCtx?.funding ? null : 'funding rates unavailable from this host') },
     { name: 'CoinGecko', drives: 'BTC dominance, total crypto market cap',
       active: !!cryptoCtx?.global?.btcDominance,
       note: cryptoCtx?.global?.btcDominance ? null : 'rate limited — retries automatically' },
     { name: 'Fear & Greed', drives: 'Crypto sentiment extremes',
       active: cryptoCtx?.fearGreed?.value != null },
+    // The invented-events fallback was removed, so there is nothing to degrade
+    // to: either the live feed answers or the calendar genuinely has no data.
+    // Reporting it "active" with a fallback note was true before and is a lie
+    // now.
     { name: 'Economic Calendar', drives: 'FOMC, CPI, jobs, EIA inventories',
-      // The endpoint stays usable via its fallback even when the live feed
-      // is unreachable, so report it active and flag the degraded source.
-      active: true,
-      note: calendarLive ? null : 'live feed unreachable — using scheduled fallback' }
+      active: !!calendarLive,
+      note: calendarLive ? null : 'provider blocks this host — no events shown' }
   ];
 
   res.json({
