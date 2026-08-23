@@ -495,6 +495,112 @@ function computeReliability({ setup, signalData, review, weeklyTrend, sentiment,
   return { score, label, components };
 }
 
+// ── INDEPENDENT CORROBORATION ─────────────────────────────────────────
+// The analyst already gathered a backtest of this pattern, Wall Street price
+// targets, and multi-timeframe trend alignment — and then formed its verdict
+// without looking at any of them. Because the SETUP itself comes from the same
+// engine the dashboard uses, that made agreement with the dashboard structural
+// rather than earned: same code, same data, same answer.
+//
+// These three are genuinely independent of that engine. Backtest is this
+// pattern's own history on this instrument, Wall Street is outside human
+// analysts, and timeframe alignment is measured on bars the setup logic never
+// looks at. They are scored here as a modifier so the analyst can DISAGREE
+// with a technically clean setup when the outside evidence does not support
+// it — and when it agrees, it agrees for a reason.
+//
+// Deliberately a modifier rather than more points in the reliability score:
+// the score measures setup quality, this measures whether anything outside the
+// setup backs it up. Absent evidence is neutral, never a penalty.
+export function assessCorroboration({ setup, backtest, wallStreet, analystRatings, mtfAlignment, price }) {
+  if (!setup) return null;
+  const isLong = setup.direction === 'LONG';
+  const items = [];
+  let adj = 0;
+
+  // 1. This pattern's own record on this instrument (-10 .. +8)
+  if (backtest && backtest.winRate != null && backtest.sampleSize >= 4) {
+    const wr = backtest.winRate;
+    const pts = wr >= 65 ? 8 : wr >= 50 ? 4 : wr >= 35 ? -4 : -10;
+    adj += pts;
+    items.push({ name: 'Historical backtest',
+      verdict: pts > 0 ? 'pass' : pts === 0 ? 'partial' : 'fail',
+      text: `${wr}% of similar setups on this instrument reached target (${backtest.sampleSize} found)`,
+      points: pts });
+  } else {
+    items.push({ name: 'Historical backtest', verdict: 'partial',
+      text: 'Not enough similar setups to judge — no weight applied', points: 0 });
+  }
+
+  // 2. Outside analysts (-8 .. +7).
+  //
+  // Yahoo's quoteSummary endpoint, which supplied price targets, now answers
+  // 429 for everything — so wallStreet is null on every ticker and that input
+  // was silently dead. Finnhub's recommendation trend is live and is the real
+  // source of outside human opinion here.
+  if (analystRatings?.total >= 5) {
+    const bull = analystRatings.bullPct ?? 0;
+    const bear = analystRatings.bearPct ?? 0;
+    const agrees = isLong ? bull >= 60 : bear >= 40;
+    const conflicts = isLong ? bull <= 30 : bull >= 70;
+    const pts = agrees ? 7 : conflicts ? -8 : 0;
+    adj += pts;
+    items.push({ name: 'Analyst consensus',
+      verdict: agrees ? 'pass' : conflicts ? 'fail' : 'partial',
+      text: `${bull}% buy / ${bear}% sell across ${analystRatings.total} analysts (${analystRatings.consensus})`
+          + (conflicts ? ' — points the other way' : agrees ? ' — agrees with this direction' : ' — no clear lean'),
+      points: pts });
+  } else if (wallStreet?.targetMean && price > 0) {
+    const upside = ((wallStreet.targetMean - price) / price) * 100;
+    const agrees = isLong ? upside > 3 : upside < -3;
+    const conflicts = isLong ? upside < -3 : upside > 3;
+    const pts = agrees ? 7 : conflicts ? -8 : 0;
+    adj += pts;
+    items.push({ name: 'Wall Street targets',
+      verdict: agrees ? 'pass' : conflicts ? 'fail' : 'partial',
+      text: `Mean target $${wallStreet.targetMean.toFixed(2)} (${upside >= 0 ? '+' : ''}${upside.toFixed(1)}% from here)`,
+      points: pts });
+  } else {
+    items.push({ name: 'Analyst consensus', verdict: 'partial',
+      text: 'No analyst coverage for this instrument — no weight applied', points: 0 });
+  }
+
+  // 3. Trend agreement across 4h/daily/weekly/monthly (-10 .. +8)
+  if (mtfAlignment && typeof mtfAlignment.aligned === 'number') {
+    const { aligned, opposing } = mtfAlignment;
+    const pts = aligned >= 4 ? 8 : aligned === 3 ? 5 : opposing >= 3 ? -10 : opposing === 2 ? -5 : 0;
+    adj += pts;
+    items.push({ name: 'Multi-timeframe trend',
+      verdict: pts > 0 ? 'pass' : pts === 0 ? 'partial' : 'fail',
+      text: aligned === 0 && opposing === 0
+        ? 'All four timeframes are neutral — no directional signal either way'
+        : `${aligned}/4 timeframes agree with ${setup.direction}`
+          + (opposing ? `, ${opposing} against` : '') + ` — ${mtfAlignment.label}`,
+      points: pts });
+  }
+
+  const counted = items.filter(i => i.points !== 0).length;
+  const verdict = adj >= 10 ? 'CORROBORATED'
+                : adj >= 3  ? 'PARTIALLY CORROBORATED'
+                : adj > -5  ? 'UNCORROBORATED'
+                             : 'CONTRADICTED';
+  return {
+    adjustment: adj,
+    verdict,
+    counted,
+    items,
+    summary: counted === 0
+      ? 'No independent evidence available — verdict rests on the technical setup alone'
+      : verdict === 'CONTRADICTED'
+        ? 'Independent sources point against this setup'
+        : verdict === 'CORROBORATED'
+          ? 'Independent sources back this setup'
+          : verdict === 'PARTIALLY CORROBORATED'
+            ? 'Some independent support'
+            : 'Independent sources neither back nor contradict this setup'
+  };
+}
+
 // ── BEST PLAY synthesis — one clear actionable recommendation ─────────
 function generateBestPlay({ setup, review, weeklyTrend, reliability, price, verdict, targets, earnings, vix }) {
   // Strong reject conditions first
@@ -569,7 +675,7 @@ function generateBestPlay({ setup, review, weeklyTrend, reliability, price, verd
 
 // INDEPENDENCE MODE — Analyst is intentionally MORE skeptical than the Dashboard.
 // Defaults to HOLD/WAIT. Only flashes BUY/SELL when sources overwhelmingly agree.
-function deriveVerdict(setup, review, weeklyTrend, reliability) {
+function deriveVerdict(setup, review, weeklyTrend, reliability, corroboration = null) {
   if (!setup) {
     if (weeklyTrend === 'UP')   return { action: 'HOLD',  tone: 'neutral', detail: 'No setup. Weekly trend up — wait for clean pullback before considering.' };
     if (weeklyTrend === 'DOWN') return { action: 'AVOID', tone: 'bearish', detail: 'No setup. Weekly trend down — avoid long exposure.' };
@@ -584,22 +690,43 @@ function deriveVerdict(setup, review, weeklyTrend, reliability) {
   const direction = setup.direction;
   const score = reliability?.score || 0;
 
-  // ── BALANCED THRESHOLDS — gives BUY/SELL more readily, still safe ──
-  // STRONG BUY/SELL: high confluence
-  if (isPass && isHighProb && setup.rrRatio >= 2.2 && score >= 75) {
+  // Independent evidence now carries weight. Without this the verdict was
+  // decided entirely by the same engine that produced the setup, so agreeing
+  // with the dashboard was guaranteed rather than meaningful.
+  const corr = corroboration?.adjustment ?? 0;
+  const contradicted = corroboration?.verdict === 'CONTRADICTED';
+  const corrNote = corroboration?.counted
+    ? ` · ${corroboration.verdict.toLowerCase()} by ${corroboration.counted} independent source${corroboration.counted === 1 ? '' : 's'}`
+    : ' · no independent evidence available';
+
+  // Outside sources pointing the other way cap the call, however clean the
+  // chart looks. This is the whole point of a second opinion.
+  if (contradicted) {
     return {
-      action: direction === 'LONG' ? 'STRONG BUY' : 'STRONG SELL',
-      tone: direction === 'LONG' ? 'bullish' : 'bearish',
-      detail: `Reliability ${score}/100 · ${setup.confirming} signals aligned · R:R ${setup.rrRatio}:1 · cleared every stress test.`
+      action: 'WAIT',
+      tone: 'neutral',
+      detail: `Setup is technically sound (reliability ${score}/100) but independent sources disagree: `
+            + corroboration.items.filter(i => i.points < 0).map(i => i.text).join('; ')
+            + '. Wait for them to line up.'
     };
   }
 
-  // BUY/SELL: solid confluence (≥ 60 reliability, was 75)
-  if (isPass && score >= 60) {
+  // ── BALANCED THRESHOLDS — gives BUY/SELL more readily, still safe ──
+  // STRONG BUY/SELL now also requires the outside evidence to back it.
+  if (isPass && isHighProb && setup.rrRatio >= 2.2 && score >= 75 && corr >= 5) {
+    return {
+      action: direction === 'LONG' ? 'STRONG BUY' : 'STRONG SELL',
+      tone: direction === 'LONG' ? 'bullish' : 'bearish',
+      detail: `Reliability ${score}/100 · ${setup.confirming} signals aligned · R:R ${setup.rrRatio}:1${corrNote}.`
+    };
+  }
+
+  // BUY/SELL: solid confluence, and outside evidence not actively against it.
+  if (isPass && score >= 60 && corr > -5) {
     return {
       action: direction === 'LONG' ? 'BUY' : 'SELL',
       tone: direction === 'LONG' ? 'bullish' : 'bearish',
-      detail: `Reliability ${score}/100 · sources support direction · R:R ${setup.rrRatio}:1. Take with discipline.`
+      detail: `Reliability ${score}/100 · R:R ${setup.rrRatio}:1${corrNote}. Take with discipline.`
     };
   }
 
@@ -749,7 +876,13 @@ router.get('/:ticker', async (req, res) => {
         changePercent: raw.changePercent,
         earnings: null
       });
-      const verdict = deriveVerdict(setup, review, 'NEUTRAL', reliability);
+      // Crypto has no Wall Street coverage and no equity backtest here, so
+      // multi-timeframe agreement is the independent input available.
+      const cryptoCorroboration = assessCorroboration({
+        setup, backtest: null, wallStreet: null,
+        mtfAlignment: null, price: raw.price
+      });
+      const verdict = deriveVerdict(setup, review, 'NEUTRAL', reliability, cryptoCorroboration);
       const bestPlay = generateBestPlay({
         setup, review, weeklyTrend: 'NEUTRAL', reliability,
         price: raw.price, verdict: verdict.action, targets,
@@ -864,14 +997,9 @@ router.get('/:ticker', async (req, res) => {
       earnings: card.earnings
     });
 
-    // Now derive verdict using reliability score (Independence Mode)
-    const verdict = deriveVerdict(setup, review, weeklyTrend, reliability);
-
-    const bestPlay = generateBestPlay({
-      setup, review, weeklyTrend, reliability,
-      price: raw.price, verdict: verdict.action, targets,
-      earnings: card.earnings, vix
-    });
+    // Verdict is derived further down, once the independent evidence
+    // (backtest, Wall Street, multi-timeframe) has been gathered — it used to
+    // be decided here, before any of it existed.
 
     // Support/resistance, bulls/bears, invalidation triggers, sector context
     const keyLevels = findKeyLevels(candles, raw.price, atrSafe);
@@ -896,6 +1024,33 @@ router.get('/:ticker', async (req, res) => {
     let performance = null;
     try { performance = await getPerformanceMetrics(ticker, candles); } catch {}
 
+    // ── Independent corroboration, then the verdict ────────────────────
+    // Everything above this point that is NOT the signal engine — the
+    // pattern's own backtest, outside analyst targets, and trend agreement
+    // across timeframes — is weighed here and allowed to move the call.
+    const corroboration = assessCorroboration({
+      setup, backtest, wallStreet, analystRatings: analystConsensus,
+      mtfAlignment, price: raw.price
+    });
+    if (corroboration && setup) {
+      reliability.score = Math.max(0, Math.min(100, reliability.score + corroboration.adjustment));
+      reliability.components = [...(reliability.components || []), ...corroboration.items.map(i => ({
+        name: i.name, verdict: i.verdict, text: i.text, points: i.points, max: 8, independent: true
+      }))];
+      reliability.label = reliability.score >= 80 ? 'HIGH RELIABILITY'
+                        : reliability.score >= 65 ? 'MODERATE RELIABILITY'
+                        : reliability.score >= 50 ? 'LOW RELIABILITY'
+                        : 'UNRELIABLE — DO NOT TRADE';
+    }
+
+    const verdict = deriveVerdict(setup, review, weeklyTrend, reliability, corroboration);
+
+    const bestPlay = generateBestPlay({
+      setup, review, weeklyTrend, reliability,
+      price: raw.price, verdict: verdict.action, targets,
+      earnings: card.earnings, vix
+    });
+
     // Trade quality grade (synthesis of everything)
     const tradeGrade = computeTradeGrade({
       setup, review, reliability, mtfAlignment, backtest,
@@ -903,6 +1058,7 @@ router.get('/:ticker', async (req, res) => {
     });
 
     res.json({
+      corroboration,
       ticker,
       name: raw.longName,
       exchange: raw.exchangeName,

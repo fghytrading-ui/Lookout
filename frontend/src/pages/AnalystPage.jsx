@@ -481,7 +481,7 @@ export default function AnalystPage() {
                   style={{ width: `${data.reliability.score}%` }} />
               </div>
               <div className="space-y-1.5">
-                {data.reliability.components.map((c, i) => (
+                {data.reliability.components.filter(c => !c.independent).map((c, i) => (
                   <div key={i} className="flex items-center gap-2 text-[11px] font-mono">
                     <span className={`w-4 ${
                       c.verdict === 'pass' ? 'text-green-400' :
@@ -493,6 +493,48 @@ export default function AnalystPage() {
                   </div>
                 ))}
               </div>
+
+              {/* Evidence from outside the signal engine, kept visually separate.
+                  The setup itself is produced by the same logic the dashboard
+                  uses, so only these lines represent a genuinely independent
+                  opinion — and they are allowed to move the verdict. */}
+              {data.corroboration && data.reliability.components.some(c => c.independent) && (
+                <div className="mt-4 pt-3 border-t border-[#1a1a1a]">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-[10px] uppercase tracking-widest text-[#666] font-mono">
+                      Independent cross-check
+                    </span>
+                    <span className={`text-[10px] font-mono px-2 py-0.5 rounded border ${
+                      data.corroboration.verdict === 'CORROBORATED' ? 'border-green-500/40 text-green-300 bg-green-500/10' :
+                      data.corroboration.verdict === 'PARTIALLY CORROBORATED' ? 'border-amber-500/40 text-amber-300 bg-amber-500/10' :
+                      data.corroboration.verdict === 'CONTRADICTED' ? 'border-red-500/40 text-red-300 bg-red-500/10' :
+                      'border-[#2a2a2a] text-[#666]'
+                    }`}>
+                      {data.corroboration.verdict}
+                      {data.corroboration.adjustment !== 0 &&
+                        ` ${data.corroboration.adjustment > 0 ? '+' : ''}${data.corroboration.adjustment}`}
+                    </span>
+                  </div>
+                  <div className="space-y-1.5">
+                    {data.reliability.components.filter(c => c.independent).map((c, i) => (
+                      <div key={`ind-${i}`} className="flex items-center gap-2 text-[11px] font-mono">
+                        <span className={`w-4 ${
+                          c.verdict === 'pass' ? 'text-green-400' :
+                          c.verdict === 'partial' ? 'text-amber-400' : 'text-red-400'
+                        }`}>{c.verdict === 'pass' ? '✓' : c.verdict === 'partial' ? '◐' : '✗'}</span>
+                        <span className="text-[#888] w-36 flex-shrink-0">{c.name}</span>
+                        <span className="text-[#666] flex-1">{c.text}</span>
+                        <span className={`tabular-nums text-right w-12 ${
+                          c.points > 0 ? 'text-green-500/70' : c.points < 0 ? 'text-red-400/80' : 'text-[#444]'
+                        }`}>{c.points > 0 ? `+${c.points}` : c.points === 0 ? '—' : c.points}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-[#555] font-mono mt-2 leading-relaxed">
+                    {data.corroboration.summary}
+                  </p>
+                </div>
+              )}
             </div>
           )}
 
