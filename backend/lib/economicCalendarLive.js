@@ -1,7 +1,9 @@
-// Live economic calendar from Forex Factory (free, no key required).
-// Falls back to the static template if FF is unreachable.
+// Live economic calendar. Forex Factory first (it carries forecast and
+// previous figures), then FRED, which is reachable from cloud hosts but
+// supplies release dates only.
 import axios from 'axios';
 import { registerCache } from './persistentCache.js';
+import { fetchFredCalendar } from './fredCalendar.js';
 
 const cache = new Map();
 const TTL = 30 * 60 * 1000; // 30 min — calendar updates a few times per day
@@ -91,11 +93,36 @@ export async function fetchLiveEconomicEvents() {
       })
       .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 
+    // A reachable feed that yields nothing useful (late in the week, or all
+    // events filtered out) should still fall through to FRED rather than
+    // leaving the calendar blank.
+    if (!events.length) {
+      const fred = await fetchFredCalendar({ days: 14 }).catch(() => null);
+      if (fred && fred.length) {
+        console.log(`[calendar] primary feed returned no events — serving ${fred.length} from FRED`);
+        cache.set('events', { data: fred, ts: Date.now() });
+        return fred;
+      }
+    }
+
     cache.set('events', { data: events, ts: Date.now() });
     return events;
   } catch (err) {
-    console.warn('[calendar] Live fetch failed, will fall back to template:', err.message);
-    return null; // signals caller to use template
+    // Forex Factory rate-limits by IP and then serves HTML instead of JSON, so
+    // on shared cloud hosting it never succeeds. FRED is an official Federal
+    // Reserve service that permits server traffic; it supplies release DATES
+    // but no forecast/previous figures, which are left blank rather than
+    // invented.
+    try {
+      const fred = await fetchFredCalendar({ days: 14 });
+      if (fred && fred.length) {
+        console.log(`[calendar] Forex Factory unreachable — serving ${fred.length} events from FRED`);
+        cache.set('events', { data: fred, ts: Date.now() });
+        return fred;
+      }
+    } catch { /* fall through */ }
+    console.warn('[calendar] no provider reachable:', err.message);
+    return null;   // caller reports the calendar as unavailable
   }
 }
 

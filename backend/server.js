@@ -116,9 +116,12 @@ app.get('/api/system/sources', async (req, res) => {
     // to: either the live feed answers or the calendar genuinely has no data.
     // Reporting it "active" with a fallback note was true before and is a lie
     // now.
-    { name: 'Economic Calendar', drives: 'FOMC, CPI, jobs, EIA inventories',
+    { name: 'Economic Calendar', drives: 'CPI, jobs, GDP, PCE release dates',
       active: !!calendarLive,
-      note: calendarLive ? null : 'provider blocks this host — no events shown' }
+      note: !calendarLive ? 'no provider reachable — no events shown'
+          : (calendarLive[0]?.source === 'FRED'
+              ? 'via FRED (release dates only — no forecast figures)'
+              : null) }
   ];
 
   res.json({

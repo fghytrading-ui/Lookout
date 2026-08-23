@@ -15,3 +15,5 @@ services:
         value: 3001
       - key: FINNHUB_API_KEY
         sync: false   # User adds via Render dashboard (not in git)
+      - key: FRED_API_KEY
+        sync: false   # User adds via Render dashboard (not in git)
