@@ -793,6 +793,49 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
           {warnSignals.map((s, i) => <SignalPill key={`w${i}`} signal={s} />)}
         </div>
 
+        {/* Company's own SEC filings. Sits ABOVE the news block on purpose:
+            this is what the company filed itself, under legal obligation,
+            whereas the headlines below are third parties writing about it —
+            and frequently missing it entirely. */}
+        {trade.secFilings && (
+          <div className={`rounded border p-2.5 mb-3 ${
+            trade.secWarning ? 'bg-red-500/5 border-red-500/25' : 'bg-[#0a0a0a] border-[#181818]'
+          }`}>
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-[9px] uppercase tracking-widest font-mono text-[#444]">
+                🏛 SEC Filings
+              </span>
+              {trade.secWarning && (
+                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded border border-red-500/40 text-red-300 bg-red-500/10">
+                  ⚠ RISK FILED
+                </span>
+              )}
+            </div>
+            {trade.secWarning && (
+              <p className="text-[11px] text-red-300 font-mono leading-snug mb-1.5">
+                {trade.secWarning}
+              </p>
+            )}
+            <ul className="space-y-1">
+              {trade.secFilings.filings.slice(0, 3).map((f, i) => (
+                <li key={i} className="text-[11px] leading-snug flex items-start gap-2">
+                  <span className={`font-mono text-[10px] flex-shrink-0 ${
+                    f.direction === 'bearish' ? 'text-red-400'
+                    : f.direction === 'bullish' ? 'text-green-400' : 'text-[#666]'
+                  }`}>{f.daysAgo === 0 ? 'today' : `${f.daysAgo}d`}</span>
+                  <a href={f.url} target="_blank" rel="noopener noreferrer"
+                     className="text-[#999] hover:text-cyan-300 transition-colors">
+                    {f.label}
+                  </a>
+                </li>
+              ))}
+            </ul>
+            <p className="text-[9px] text-[#444] font-mono mt-1.5">
+              Filed by the company with the SEC — not press coverage
+            </p>
+          </div>
+        )}
+
         {/* News headlines */}
         {trade.news?.length > 0 && (
           <div className="bg-[#0a0a0a] rounded border border-[#181818] p-2.5 mb-3">

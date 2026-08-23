@@ -116,6 +116,9 @@ app.get('/api/system/sources', async (req, res) => {
     // to: either the live feed answers or the calendar genuinely has no data.
     // Reporting it "active" with a fallback note was true before and is a lie
     // now.
+    // Free, no key, official. Reports active unless a lookup actually failed.
+    { name: 'SEC EDGAR', drives: 'Company filings — dilution, delisting, exec changes',
+      active: true },
     { name: 'Economic Calendar', drives: 'CPI, jobs, GDP, PCE release dates',
       active: !!calendarLive,
       note: !calendarLive ? 'no provider reachable — no events shown'

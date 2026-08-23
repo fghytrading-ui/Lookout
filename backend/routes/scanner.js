@@ -14,6 +14,7 @@ import { withLiveBar } from '../lib/liveBar.js';
 import { fetchIntradayBatch } from '../lib/intradayCandles.js';
 import { analyseCatalysts, catalystSignals } from '../lib/catalystEngine.js';
 import { fetchRecommendationTrend } from '../lib/finnhubData.js';
+import { fetchRecentFilings } from '../lib/secFilings.js';
 import { buildThesis } from '../lib/thesis.js';
 import { getUpcomingMacro, buildEventTimeline } from '../lib/upcomingEvents.js';
 import { getMarketUniverse } from '../lib/marketUniverse.js';
@@ -675,7 +676,7 @@ router.get('/scan', async (req, res) => {
       try {
         // The three lookups are independent — run them together rather than
         // chained, which was tripling each card's latency.
-        const [enrichRes, extRes, earnRes, recRes] = await Promise.allSettled([
+        const [enrichRes, extRes, earnRes, recRes, secRes] = await Promise.allSettled([
           isCrypto
             ? enrichCryptoTicker(CRYPTO_NAMES[card.ticker] || card.ticker.replace('-USD', ''))
             : enrichTicker(card.ticker),
@@ -683,12 +684,30 @@ router.get('/scan', async (req, res) => {
           isCrypto ? Promise.resolve(null) : fetchNextEarnings(card.ticker),
           // Analyst consensus. A wave of upgrades or downgrades is a genuine,
           // measurable catalyst that the chart alone cannot show.
-          isCrypto ? Promise.resolve(null) : fetchRecommendationTrend(card.ticker)
+          isCrypto ? Promise.resolve(null) : fetchRecommendationTrend(card.ticker),
+          // Filings the company made itself. News aggregators miss these —
+          // RGTI filed an executive change while every headline held for it was
+          // an opinion piece or an options-chain listing. Dilution and delisting
+          // notices in particular have no other route into the system.
+          isCrypto ? Promise.resolve(null) : fetchRecentFilings(card.ticker)
         ]);
 
         const enrichment = enrichRes.status === 'fulfilled' ? enrichRes.value : null;
         card.news      = enrichment?.news || [];
         card.sentiment = enrichment?.sentiment || null;
+
+        const sec = secRes.status === 'fulfilled' ? secRes.value : null;
+        if (sec) {
+          card.secFilings = sec;
+          // A bearish filing is a hard fact about the company, not a reading of
+          // the chart, so it is allowed to dock confidence directly.
+          if (sec.topRisk) {
+            const penalty = sec.topRisk.weight >= 9 ? -20 : sec.topRisk.weight >= 7 ? -12 : -6;
+            card.confidence = Math.max(15, Math.min(95, (card.confidence || 50) + penalty));
+            card.secWarning = `${sec.topRisk.label} — filed with the SEC `
+                            + (sec.topRisk.daysAgo === 0 ? 'today' : `${sec.topRisk.daysAgo} days ago`);
+          }
+        }
 
         const ext = extRes.status === 'fulfilled' ? extRes.value : null;
         if (ext && Math.abs(ext.movePct) >= 0.25) {
