@@ -376,11 +376,12 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
         </div>
 
         {/* TP scaling hint */}
-        {trade.tp2 != null && (
-          <div className="text-[10px] text-[#666] font-mono mb-2 italic">
-            💡 Scale out: take 50–70% at <span className="text-blue-400">TP1</span> ({trade.rrRatio}:1), let runners go to <span className="text-cyan-400">TP2</span> ({trade.rrRatio2}:1)
-          </div>
-        )}
+        {/* A line here used to advise taking "50-70% at TP1", left over from an
+            older exit strategy. The exit plan further down — and the scalePlan
+            the backend actually computes — say thirds. Two different position
+            sizes on the same card is a real cost, not a cosmetic one: acting on
+            the wrong one sells twice what was intended at the first target.
+            The thirds plan is the live one, so this line is gone. */}
 
         {/* Intraday timing block — renders for sameDay (stocks) AND crypto with mode-specific copy */}
         {(trade.tradeStyle === 'sameDay' || trade.tradeStyle === 'crypto') && trade.intradayTiming && (

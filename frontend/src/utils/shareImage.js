@@ -153,7 +153,7 @@ export async function captureTradeShareImage(trade, entryTiming, filename) {
 
     ${trade.tp2 != null ? `
     <div style="font-size:11px; color:${C.textDim}; font-style:italic; margin-bottom:14px; padding:8px 12px; background:${C.page}; border-radius:6px;">
-      💡 Scale out: 50–70% at TP1 (lock safe profit) · let runners reach TP2 · trail SL to entry after TP1 hits
+      💡 Scale out in thirds: a third at the first target (stop then moves to breakeven) · a third at TP1 · let the runner reach TP2
     </div>` : ''}
 
     <!-- Stats row -->

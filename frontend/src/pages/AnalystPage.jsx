@@ -630,7 +630,7 @@ export default function AnalystPage() {
               )}
               {data.setup.tp2 != null && (
                 <div className="text-[11px] text-[#888] font-mono mb-3 italic">
-                  💡 Pro tip: scale out 50–70% of position at <span className="text-blue-400">TP1</span> (lock in safe profit), let the remainder run to <span className="text-cyan-400">TP2</span> for extended gains. Move SL to break-even after TP1 hits.
+                  💡 Scale out in thirds: bank a third at the first target and move the stop to breakeven, a third at <span className="text-blue-400">TP1</span>, and let the runner go to <span className="text-cyan-400">TP2</span>.
                 </div>
               )}
 
