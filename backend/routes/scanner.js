@@ -25,17 +25,34 @@ import {
 import { getEntryTiming, buildIntradayTiming } from '../utils/market.js';
 
 // Determine broad market regime from SPY's trend
+// Market regime on the horizon this software actually trades.
+//
+// This used to require SPY below its 50-day average AND the 50-day below the
+// 200-day — a structural bear market that takes months to form. Measured over
+// the last 2 years that was true on 0 of 300 sessions, so the SHORT gate below
+// was not a filter at all: it was an off switch.
+//
+// It is also the wrong question. A trade held 24-72 hours does not care where
+// price sits against a 200-day average; it cares what the market has done in
+// the last few sessions. The same rule on a 1-5 day window reads BEARISH on
+// about 30% of sessions, which is what a day-trading system needs.
 async function getMarketRegime() {
   try {
-    const spy = await fetchFull('SPY', '6mo');
+    const spy = await fetchFull('SPY', '3mo');
     const closes = spy.candles.map(c => c.close);
     const price  = spy.quote.price;
-    const sma50  = calculateSMA(closes, 50);
-    const sma200 = calculateSMA(closes, 200);
-    if (sma50 && sma200) {
-      if (price > sma50 && sma50 > sma200) return 'BULLISH';
-      if (price < sma50 && sma50 < sma200) return 'BEARISH';
-    }
+    if (closes.length < 12) return 'NEUTRAL';
+
+    const ret = (n) => ((price - closes[closes.length - 1 - n]) / closes[closes.length - 1 - n]) * 100;
+    const d1 = ret(1);          // today
+    const d3 = ret(3);          // this week so far
+    const sma10 = calculateSMA(closes, 10);
+
+    // A sharp single session, a sustained three-day slide, or trading under the
+    // 10-day average while still drifting down — any of those is risk-off for a
+    // position measured in hours.
+    if (d1 <= -1.0 || d3 <= -1.5 || (sma10 && price < sma10 && d3 < -0.3)) return 'BEARISH';
+    if (d1 >=  1.0 || d3 >=  1.5 || (sma10 && price > sma10 && d3 >  0.3)) return 'BULLISH';
     return 'NEUTRAL';
   } catch { return 'NEUTRAL'; }
 }
@@ -411,6 +428,7 @@ router.get('/scan', async (req, res) => {
     const isCrypto = market === 'crypto';
     const isCommodities = market === 'commodities';
     const isForexMarket = market === 'forex';
+    let shortsOnOwnMerit = 0;   // shorts allowed by their own breakdown, not the index
     const tradeStyle = isCrypto ? 'crypto' : 'sameDay';
 
     // Fetch macro context — crypto uses BTC trend + Fear&Greed, not VIX/SPY
@@ -521,19 +539,35 @@ router.get('/scan', async (req, res) => {
       const setup      = generateTradeSetup(quote, historical, signalData, { market, tradeStyle: tickerStyle });
       if (!setup) continue;
 
-      // ── SHORTS REQUIRE A BEARISH MARKET ─────────────────────────────
-      // Across 164 resolved signals, longs won 31% while shorts won 15% —
-      // and every short category was negative: Trend Continuation Short went
-      // 0 for 22, Rally Short 1 for 8. The pattern is consistent with
-      // shorting into a market that keeps rising, where a falling stock is
-      // usually a pullback inside an uptrend rather than the start of a
-      // decline. Shorts are now only generated when the broad market is
-      // genuinely bearish, which is the regime where they historically work.
+      // ── SHORTS: THE INDEX GETS A VOTE, NOT A VETO ───────────────────
+      // The original rule discarded every short unless the broad market was
+      // bearish. Two problems showed up the first time the market actually
+      // fell.
       //
-      // Crypto is exempt: it has its own BTC-trend gate, and crypto shorts
-      // have actually been the better side there.
-      if (setup.direction === 'SHORT' && !isCrypto && marketRegime !== 'BEARISH') {
-        continue;
+      // The regime test was measured over months (see getMarketRegime), so it
+      // never reported bearish and the rule silently blocked everything.
+      // That is fixed above. But the rule itself is also too blunt: on the day
+      // that prompted this, the index moved -0.26% while RGTI fell 8.3%, SMCI
+      // 5.5% and SOUN 3.5%. A stock collapsing on its own news is not a
+      // pullback inside an uptrend — it is the exact 24-48h short this system
+      // exists to find, and the index has no bearing on it.
+      //
+      // So a short needs EITHER a risk-off market OR evidence the stock itself
+      // is breaking down. The reviewer, the pre-market invalidation check and
+      // the 52-week-low squeeze guard all still apply afterwards; this only
+      // decides whether the setup is allowed to be considered at all.
+      if (setup.direction === 'SHORT' && !isCrypto) {
+        const chgToday = raw.changePercent ?? 0;
+        const below20  = signalData.sma20 && raw.price < signalData.sma20;
+        const below50  = signalData.sma50 && raw.price < signalData.sma50;
+        // Falling hard today and trading under its own short-term trend.
+        const stockBreakingDown = chgToday <= -3 && below20 && below50;
+        // Or a slower bleed that is still clearly one-directional.
+        const sustainedWeakness = chgToday <= -1.5 && below20 && below50
+                                  && signalData.rsi != null && signalData.rsi < 45;
+
+        if (marketRegime !== 'BEARISH' && !stockBreakingDown && !sustainedWeakness) continue;
+        if (marketRegime !== 'BEARISH') shortsOnOwnMerit++;
       }
 
       // Regime filter is now a confidence-boost signal (added in analyzeSignals),
