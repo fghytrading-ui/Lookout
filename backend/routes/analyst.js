@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import { fetchFull, fetchWeekly } from '../lib/yahoo.js';
+import { fetchFull, fetchWeekly, fetchExtendedHours } from '../lib/yahoo.js';
+import { withLiveBar } from '../lib/liveBar.js';
 import { enrichTicker } from '../lib/news.js';
 import { fetchNextEarnings, evaluateEarningsRisk } from '../lib/earnings.js';
 import { backtestSetup } from '../lib/backtest.js';
@@ -950,7 +951,7 @@ router.get('/:ticker', async (req, res) => {
   // ── STOCK / FOREX / COMMODITY BRANCH (existing logic, unchanged) ──────
   try {
     // Parallel fetch of all data sources
-    const [full, weeklyTrend, news, earningsRaw, vix, wallStreet, fullForBacktest, analystConsensus] = await Promise.all([
+    const [full, weeklyTrend, news, earningsRaw, vix, wallStreet, fullForBacktest, analystConsensus, extendedHours] = await Promise.all([
       fetchFull(ticker, '3mo'),
       getWeeklyTrend(ticker),
       enrichTicker(ticker),
@@ -959,7 +960,12 @@ router.get('/:ticker', async (req, res) => {
       fetchWallStreetConsensus(ticker),
       fetchFull(ticker, '6mo'),  // 6 months of candles for backtest
       // Real analyst ratings — same feed the scanner uses, so both pages agree
-      fetchRecommendationTrend(ticker).catch(() => null)
+      fetchRecommendationTrend(ticker).catch(() => null),
+      // Pre/post-market action. The scanner has always spliced this into its
+      // indicators; the analyst did not, so the same stock read differently on
+      // the two pages — SMCI showed -1.98% pre-market on the board while the
+      // analyst was still working from the previous close.
+      fetchExtendedHours(ticker).catch(() => null)
     ]);
 
     if (!full.candles || full.candles.length < 30) {
@@ -967,7 +973,10 @@ router.get('/:ticker', async (req, res) => {
     }
 
     const raw = full.quote;
-    const candles = full.candles;
+    // Indicators read the forming bar, not just completed sessions, so RSI,
+    // MACD and ATR reflect where the stock is trading now — including before
+    // the open. This is the same treatment the scanner gives every card.
+    const candles = withLiveBar(full.candles, raw, extendedHours);
     const quote = adaptQuote(raw);
     const signalData = analyzeSignals(quote, candles, null);
     const setup = generateTradeSetup(quote, candles, signalData, { tradeStyle: 'sameDay' });
@@ -1066,7 +1075,15 @@ router.get('/:ticker', async (req, res) => {
       change: raw.change,
       changePercent: raw.changePercent,
       open: raw.dayHigh, dayHigh: raw.dayHigh, dayLow: raw.dayLow,
-      preMarketPrice: raw.preMarketPrice,
+      // raw.preMarketPrice is always null — the daily chart meta does not carry
+      // it, which is why fetchExtendedHours exists. Report the real thing.
+      preMarketPrice: extendedHours?.session === 'pre' ? extendedHours.price : null,
+      extendedHours: extendedHours ? {
+        ...extendedHours,
+        direction: extendedHours.movePct > 0 ? 'up' : 'down',
+        magnitude: Math.abs(extendedHours.movePct) >= 3 ? 'large'
+                 : Math.abs(extendedHours.movePct) >= 1.5 ? 'moderate' : 'small'
+      } : null,
       postMarketPrice: raw.postMarketPrice,
       fiftyTwoWeekHigh: raw.fiftyTwoWeekHigh,
       fiftyTwoWeekLow: raw.fiftyTwoWeekLow,

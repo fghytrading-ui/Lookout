@@ -187,6 +187,19 @@ export default function AnalystPage() {
                 <div className={`text-sm font-mono tabular-nums ${data.changePercent >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                   {fmtPct(data.changePercent)} today
                 </div>
+                {/* Where the stock is trading OUTSIDE the session. The analysis
+                    already reads this — the indicators are computed on the
+                    forming bar — so the number that drove the verdict has to be
+                    on screen next to the last close it is being compared with. */}
+                {data.extendedHours && (
+                  <div className={`text-[11px] font-mono tabular-nums mt-1 ${
+                    data.extendedHours.direction === 'up' ? 'text-green-300' : 'text-red-300'
+                  }`}>
+                    {data.extendedHours.session === 'pre' ? '🌅 Pre-market' : '🌆 After hours'}
+                    {' '}{fmtDollar(data.extendedHours.price)}
+                    {' '}({data.extendedHours.movePct >= 0 ? '+' : ''}{data.extendedHours.movePct.toFixed(2)}%)
+                  </div>
+                )}
                 <div className="text-[10px] text-[#555] font-mono mt-1">{data.name} · {data.exchange}</div>
               </div>
             </div>
