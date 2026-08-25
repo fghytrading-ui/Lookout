@@ -292,7 +292,29 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
   // the crypto entries in its watchlist and never an actual pair.
   const isForex  = opts.tradeStyle === 'forex';
   const minAtrPct = isCrypto ? 1.5 : isHourly ? 0.22 : isForex ? 0.25 : 0.7;
-  const maxAtrPct = isCrypto ? 18.0 : isHourly ? 4.0 : isForex ? 3.0 : 10.0;
+
+  // Upper band tightened for equities, from tracked outcomes. Grouping 193
+  // stock trades by the stop distance the setup required, as a share of price:
+  //
+  //     under 2%   +0.350R      3-4%   +0.274R
+  //     2-3%       +0.415R      4%+    -0.204R
+  //
+  // Everything up to 4% pays; past that it does not. Sixty of the 193 sat in
+  // that top band and dragged the book from +0.371R to +0.192R. Excluding them
+  // raises TOTAL return as well as per-trade — 133 trades at +0.371R is +49.4R
+  // against 193 at +0.192R for +37.1R — so this is not just trading volume for
+  // quality.
+  //
+  // The same stocks show up as the cheap ones (under $30 average a 4.3% stop,
+  // over $100 average 2.4%), so this is one effect measured two ways rather
+  // than two findings.
+  //
+  // Expressed as ATR because that is what the stop is built from: stop is
+  // roughly max(0.68 x ATR, 2.2% of price), so a 4% stop corresponds to about
+  // 5.9% ATR. 10% allowed stocks that could never hold a sane stop.
+  const maxAtrPct = isCrypto ? 18.0 : isHourly ? 4.0 : isForex ? 3.0
+                  : opts.tradeStyle === 'commodities' ? 10.0   // unchanged: profitable as-is
+                  : 5.9;
   if (atrPct < minAtrPct) return null;
   if (atrPct > maxAtrPct) return null;
 
@@ -438,8 +460,12 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
     // Targeting ~1.5-1.8R rather than the peak at 1.0R: the peak is a single
     // sample point and the curve is flat across 1.0-1.8, so the middle of the
     // plateau is the honest choice rather than the maximum.
+    // The runner was tested separately across the same 193 trades: at 1.6x TP1
+    // it returns +0.143R, at 1.2x it returns +0.192R. Same reason as TP1 — the
+    // last third was being sent somewhere price does not reach in the window,
+    // so it usually gave back its gains rather than banking them.
     tp1Mult = 1.00 + (trendStrength * 0.20);   // R:R ~1.5-1.8 against a 0.68 stop
-    tp2Mult = 1.65 + (trendStrength * 0.30);
+    tp2Mult = 1.22 + (trendStrength * 0.24);   // ~1.2x TP1
     slMult  = 0.68;                             // stop unchanged — see CAL note
   } else if (tradeStyle === 'intradayStock') {
     // Hourly equity bars. ATR per hourly bar measures ~0.75% of price against
@@ -458,7 +484,7 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
     // wide would have silently undone the recalibration — six of seven cards
     // came back at R:R 2.8-4.0 on the first test after only sameDay changed.
     tp1Mult = 4.15 + (trendStrength * 0.47);
-    tp2Mult = 6.60 + (trendStrength * 0.87);
+    tp2Mult = 5.05 + (trendStrength * 0.60);   // ~1.2x TP1
     slMult  = 2.90;
   } else if (tradeStyle === 'crypto') {
     // 4h ATR is ~1/sqrt(6) of daily ATR — multipliers scaled accordingly.
@@ -498,7 +524,8 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
     // get taken out before the idea can work) which the scoring fix did not
     // affect.
     sameDay: { slCapPct: 0.045, slMinPct: 0.022, slFloorATR: 0.9, slRangeMin: 0.9, slRangeMax: 1.8,
-               maxDaysTP1: 4,  maxDaysTP2: 8, minTP1ATR: 0.9, minTP2ATR: 1.5, minRR: 1.3 },
+               maxDaysTP1: 4,  maxDaysTP2: 8, minTP1ATR: 0.9, minTP2ATR: 1.1, minRR: 1.3,
+               maxStopPct: 0.040 },
     // Commodities keep the previous, profitable settings.
     commodities: { slCapPct: 0.045, slMinPct: 0.022, slFloorATR: 0.9, slRangeMin: 0.9, slRangeMax: 1.8,
                maxDaysTP1: 6,  maxDaysTP2: 12, minTP1ATR: 1.6, minTP2ATR: 2.6, minRR: 2.0 },
@@ -507,7 +534,8 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
     // fields are scaled for hourly bars. "days" here counts BARS: 39 hourly
     // bars is about six sessions, matching the daily ceiling it replaces.
     intradayStock: { slCapPct: 0.045, slMinPct: 0.022, slFloorATR: 2.9, slRangeMin: 2.9, slRangeMax: 5.5,
-               maxDaysTP1: 48, maxDaysTP2: 96, minTP1ATR: 3.6, minTP2ATR: 5.6, minRR: 1.3 },
+               maxDaysTP1: 48, maxDaysTP2: 96, minTP1ATR: 3.6, minTP2ATR: 4.4, minRR: 1.3,
+               maxStopPct: 0.040 },
     // Forex. slMinPct/slCapPct are shares of PRICE, so they cannot be reused
     // from sameDay: 2.2% of EURUSD is ~4.7 ATR, which would demand a ~4.4%
     // target to clear minRR — a move majors take months to make, so every pair
@@ -710,6 +738,22 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
   const risk   = Math.abs(entry - sl);
   const reward = Math.abs(tp - entry);
   if (risk <= 0) return null;
+
+  // ── VOLATILITY CEILING, measured on the stop the setup actually needs ──
+  // The ATR band above is a proxy; this is the thing the outcomes were
+  // measured against. Grouping 193 stock trades by stop distance as a share
+  // of price: under 2% returns +0.350R, 2-3% +0.415R, 3-4% +0.274R, and 4%+
+  // returns -0.204R. Sixty trades sat in that top band and pulled the book
+  // from +0.371R down to +0.192R.
+  //
+  // Dropping them raises total return, not only the average — 133 trades at
+  // +0.371R beats 193 at +0.192R (+49.4R against +37.1R) — so this is a real
+  // gain rather than trading activity for tidiness.
+  //
+  // Checked here rather than by tightening slCapPct, because clamping the stop
+  // would leave a volatile stock with one sitting inside its own noise. If the
+  // setup needs more room than this, the answer is not to take it.
+  if (CAL.maxStopPct && risk / entry > CAL.maxStopPct) return null;
   const rrRatio = Math.round((reward / risk) * 10) / 10;
   const minRR = CAL.minRR;
   if (rrRatio < minRR) return null;                 // Min R:R — math must still be positive
