@@ -153,7 +153,7 @@ export function buildIntradayTiming({
   tradeStyle, macroEvents = [], earnings = null,
   expectedDays = null, expectedDays2 = null
 } = {}) {
-  if (tradeStyle !== 'sameDay' && tradeStyle !== 'crypto') return null;
+  if (tradeStyle !== 'sameDay' && tradeStyle !== 'commodities' && tradeStyle !== 'crypto') return null;
 
   const et = getNYTime();
   const ev = nextRelevantEvent(macroEvents, earnings);
@@ -164,7 +164,7 @@ export function buildIntradayTiming({
   const session = getSession();
   const marketLive = session === 'MARKET_OPEN';
   let dayPrefix = '';
-  if (tradeStyle === 'sameDay' && !marketLive) {
+  if ((tradeStyle === 'sameDay' || tradeStyle === 'commodities') && !marketLive) {
     const next = new Date(et);
     if (session === 'AFTER_HOURS' || session === 'HOLIDAY' ||
         (session === 'CLOSED' && et.getHours() >= 16)) next.setDate(next.getDate() + 1);

@@ -340,12 +340,12 @@ function buildCard(ticker, raw, quote, setup, signalData, historical, market = '
     timeSpan: tradeStyle === 'crypto' ? 'Short-term — 1 to 3 sessions (12–60h)'
             : (expectedDays != null)
               ? `Short-term — about ${expectedDays} session${expectedDays === 1 ? '' : 's'}`
-            : tradeStyle === 'sameDay' ? 'Short-term — 1 to 2 sessions'
+            : (tradeStyle === 'sameDay' || tradeStyle === 'commodities') ? 'Short-term — 1 to 2 sessions'
             : TIME_SPANS[tsKey].label,
     exitWindow: tradeStyle === 'crypto' ? 'Within the next 1–3 active sessions — 24/7 market'
               : (expectedDays2 != null)
                 ? `Scale at target 1 within ~${expectedDays} session${expectedDays === 1 ? '' : 's'}; runner up to ~${expectedDays2}`
-              : tradeStyle === 'sameDay' ? 'Typically next session; hard exit after 2 sessions'
+              : (tradeStyle === 'sameDay' || tradeStyle === 'commodities') ? 'Typically next session; hard exit after 2 sessions'
               : getExitWindow(tsKey),
     // Intraday entry/exit windows — derived from the live ET session clock
     // (so they stay right across daylight-saving changes) and annotated with
@@ -429,7 +429,9 @@ router.get('/scan', async (req, res) => {
     const isCommodities = market === 'commodities';
     const isForexMarket = market === 'forex';
     let shortsOnOwnMerit = 0;   // shorts allowed by their own breakdown, not the index
-    const tradeStyle = isCrypto ? 'crypto' : 'sameDay';
+    // Commodities keep the previous calibration — it is the one market where
+    // the wider targets are actually profitable (+0.127R vs -0.094R on stocks).
+    const tradeStyle = isCrypto ? 'crypto' : isCommodities ? 'commodities' : 'sameDay';
 
     // Fetch macro context — crypto uses BTC trend + Fear&Greed, not VIX/SPY
     // Commodities adds inventory release awareness (EIA crude/NG)

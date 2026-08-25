@@ -391,7 +391,15 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
   // CRYPTO:   24/7 intraday — wider stops (volatility eats tight ones), wider TPs
   // SWING:    multi-day targets
   let tp1Mult, tp2Mult, slMult;
-  if (tradeStyle === 'forex') {
+  if (tradeStyle === 'commodities') {
+    // Commodities keep the wider targets. They are the one market these
+    // settings actually work on — +0.127R realised over 25 trades against
+    // -0.094R on stocks — so the recalibration below deliberately does not
+    // touch them.
+    tp1Mult = 1.50 + (trendStrength * 0.20);
+    tp2Mult = 2.40 + (trendStrength * 0.35);
+    slMult  = 0.68;
+  } else if (tradeStyle === 'forex') {
     // Identical ATR multiples to sameDay — these are denominated in ATR and so
     // carry across instruments unchanged. Only the percentage-of-price
     // guardrails in CAL below need rescaling for FX.
@@ -405,9 +413,34 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
     // signal was mathematically a loser. Winners overshot TP by 227% on
     // average, so price demonstrably travels far enough to support wider
     // targets. TP1 1.5-2.1 ATR against a 0.68 ATR stop gives R:R 2.2-3.1.
-    tp1Mult = 1.50 + (trendStrength * 0.20);
-    tp2Mult = 2.40 + (trendStrength * 0.35);
-    slMult  = 0.68;
+    // RECALIBRATED AGAIN, on outcomes that are now scored correctly.
+    //
+    // The previous numbers were set from a tracked record of "29% win rate,
+    // -0.25R expectancy" — figures produced by the monitor bug that graded
+    // signals against bars predating them. Targets were pushed out to 1.5-2.1
+    // ATR to make the maths work at a win rate that was never real.
+    //
+    // With the record fixed, the effect of that is measurable and it is bad.
+    // Across 192 stock trades with full excursion data, holding the stop
+    // constant and varying only the target:
+    //
+    //     TP1 at 1.0R  +0.181R      TP1 at 2.4R  +0.030R   (current)
+    //     TP1 at 1.5R  +0.170R      TP1 at 2.8R  -0.059R
+    //     TP1 at 2.0R  +0.117R      TP1 at 3.2R  -0.086R
+    //
+    // The mechanism is visible in the excursion data: on a 3:1 setup price
+    // travels 19% of the way to target before the stop; on a 2:1 it travels
+    // 75%. A 24-48 hour trade does not have time to reach a distant target,
+    // so the wide ones simply pay a full stop for a move that was never
+    // going to happen. Realised expectancy on stocks was -0.094R over 196
+    // trades.
+    //
+    // Targeting ~1.5-1.8R rather than the peak at 1.0R: the peak is a single
+    // sample point and the curve is flat across 1.0-1.8, so the middle of the
+    // plateau is the honest choice rather than the maximum.
+    tp1Mult = 1.00 + (trendStrength * 0.20);   // R:R ~1.5-1.8 against a 0.68 stop
+    tp2Mult = 1.65 + (trendStrength * 0.30);
+    slMult  = 0.68;                             // stop unchanged — see CAL note
   } else if (tradeStyle === 'intradayStock') {
     // Hourly equity bars. ATR per hourly bar measures ~0.75% of price against
     // ~2.5% on a daily bar — roughly sqrt(6.5) smaller, as expected from 6.5
@@ -420,8 +453,12 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
     // target near 6 ATR. The first attempt used 3.8 ATR and produced no
     // setups at all — every candidate failed the minimum R:R once the floor
     // widened its stop.
-    tp1Mult = 6.20 + (trendStrength * 0.70);
-    tp2Mult = 9.80 + (trendStrength * 1.30);
+    // Scaled by the same factor as sameDay above (x0.67). The hourly
+    // refinement REPLACES the daily levels on most cards, so leaving these
+    // wide would have silently undone the recalibration — six of seven cards
+    // came back at R:R 2.8-4.0 on the first test after only sameDay changed.
+    tp1Mult = 4.15 + (trendStrength * 0.47);
+    tp2Mult = 6.60 + (trendStrength * 0.87);
     slMult  = 2.90;
   } else if (tradeStyle === 'crypto') {
     // 4h ATR is ~1/sqrt(6) of daily ATR — multipliers scaled accordingly.
@@ -452,14 +489,25 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
     // ordinary daily range and gets taken out before the idea can work — which
     // is also why trades resolving inside six hours won only 10%, against 50%
     // for those held 24-48h.
+    // minRR 2.0 and minTP1ATR 1.6 were set to force targets wide enough to
+    // survive a 29% win rate. That win rate was a measurement artefact. The
+    // real record supports closer targets, so these floors now have to allow
+    // them — left at 2.0, minRR alone would reject every setup this profile
+    // now produces. The STOP floors are unchanged: slMinPct 2.2% comes from a
+    // separate finding (stops inside ~2% of price sit in the noise band and
+    // get taken out before the idea can work) which the scoring fix did not
+    // affect.
     sameDay: { slCapPct: 0.045, slMinPct: 0.022, slFloorATR: 0.9, slRangeMin: 0.9, slRangeMax: 1.8,
+               maxDaysTP1: 4,  maxDaysTP2: 8, minTP1ATR: 0.9, minTP2ATR: 1.5, minRR: 1.3 },
+    // Commodities keep the previous, profitable settings.
+    commodities: { slCapPct: 0.045, slMinPct: 0.022, slFloorATR: 0.9, slRangeMin: 0.9, slRangeMax: 1.8,
                maxDaysTP1: 6,  maxDaysTP2: 12, minTP1ATR: 1.6, minTP2ATR: 2.6, minRR: 2.0 },
     // Same percentage guardrails as sameDay — slCapPct and slMinPct are shares
     // of price and so are timeframe-independent — but the ATR-denominated
     // fields are scaled for hourly bars. "days" here counts BARS: 39 hourly
     // bars is about six sessions, matching the daily ceiling it replaces.
     intradayStock: { slCapPct: 0.045, slMinPct: 0.022, slFloorATR: 2.9, slRangeMin: 2.9, slRangeMax: 5.5,
-               maxDaysTP1: 72, maxDaysTP2: 210, minTP1ATR: 5.5, minTP2ATR: 8.5, minRR: 2.0 },
+               maxDaysTP1: 48, maxDaysTP2: 96, minTP1ATR: 3.6, minTP2ATR: 5.6, minRR: 1.3 },
     // Forex. slMinPct/slCapPct are shares of PRICE, so they cannot be reused
     // from sameDay: 2.2% of EURUSD is ~4.7 ATR, which would demand a ~4.4%
     // target to clear minRR — a move majors take months to make, so every pair
@@ -685,19 +733,26 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
   confidence -= opposing * 7;
   if (probability === 'HIGH') confidence += 5;
 
-  // 2. R:R now drives confidence, because it drives expectancy. At the
-  //    observed ~30% win rate a trade needs R:R > 2.4 just to break even.
-  if (rrRatio >= 3.0)      confidence += 14;
-  else if (rrRatio >= 2.5) confidence += 10;
-  else if (rrRatio >= 2.2) confidence += 5;
-  else if (rrRatio < 2.0)  confidence -= 12;   // mathematically a losing trade
+  // 2. R:R and confidence, corrected.
+  //
+  // This used to award +14 for R:R 3.0+ and dock 12 below 2.0 — reasoning from
+  // a 30% win rate that turned out to be a scoring bug. On correctly graded
+  // outcomes the ranking is the other way round: R:R 3.0+ wins 14% and returns
+  // -0.37R, while under 2.6 wins 48% and returns +0.55R (z = +3.19 over the
+  // same period, so not noise). Distant targets are not more profitable, they
+  // are simply not reached inside a 24-48 hour hold.
+  if (rrRatio >= 3.0)      confidence -= 10;
+  else if (rrRatio >= 2.6) confidence -= 4;
+  else if (rrRatio >= 1.4) confidence += 8;    // the band that actually pays
+  else                     confidence -= 8;    // too tight to cover costs
 
   // 3. Trend alignment (already partly counted above, so kept small)
   if (direction === 'LONG'  && sma20 && sma50 && price > sma20 && sma20 > sma50) confidence += 3;
   if (direction === 'SHORT' && sma20 && sma50 && price < sma20 && sma20 < sma50) confidence += 3;
 
   // ── INTRADAY-SPECIFIC CONFIDENCE ADJUSTMENTS (sameDay + crypto) ──
-  const isIntraday = tradeStyle === 'sameDay' || tradeStyle === 'crypto' || tradeStyle === 'intradayStock';
+  const isIntraday = tradeStyle === 'sameDay' || tradeStyle === 'commodities'
+                  || tradeStyle === 'crypto' || tradeStyle === 'intradayStock';
   if (isIntraday) {
     // a) REMOVED: the old "closer TP = higher confidence" bonus (+10 for a
     //    target under 0.8 ATR). It was the single most damaging rule in the
