@@ -1053,7 +1053,9 @@ router.get('/scan', async (req, res) => {
           card.negativeExpectancy = true;
         }
       }
-      try { logSignal(card, { market }); } catch {}
+      // Pass the market context too — the features block records what the
+      // system saw, and regime/VIX are part of that.
+      try { logSignal(card, { market, marketRegime, vix, atr: card._dailyAtr }); } catch {}
     }
 
     // ── DROP SETUPS THE TRACKED RECORD PROVES ARE LOSERS ───────────────

@@ -111,6 +111,45 @@ export function logSignal(card, extras = {}) {
     confidence: card.confidence,
     setupType: card.setupType?.label || null,
     reviewVerdict: card.review?.verdict || null,
+
+    // ── WHY the trade was taken ──────────────────────────────────────
+    // The log recorded what happened but not what the system saw, so it
+    // could never answer which signals actually predict. Every question
+    // asked of it so far — does confidence work, do catalysts help, does
+    // pre-market matter — could only be answered for the handful of fields
+    // that happened to be stored.
+    //
+    // These are the inputs the decision was made on, captured at signal
+    // time. Cheap to store, and without them the tracking cannot improve
+    // the logic it is tracking.
+    features: {
+      rsi:            card.rsi ?? null,
+      atrPct:         extras.atr && card.price ? +(extras.atr / card.price * 100).toFixed(2) : null,
+      stopPct:        card.entry && card.sl ? +(Math.abs(card.entry - card.sl) / card.entry * 100).toFixed(2) : null,
+      price:          card.price ?? null,
+      changePercent:  card.changePercent ?? null,
+      volRatio:       card.volRatio ?? null,
+      weeklyTrend:    card.weeklyTrend ?? null,
+      trendStrength:  card.trendStrength ?? null,
+      confirming:     card.confirming ?? null,
+      marketRegime:   extras.marketRegime ?? null,
+      vix:            extras.vix ?? null,
+      // catalyst / news
+      primaryCatalyst: card.primaryCatalyst?.label || card.primaryCatalyst || null,
+      catalystDirection: card.catalystDirection ?? null,
+      newsCount:      Array.isArray(card.news) ? card.news.length : null,
+      sentimentScore: card.sentiment?.score ?? null,
+      // outside opinion
+      analystBullPct: card.analystConsensus?.bullPct ?? null,
+      analystTotal:   card.analystConsensus?.total ?? null,
+      // session context
+      extendedMovePct: card.extendedHours?.movePct ?? null,
+      extendedSession: card.extendedHours?.session ?? null,
+      secRisk:        card.secWarning ? true : false,
+      timingSource:   card.timingSource || 'daily',
+      expectedDays:   card.expectedDays ?? null
+    },
+
     signaledAt: now,
     lastSeenAt: now,
     expiresAt: now + horizonHrs * 60 * 60 * 1000,
