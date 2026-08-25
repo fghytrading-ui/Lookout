@@ -17,6 +17,7 @@ import commoditiesRouter from './routes/commodities.js';
 import cryptoRouter from './routes/crypto.js';
 import performanceRouter from './routes/performance.js';
 import { startSignalMonitor } from './lib/signalMonitor.js';
+import { runSelfCheck } from './lib/selfCheck.js';
 import { isMarketOpen, getSession, getEntryTiming } from './utils/market.js';
 import { startAutoPersist } from './lib/persistentCache.js';
 import { POLYGON_ENABLED } from './lib/marketData.js';
@@ -29,6 +30,27 @@ app.use(cors());
 // Raised limit so the client can POST its full signal-log mirror back after
 // a Render free-tier disk wipe (see /api/performance/restore).
 app.use(express.json({ limit: '12mb' }));
+
+// Self-check — invariants that would have caught the faults found in the
+// audit. Reports only; never changes scanner behaviour.
+app.get('/api/system/selfcheck', async (req, res) => {
+  try {
+    let cards = null, sources = null;
+    try {
+      const r = await fetch(`http://localhost:${PORT}/api/scanner/scan`);
+      const d = await r.json();
+      const tr = d.trades || d;
+      cards = ['enterNow', 'waitForBounce', 'carryForward'].flatMap(k => tr[k] || []);
+    } catch { /* checks needing cards will skip */ }
+    try {
+      const r = await fetch(`http://localhost:${PORT}/api/system/sources`);
+      sources = (await r.json()).sources;
+    } catch { /* ditto */ }
+    res.json(runSelfCheck({ cards, sources }));
+  } catch (err) {
+    res.status(500).json({ error: 'Self-check failed', details: err.message });
+  }
+});
 
 app.use('/api/quotes', quotesRouter);
 app.use('/api/scanner', scannerRouter);

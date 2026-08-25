@@ -30,6 +30,7 @@ export default function App() {
   const [dataSource, setDataSource] = useState(null);
   const [sources, setSources] = useState(null);
   const [showSources, setShowSources] = useState(false);
+  const [health, setHealth] = useState(null);
   const [marketsOpen, setMarketsOpen] = useState(false);
   const headerRef = useRef(null);
   const marketsRef = useRef(null);
@@ -99,6 +100,13 @@ export default function App() {
       .then(r => r.json())
       .then(setSources)
       .catch(() => {});
+    // Self-check. Every fault found in the audit had run for weeks unnoticed
+    // because nothing was looking; this runs on load so a new one surfaces on
+    // its own rather than waiting to be stumbled on.
+    fetch('/api/system/selfcheck')
+      .then(r => r.json())
+      .then(setHealth)
+      .catch(() => {});
     syncSignalBackup().catch(() => {});
   }, []);
 
@@ -117,6 +125,20 @@ export default function App() {
             <div className="text-xs sm:text-sm font-bold tracking-[0.15em] sm:tracking-[0.2em] font-condensed uppercase whitespace-nowrap">Project Look Out</div>
             <div className="text-[9px] text-[#333] font-mono tracking-widest">TRADING INTELLIGENCE</div>
           </div>
+          {/* Only appears when a check fails. A green tick nobody reads is
+              worse than nothing; silence is the healthy state. */}
+          {health && health.status !== 'ok' && (
+            <button
+              onClick={() => setShowSources(v => !v)}
+              title="Self-check found something — click for detail"
+              className={`text-[9px] font-mono px-2 py-1 rounded border flex-shrink-0 cursor-pointer ${
+                health.status === 'fail'
+                  ? 'border-red-500/50 text-red-300 bg-red-500/10'
+                  : 'border-amber-500/50 text-amber-300 bg-amber-500/10'
+              }`}>
+              {health.status === 'fail' ? '✕' : '⚠'} {health.summary}
+            </button>
+          )}
           {dataSource && (
             <button
               onClick={() => setShowSources(v => !v)}
@@ -210,6 +232,29 @@ export default function App() {
       </header>
 
       {/* Data-source panel — every feed and what it drives */}
+      {showSources && health && health.checks && (
+        <div className="mx-4 mt-3 p-3 rounded border border-[#1a1a1a] bg-[#0a0a0a]">
+          <div className="text-[10px] uppercase tracking-widest text-[#666] font-mono mb-2">
+            Self-check — {health.summary}
+          </div>
+          <div className="space-y-1.5">
+            {health.checks.filter(c => c.status !== 'skip').map(c => (
+              <div key={c.id} className="flex items-start gap-2 text-[11px] font-mono">
+                <span className={
+                  c.status === 'ok' ? 'text-green-400' :
+                  c.status === 'warn' ? 'text-amber-400' : 'text-red-400'
+                }>{c.status === 'ok' ? '✓' : c.status === 'warn' ? '⚠' : '✕'}</span>
+                <span className="text-[#888] w-44 flex-shrink-0">{c.title}</span>
+                <span className="text-[#666] flex-1">
+                  {c.detail}
+                  {c.action && <span className="block text-amber-500/70 mt-0.5">{c.action}</span>}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {showSources && sources && (
         <div className="mx-4 mt-3 p-3 rounded border border-[#1a1a1a] bg-[#0a0a0a]">
           <div className="flex items-center justify-between mb-2">
