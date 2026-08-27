@@ -18,6 +18,7 @@ import cryptoRouter from './routes/crypto.js';
 import performanceRouter from './routes/performance.js';
 import { startSignalMonitor } from './lib/signalMonitor.js';
 import { runSelfCheck } from './lib/selfCheck.js';
+import { runLearning, getLearningState, resetLearning } from './lib/learning.js';
 import { isMarketOpen, getSession, getEntryTiming } from './utils/market.js';
 import { startAutoPersist } from './lib/persistentCache.js';
 import { POLYGON_ENABLED } from './lib/marketData.js';
@@ -30,6 +31,22 @@ app.use(cors());
 // Raised limit so the client can POST its full signal-log mirror back after
 // a Render free-tier disk wipe (see /api/performance/restore).
 app.use(express.json({ limit: '12mb' }));
+
+// Learning — what the tracked record says the parameters should be.
+// GET reports without changing anything; POST applies what the guardrails
+// accept. Kept separate so the reasoning can always be inspected first.
+app.get('/api/system/learning', (req, res) => {
+  try { res.json({ ...runLearning({ apply: false }), state: getLearningState() }); }
+  catch (err) { res.status(500).json({ error: 'Learning analysis failed', details: err.message }); }
+});
+app.post('/api/system/learning/apply', (req, res) => {
+  try { res.json(runLearning({ apply: true })); }
+  catch (err) { res.status(500).json({ error: 'Apply failed', details: err.message }); }
+});
+app.post('/api/system/learning/reset', (req, res) => {
+  try { res.json(resetLearning()); }
+  catch (err) { res.status(500).json({ error: 'Reset failed', details: err.message }); }
+});
 
 // Self-check — invariants that would have caught the faults found in the
 // audit. Reports only; never changes scanner behaviour.
@@ -195,4 +212,25 @@ app.listen(PORT, () => {
   console.log(`\n  Backend running on http://localhost:${PORT}\n`);
   startAutoPersist();
   startSignalMonitor();
+
+  // Re-examine the tracked record daily and apply anything that clears the
+  // guardrails. Daily rather than per-scan: the evidence moves slowly, and a
+  // parameter that can only shift once a day cannot be whipped around by one
+  // unusual session.
+  const LEARN_EVERY = 24 * 60 * 60 * 1000;
+  const learnPass = () => {
+    try {
+      const r = runLearning({ apply: true });
+      const changed = r.markets.filter(m => m.applied);
+      if (changed.length) {
+        for (const m of changed) {
+          for (const f of m.findings.filter(x => x.accepted)) {
+            console.log(`  ✓ learning: ${m.market} ${f.parameter} ${f.from} -> ${f.to} (${m.sample} trades)`);
+          }
+        }
+      }
+    } catch { /* never let learning break the server */ }
+  };
+  setTimeout(learnPass, 60_000);          // once shortly after boot
+  setInterval(learnPass, LEARN_EVERY);
 });

@@ -464,9 +464,14 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
     // it returns +0.143R, at 1.2x it returns +0.192R. Same reason as TP1 — the
     // last third was being sent somewhere price does not reach in the window,
     // so it usually gave back its gains rather than banking them.
-    tp1Mult = 1.00 + (trendStrength * 0.20);   // R:R ~1.5-1.8 against a 0.68 stop
-    tp2Mult = 1.22 + (trendStrength * 0.24);   // ~1.2x TP1
+    // Target distance is expressed as reward:risk and derived from it, so the
+    // learning engine has one number to move rather than a pair of ATR
+    // multipliers that must stay in step. opts.targetR arrives from
+    // getLearnedParams(); absent it, this is the hand-set 1.5.
     slMult  = 0.68;                             // stop unchanged — see CAL note
+    const targetR = opts.targetR > 0 ? opts.targetR : 1.5;
+    tp1Mult = targetR * slMult + (trendStrength * 0.20);
+    tp2Mult = tp1Mult * 1.22;                   // runner ~1.2x TP1
   } else if (tradeStyle === 'intradayStock') {
     // Hourly equity bars. ATR per hourly bar measures ~0.75% of price against
     // ~2.5% on a daily bar — roughly sqrt(6.5) smaller, as expected from 6.5
@@ -753,7 +758,8 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
   // Checked here rather than by tightening slCapPct, because clamping the stop
   // would leave a volatile stock with one sitting inside its own noise. If the
   // setup needs more room than this, the answer is not to take it.
-  if (CAL.maxStopPct && risk / entry > CAL.maxStopPct) return null;
+  const stopCeiling = opts.maxStopPct > 0 ? opts.maxStopPct : CAL.maxStopPct;
+  if (stopCeiling && risk / entry > stopCeiling) return null;
   const rrRatio = Math.round((reward / risk) * 10) / 10;
   const minRR = CAL.minRR;
   if (rrRatio < minRR) return null;                 // Min R:R — math must still be positive

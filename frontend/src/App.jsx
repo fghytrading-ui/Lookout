@@ -31,6 +31,7 @@ export default function App() {
   const [sources, setSources] = useState(null);
   const [showSources, setShowSources] = useState(false);
   const [health, setHealth] = useState(null);
+  const [learning, setLearning] = useState(null);
   const [marketsOpen, setMarketsOpen] = useState(false);
   const headerRef = useRef(null);
   const marketsRef = useRef(null);
@@ -106,6 +107,11 @@ export default function App() {
     fetch('/api/system/selfcheck')
       .then(r => r.json())
       .then(setHealth)
+      .catch(() => {});
+    // What the tracked record currently says the settings should be.
+    fetch('/api/system/learning')
+      .then(r => r.json())
+      .then(setLearning)
       .catch(() => {});
     syncSignalBackup().catch(() => {});
   }, []);
@@ -249,6 +255,42 @@ export default function App() {
                   {c.detail}
                   {c.action && <span className="block text-amber-500/70 mt-0.5">{c.action}</span>}
                 </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {showSources && learning?.markets && (
+        <div className="mx-4 mt-3 p-3 rounded border border-[#1a1a1a] bg-[#0a0a0a]">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[10px] uppercase tracking-widest text-[#666] font-mono">
+              Learning from tracked outcomes
+            </span>
+            <span className="text-[9px] font-mono text-[#444]">
+              needs {learning.guardrails?.minSample} trades · moves ≤{Math.round((learning.guardrails?.step || 0) * 100)}% per day
+            </span>
+          </div>
+          <div className="space-y-1.5">
+            {learning.markets.map(m => (
+              <div key={m.market} className="text-[11px] font-mono">
+                <div className="flex items-start gap-2">
+                  <span className="text-[#888] w-24 flex-shrink-0">{m.market}</span>
+                  <span className="text-[#555] w-20 flex-shrink-0">{m.sample} trades</span>
+                  <span className="flex-1 text-[#666]">
+                    {m.reason
+                      ? <span className="text-[#555]">{m.reason}</span>
+                      : m.findings.map((f, i) => (
+                          <span key={i} className="block">
+                            <span className={f.accepted ? 'text-amber-300' : 'text-[#666]'}>
+                              {f.parameter}
+                              {f.accepted ? ` ${f.from} → ${f.to}` : ` holding at ${f.from}`}
+                            </span>
+                            <span className="block text-[9px] text-[#444] leading-tight">{f.evidence}</span>
+                          </span>
+                        ))}
+                  </span>
+                </div>
               </div>
             ))}
           </div>

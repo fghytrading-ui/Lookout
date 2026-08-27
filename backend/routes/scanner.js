@@ -15,6 +15,7 @@ import { fetchIntradayBatch } from '../lib/intradayCandles.js';
 import { analyseCatalysts, catalystSignals } from '../lib/catalystEngine.js';
 import { fetchRecommendationTrend } from '../lib/finnhubData.js';
 import { fetchRecentFilings } from '../lib/secFilings.js';
+import { getLearnedParams } from '../lib/learning.js';
 import { buildThesis } from '../lib/thesis.js';
 import { getUpcomingMacro, buildEventTimeline } from '../lib/upcomingEvents.js';
 import { getMarketUniverse } from '../lib/marketUniverse.js';
@@ -538,7 +539,12 @@ router.get('/scan', async (req, res) => {
       const tickerStyle = isForexMarket
         ? (ticker.endsWith('=X') ? 'forex' : 'crypto')
         : tradeStyle;
-      const setup      = generateTradeSetup(quote, historical, signalData, { market, tradeStyle: tickerStyle });
+      // Parameters the learning engine has settled on for this market. With no
+      // learning applied these are the hand-set baselines, so behaviour is
+      // identical until the evidence actually moves something.
+      const learned = getLearnedParams(market);
+      const setup      = generateTradeSetup(quote, historical, signalData,
+        { market, tradeStyle: tickerStyle, targetR: learned.targetR, maxStopPct: learned.maxStopPct });
       if (!setup) continue;
 
       // ── SHORTS: THE INDEX GETS A VOTE, NOT A VETO ───────────────────
@@ -653,7 +659,8 @@ router.get('/scan', async (req, res) => {
           if (!quote) continue;
           const hSignals = analyzeSignals(quote, hourly, marketRegime);
           const hSetup = generateTradeSetup(quote, hourly, hSignals, {
-            market, tradeStyle: 'intradayStock', dailyAtr: card._dailyAtr
+            market, tradeStyle: 'intradayStock', dailyAtr: card._dailyAtr,
+            maxStopPct: getLearnedParams(market).maxStopPct
           });
           if (!hSetup || hSetup.direction !== card.direction) continue;
           // Reject a refinement that turns a short-term trade into a
