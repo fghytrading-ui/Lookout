@@ -1,7 +1,7 @@
 {
   "name": "project-lookout",
   "version": "1.0.0",
-  "description": "Project Look Out — Trading Intelligence Dashboard",
+  "description": "Project Look Out \u2014 Trading Intelligence Dashboard",
   "scripts": {
     "install:all": "cd backend && npm install && cd ../frontend && npm install",
     "backend": "cd backend && npm run dev",
@@ -9,7 +9,8 @@
     "dev": "concurrently \"npm run backend\" \"npm run frontend\"",
     "start": "cd backend && node server.js",
     "build": "cd frontend && npm install && npm run build && cd .. && rm -rf backend/public && cp -r frontend/dist backend/public",
-    "postinstall": "npm install --prefix backend"
+    "postinstall": "npm install --prefix backend",
+    "snapshot": "node backend/scripts/snapshot-record.js"
   },
   "devDependencies": {
     "concurrently": "^8.2.2"

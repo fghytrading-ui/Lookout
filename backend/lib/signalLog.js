@@ -15,6 +15,17 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const LOG_PATH = path.join(DATA_DIR, 'signal-log.json');
 
+// A committed snapshot of the tracked record, merged in at boot for any
+// signal the live file does not already hold.
+//
+// Render's free tier gives the service no persistent disk: the filesystem is
+// wiped on every deploy and every spin-down. Without this the deployed site
+// woke up with an empty record every time, so it could never accumulate
+// enough outcomes to learn from, and every signal it showed used the
+// hand-set defaults rather than the calibration the record had earned.
+// Merging by id means a server that HAS kept its own record is unaffected.
+const SEED_PATH = path.join(DATA_DIR, 'seed', 'signal-log.json');
+
 // In-memory store, persisted lazily
 let signals = [];      // array of signal records
 let indexById = new Map();
@@ -48,6 +59,26 @@ function load() {
     signals = [];
     indexById = new Map();
   }
+
+  try {
+    if (fs.existsSync(SEED_PATH)) {
+      const seed = JSON.parse(fs.readFileSync(SEED_PATH, 'utf-8'));
+      let added = 0;
+      for (const rec of Array.isArray(seed) ? seed : []) {
+        if (!rec || !rec.id || indexById.has(rec.id)) continue;
+        signals.push(rec);
+        indexById.set(rec.id, rec);
+        added++;
+      }
+      if (added) {
+        dirty = true;
+        console.log(`  ✓ Restored ${added} tracked signals from the shipped record`);
+      }
+    }
+  } catch (err) {
+    console.error('  ⚠ Could not read shipped record:', err.message);
+  }
+
   loaded = true;
 }
 

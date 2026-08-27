@@ -5,7 +5,13 @@
 .env.local
 /tmp/
 backend/.cache/
-backend/data/
+backend/data/*
+# ...except the shipped record. Render's free tier has no persistent disk, so
+# the deployed server starts with an empty filesystem and would otherwise have
+# no tracked history to learn from. Refresh it with: npm run snapshot
+!backend/data/seed/
+backend/data/seed/*
+!backend/data/seed/signal-log.json
 backend/public/
 dist/
 node_modules/
