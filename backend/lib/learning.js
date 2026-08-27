@@ -215,6 +215,12 @@ export function runLearning({ apply = false } = {}) {
     }
     state.history = state.history.slice(-200);
     state.updatedAt = new Date().toISOString();
+    // Trades signalled before a parameter moved were produced by different
+    // settings, so the goal tracker must not pool them with what came after.
+    // Stamping the moment here means that boundary maintains itself; a
+    // hand-kept date would silently go stale the first time this applied
+    // something on its own.
+    if (results.some(r => r.applied)) state.lastChangeAt = state.updatedAt;
     writeState(state);
   }
   return {

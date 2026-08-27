@@ -22,12 +22,20 @@
 // The goals themselves are deliberately few. Expectancy is the one that
 // decides whether the system makes money; the rest are diagnostic.
 import { getAllSignals } from './signalLog.js';
+import { getLearningState } from './learning.js';
 
 // When the calibration materially changed. Trades before this were produced by
 // different settings and cannot judge the current ones.
 const CALIBRATION_EPOCH = Date.UTC(2026, 7, 24);
 
-const MATURE_HOURS = 120;   // a trade needs this long before its absence of a result means anything
+// A trade is only safe to count once enough time has passed that it MUST have
+// resolved one way or the other — otherwise the quick losses are counted and
+// the slow wins are still running, and the record reads worse than it is.
+// That moment is the market's own horizon, past which the monitor expires the
+// signal regardless. Holding crypto to the 5-day stock horizon just delayed
+// honest feedback by three days for no gain.
+const MATURE_HOURS = { crypto: 48, stocks: 120, forex: 120, commodities: 120 };
+const DEFAULT_MATURE_HOURS = 120;
 const MIN_JUDGE    = 40;    // resolved trades before a verdict is offered
 
 const GOALS = {
@@ -79,11 +87,19 @@ function measure(rows) {
 export function assessGoals() {
   const all = getAllSignals();
   const now = Date.now();
-  const mature = s => s.status === 'CLOSED' && (now - s.signaledAt) > MATURE_HOURS * 3600000;
+  // The hand-set recalibration, or the last change learning made on its own,
+  // whichever is more recent.
+  let epoch = CALIBRATION_EPOCH;
+  try {
+    const learnedAt = Date.parse(getLearningState()?.lastChangeAt || '');
+    if (Number.isFinite(learnedAt) && learnedAt > epoch) epoch = learnedAt;
+  } catch { /* fall back to the hand-set date */ }
+  const mature = s => s.status === 'CLOSED'
+    && (now - s.signaledAt) > (MATURE_HOURS[s.market] ?? DEFAULT_MATURE_HOURS) * 3600000;
 
-  const current  = all.filter(s => s.signaledAt >= CALIBRATION_EPOCH && mature(s));
-  const previous = all.filter(s => s.signaledAt <  CALIBRATION_EPOCH && mature(s));
-  const pendingCurrent = all.filter(s => s.signaledAt >= CALIBRATION_EPOCH && s.status === 'OPEN').length;
+  const current  = all.filter(s => s.signaledAt >= epoch && mature(s));
+  const previous = all.filter(s => s.signaledAt <  epoch && mature(s));
+  const pendingCurrent = all.filter(s => s.signaledAt >= epoch && s.status === 'OPEN').length;
 
   const cur = measure(current);
   const prev = measure(previous);
@@ -146,7 +162,7 @@ export function assessGoals() {
         : 'Meeting its goals',
     goals, trend,
     current: cur, previous: prev, pendingCurrent,
-    calibrationEpoch: new Date(CALIBRATION_EPOCH).toISOString().slice(0, 10),
+    calibrationEpoch: new Date(epoch).toISOString().slice(0, 10),
     assessedAt: new Date().toISOString()
   };
 }
