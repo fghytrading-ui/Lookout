@@ -17,6 +17,7 @@
 // Checks report; they never change behaviour. A check that silently altered
 // what the scanner does would be the same class of problem it exists to find.
 import { getAllSignals } from './signalLog.js';
+import { assessGoals } from './goals.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -151,6 +152,25 @@ function checkTrackingLive(signals) {
     + (withFeatures ? ` · ${withFeatures} with full inputs recorded` : ''));
 }
 
+// ── 8. Still doing what it exists to do ──────────────────────────────
+// Parameters can be within their bands and every feed answering while the
+// system quietly stops making money. This is the check that notices.
+function checkGoals() {
+  let g;
+  try { g = assessGoals(); } catch { return skip('goals', 'Meeting its goals', 'Assessment unavailable'); }
+  if (g.status === 'waiting') return skip('goals', 'Meeting its goals', g.headline);
+  if (g.status === 'off') {
+    const bad = g.goals.filter(x => x.status === 'off').map(x => x.detail).join('; ');
+    return fail('goals', 'Meeting its goals', bad,
+      'The settings are within their bands but the results are not there — worth re-examining the calibration');
+  }
+  if (g.trend?.direction === 'degrading') {
+    return warn('goals', 'Meeting its goals', g.trend.detail,
+      'Results are worse than under the previous settings');
+  }
+  return ok('goals', 'Meeting its goals', g.goals.map(x => x.detail).join('; '));
+}
+
 /**
  * Run every check. `cards` and `sources` are optional; checks needing them
  * report 'skip' rather than failing when they are absent.
@@ -164,7 +184,8 @@ export function runSelfCheck({ cards = null, sources = null } = {}) {
     checkMarketCoverage(signals),
     checkGeometry(cards),
     checkForConstants(cards),
-    checkSources(sources)
+    checkSources(sources),
+    checkGoals()
   ];
   const counts = checks.reduce((a, c) => ({ ...a, [c.status]: (a[c.status] || 0) + 1 }), {});
   const status = counts.fail ? 'fail' : counts.warn ? 'warn' : 'ok';

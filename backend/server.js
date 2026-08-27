@@ -19,6 +19,7 @@ import performanceRouter from './routes/performance.js';
 import { startSignalMonitor } from './lib/signalMonitor.js';
 import { runSelfCheck } from './lib/selfCheck.js';
 import { runLearning, getLearningState, resetLearning } from './lib/learning.js';
+import { assessGoals } from './lib/goals.js';
 import { isMarketOpen, getSession, getEntryTiming } from './utils/market.js';
 import { startAutoPersist } from './lib/persistentCache.js';
 import { POLYGON_ENABLED } from './lib/marketData.js';
@@ -31,6 +32,14 @@ app.use(cors());
 // Raised limit so the client can POST its full signal-log mirror back after
 // a Render free-tier disk wipe (see /api/performance/restore).
 app.use(express.json({ limit: '12mb' }));
+
+// Goals — is the software doing what it exists to do? Measured only on
+// cohorts old enough to have resolved, and only on trades produced by the
+// settings currently in force.
+app.get('/api/system/goals', (req, res) => {
+  try { res.json(assessGoals()); }
+  catch (err) { res.status(500).json({ error: 'Goal assessment failed', details: err.message }); }
+});
 
 // Learning — what the tracked record says the parameters should be.
 // GET reports without changing anything; POST applies what the guardrails

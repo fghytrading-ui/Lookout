@@ -32,6 +32,7 @@ export default function App() {
   const [showSources, setShowSources] = useState(false);
   const [health, setHealth] = useState(null);
   const [learning, setLearning] = useState(null);
+  const [goals, setGoals] = useState(null);
   const [marketsOpen, setMarketsOpen] = useState(false);
   const headerRef = useRef(null);
   const marketsRef = useRef(null);
@@ -112,6 +113,11 @@ export default function App() {
     fetch('/api/system/learning')
       .then(r => r.json())
       .then(setLearning)
+      .catch(() => {});
+    // Whether it is doing what it exists to do.
+    fetch('/api/system/goals')
+      .then(r => r.json())
+      .then(setGoals)
       .catch(() => {});
     syncSignalBackup().catch(() => {});
   }, []);
@@ -257,6 +263,48 @@ export default function App() {
                 </span>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {showSources && goals && (
+        <div className="mx-4 mt-3 p-3 rounded border border-[#1a1a1a] bg-[#0a0a0a]">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[10px] uppercase tracking-widest text-[#666] font-mono">
+              Is it working
+            </span>
+            <span className={`text-[10px] font-mono px-2 py-0.5 rounded border ${
+              goals.status === 'ok' ? 'border-green-500/40 text-green-300 bg-green-500/10' :
+              goals.status === 'off' ? 'border-red-500/40 text-red-300 bg-red-500/10' :
+              goals.status === 'marginal' ? 'border-amber-500/40 text-amber-300 bg-amber-500/10' :
+              'border-[#2a2a2a] text-[#666]'
+            }`}>{goals.headline}</span>
+          </div>
+          <div className="space-y-1.5">
+            {goals.goals.map(g => (
+              <div key={g.key} className="flex items-start gap-2 text-[11px] font-mono">
+                <span className={
+                  g.status === 'ok' ? 'text-green-400' :
+                  g.status === 'off' ? 'text-red-400' :
+                  g.status === 'marginal' ? 'text-amber-400' : 'text-[#555]'
+                }>{g.status === 'ok' ? '✓' : g.status === 'off' ? '✕' : g.status === 'marginal' ? '◐' : '·'}</span>
+                <span className="text-[#888] w-44 flex-shrink-0">{g.label}</span>
+                <span className="text-[#666] flex-1">
+                  {g.detail}
+                  {g.note && <span className="block text-[9px] text-[#444] mt-0.5 leading-tight">{g.note}</span>}
+                </span>
+              </div>
+            ))}
+            {goals.trend && (
+              <div className="flex items-start gap-2 text-[11px] font-mono pt-1.5 border-t border-[#161616]">
+                <span className={goals.trend.direction === 'improving' ? 'text-green-400'
+                              : goals.trend.direction === 'degrading' ? 'text-red-400' : 'text-[#555]'}>
+                  {goals.trend.direction === 'improving' ? '↑' : goals.trend.direction === 'degrading' ? '↓' : '→'}
+                </span>
+                <span className="text-[#888] w-44 flex-shrink-0">vs previous settings</span>
+                <span className="text-[#666] flex-1">{goals.trend.detail}</span>
+              </div>
+            )}
           </div>
         </div>
       )}
