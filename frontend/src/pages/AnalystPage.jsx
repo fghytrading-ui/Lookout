@@ -681,7 +681,10 @@ export default function AnalystPage() {
               <div className="flex items-center justify-between mb-3">
                 <div>
                   <div className="text-[10px] uppercase tracking-widest text-[#555] font-mono">🏛 Wall Street Consensus</div>
-                  <div className="text-[10px] text-[#444] font-mono mt-0.5">{data.wallStreet.analystCount} analysts covering · independent cross-check</div>
+                  <div className="text-[10px] text-[#444] font-mono mt-0.5">
+                    {data.wallStreet.analystCount} analysts covering · independent cross-check
+                    {data.wallStreet.period && ` · as of ${data.wallStreet.period}`}
+                  </div>
                 </div>
                 {data.wallStreet.recommendationLabel && (
                   <span className={`text-sm font-mono font-bold tracking-widest px-3 py-1 rounded border ${
@@ -691,6 +694,7 @@ export default function AnalystPage() {
                   }`}>{data.wallStreet.recommendationLabel}</span>
                 )}
               </div>
+              {(data.wallStreet.targetLow != null || data.wallStreet.targetMean != null || data.wallStreet.targetHigh != null) && (
               <div className="grid grid-cols-3 gap-3 mb-3 text-[11px] font-mono">
                 {data.wallStreet.targetLow != null && (
                   <div className="bg-red-500/8 border border-red-500/20 rounded p-2">
@@ -714,6 +718,7 @@ export default function AnalystPage() {
                   </div>
                 )}
               </div>
+              )}
               <div className="text-[10px] font-mono text-[#555]">
                 Ratings split:{' '}
                 <span className="text-green-400">Strong Buy {data.wallStreet.strongBuy}</span> ·{' '}
@@ -721,6 +726,16 @@ export default function AnalystPage() {
                 <span className="text-amber-400">Hold {data.wallStreet.hold}</span> ·{' '}
                 <span className="text-red-500/70">Sell {data.wallStreet.sell}</span> ·{' '}
                 <span className="text-red-400">Strong Sell {data.wallStreet.strongSell}</span>
+                {data.wallStreet.shift && (
+                  <span className={`ml-2 px-1.5 py-0.5 rounded border text-[9px] ${
+                    data.wallStreet.shift === 'upgrades'
+                      ? 'border-green-500/30 text-green-400'
+                      : 'border-red-500/30 text-red-400'
+                  }`}>recent {data.wallStreet.shift}</span>
+                )}
+                {data.wallStreet.source && (
+                  <span className="text-[#333]"> · via {data.wallStreet.source}</span>
+                )}
               </div>
             </div>
           )}

@@ -1,78 +1,113 @@
-// Multi-timeframe trend analysis — checks 4h / daily / weekly / monthly alignment
-import axios from 'axios';
+// Trend agreement across 4h / daily / weekly / monthly.
+//
+// This module used to make four raw Yahoo requests of its own, outside the
+// shared client, with no cache, no retry and no rate-limit handling. Yahoo now
+// answers those 429, all four rejected, and Promise.allSettled turned every
+// rejection into 'NEUTRAL' — so every ticker reported NEUTRAL on every
+// timeframe and the alignment score was 0 for everything, in both the
+// reliability breakdown and the corroboration panel. A silent, permanent zero
+// is worse than an obvious failure: it read as "no trend agreement" rather
+// than "this never ran".
+//
+// It now derives every timeframe from a daily series the caller already has,
+// by resampling. No extra network calls, nothing to rate-limit, and the
+// timeframes are guaranteed consistent with the prices shown elsewhere on the
+// page. The intraday series is optional; when it is missing that timeframe
+// reports null and is excluded from the count rather than counted as neutral.
+
 import { calculateSMA } from '../utils/signals.js';
 
-const HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36',
-  'Accept': 'application/json'
-};
-
-async function fetchYahooCandles(ticker, interval, range) {
-  const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}`;
-  const { data } = await axios.get(url, {
-    headers: HEADERS,
-    params: { interval, range },
-    timeout: 10000
-  });
-  const result = data?.chart?.result?.[0];
-  if (!result) return [];
-  const q = result.indicators?.quote?.[0] || {};
-  const times = result.timestamp || [];
-  const closes = [];
-  for (let i = 0; i < times.length; i++) {
-    if (q.close?.[i] != null) closes.push(q.close[i]);
+/** Last close of each calendar month in a daily series. */
+function resampleMonthly(candles) {
+  const out = [];
+  let key = null, last = null;
+  for (const c of candles) {
+    const d = new Date(c.date);
+    if (Number.isNaN(d.getTime())) continue;
+    const m = `${d.getUTCFullYear()}-${d.getUTCMonth()}`;
+    if (key !== null && m !== key) out.push(last);
+    key = m;
+    last = c.close;
   }
-  return closes;
+  if (last != null) out.push(last);
+  return out.filter(v => Number.isFinite(v));
 }
 
-// Determine trend on a given timeframe: UP / DOWN / NEUTRAL
+/** Last close of each week. */
+function resampleWeekly(candles) {
+  const out = [];
+  let key = null, last = null;
+  for (const c of candles) {
+    const d = new Date(c.date);
+    if (Number.isNaN(d.getTime())) continue;
+    const wk = Math.floor(d.getTime() / (7 * 86400000));
+    if (key !== null && wk !== key) out.push(last);
+    key = wk;
+    last = c.close;
+  }
+  if (last != null) out.push(last);
+  return out.filter(v => Number.isFinite(v));
+}
+
+/** UP / DOWN / NEUTRAL from price against a rising or falling average. */
 function classifyTrend(closes, smaLen = 20) {
-  if (!closes || closes.length < smaLen + 5) return 'NEUTRAL';
+  if (!closes || closes.length < smaLen + 5) return null;   // null = could not judge
   const price = closes[closes.length - 1];
   const sma = calculateSMA(closes, smaLen);
-  if (!sma) return 'NEUTRAL';
-  // Check SMA slope (is it rising or falling?)
-  const slice = closes.slice(0, -5);
-  const smaEarlier = calculateSMA(slice, smaLen);
-  if (!smaEarlier) return 'NEUTRAL';
+  const smaEarlier = calculateSMA(closes.slice(0, -5), smaLen);
+  if (!sma || !smaEarlier) return null;
   const slopeUp = sma > smaEarlier;
   if (price > sma && slopeUp) return 'UP';
   if (price < sma && !slopeUp) return 'DOWN';
   return 'NEUTRAL';
 }
 
-// Compute trend on all timeframes
-export async function getMultiTimeframeTrends(ticker) {
-  const [h4, daily, weekly, monthly] = await Promise.allSettled([
-    fetchYahooCandles(ticker, '1h', '1mo'),      // ~120 4h-equivalent candles
-    fetchYahooCandles(ticker, '1d', '3mo'),
-    fetchYahooCandles(ticker, '1wk', '2y'),
-    fetchYahooCandles(ticker, '1mo', '5y')
-  ]);
+/**
+ * @param dailyCandles  long daily series, oldest first — two years covers the
+ *                      monthly average comfortably
+ * @param hourlyCandles optional intraday series for the 4h read
+ */
+export function getTrendsFromCandles(dailyCandles, hourlyCandles = null) {
+  const daily = (dailyCandles || []).filter(c => Number.isFinite(c?.close));
+  const closes = daily.map(c => c.close);
+
+  let h4 = null;
+  if (Array.isArray(hourlyCandles) && hourlyCandles.length >= 100) {
+    const bars = hourlyCandles.filter(c => Number.isFinite(c?.close));
+    const four = bars.filter((_, i) => i % 4 === 3).map(c => c.close);   // every 4th hourly close
+    h4 = classifyTrend(four, 20);
+  }
 
   return {
-    h4:      h4.status      === 'fulfilled' ? classifyTrend(h4.value, 20)      : 'NEUTRAL',
-    daily:   daily.status   === 'fulfilled' ? classifyTrend(daily.value, 20)   : 'NEUTRAL',
-    weekly:  weekly.status  === 'fulfilled' ? classifyTrend(weekly.value, 20)  : 'NEUTRAL',
-    monthly: monthly.status === 'fulfilled' ? classifyTrend(monthly.value, 12) : 'NEUTRAL'
+    h4,
+    daily:   classifyTrend(closes, 20),
+    weekly:  classifyTrend(resampleWeekly(daily), 20),
+    monthly: classifyTrend(resampleMonthly(daily), 12)
   };
 }
 
-// Score how many timeframes align with the trade direction
+/** Score how many of the timeframes we could actually judge agree with the trade. */
 export function scoreTimeframeAlignment(trends, direction) {
+  if (!trends) return null;
   const target = direction === 'LONG' ? 'UP' : 'DOWN';
   const tf = ['h4', 'daily', 'weekly', 'monthly'];
-  const aligned = tf.filter(t => trends[t] === target).length;
-  const opposing = tf.filter(t => trends[t] !== 'NEUTRAL' && trends[t] !== target).length;
+  const judged = tf.filter(t => trends[t] != null);
+  if (!judged.length) return null;
+
+  const aligned  = judged.filter(t => trends[t] === target).length;
+  const opposing = judged.filter(t => trends[t] !== 'NEUTRAL' && trends[t] !== target).length;
+  const total = judged.length;
+  const ratio = aligned / total;
+
   return {
     aligned,
     opposing,
-    total: 4,
-    score: Math.round((aligned / 4) * 100),
-    label: aligned === 4 ? 'PERFECT ALIGNMENT'
-         : aligned === 3 ? 'STRONG ALIGNMENT'
-         : aligned === 2 ? 'MIXED'
-         : aligned === 1 ? 'WEAK'
-                         : 'CONFLICTING'
+    total,
+    score: Math.round(ratio * 100),
+    label: ratio === 1        ? 'PERFECT ALIGNMENT'
+         : ratio >= 0.66      ? 'STRONG ALIGNMENT'
+         : ratio >= 0.5       ? 'MIXED'
+         : aligned > 0        ? 'WEAK'
+                              : 'CONFLICTING'
   };
 }

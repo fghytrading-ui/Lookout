@@ -892,7 +892,12 @@ router.get('/scan', async (req, res) => {
           const next = Object.values(inventoryReleases).find(r => r.tickers.includes(card.ticker));
           if (next) card.inventoryRelease = next;
         }
-        // Strip internal fields before sending
+        // Strip internal fields before sending. ATR is kept under a public
+        // name first: it is stripped here but read much later, when the signal
+        // is logged, so every tracked record has carried a null volatility
+        // reading. Stop width turned out to be the strongest predictor in the
+        // record, and ATR is what sets it, so this is worth having.
+        card.atr = card._dailyAtr ?? null;
         delete card._historical;
         delete card._signalData;
         delete card._catalystAnalysis;
@@ -1090,7 +1095,7 @@ router.get('/scan', async (req, res) => {
       }
       // Pass the market context too — the features block records what the
       // system saw, and regime/VIX are part of that.
-      try { logSignal(card, { market, marketRegime, vix, atr: card._dailyAtr }); } catch {}
+      try { logSignal(card, { market, marketRegime, vix, atr: card.atr }); } catch {}
     }
 
     // ── DROP SETUPS THE TRACKED RECORD PROVES ARE LOSERS ───────────────

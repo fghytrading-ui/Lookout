@@ -4,9 +4,9 @@ import { withLiveBar } from '../lib/liveBar.js';
 import { enrichTicker } from '../lib/news.js';
 import { fetchNextEarnings, evaluateEarningsRisk } from '../lib/earnings.js';
 import { backtestSetup } from '../lib/backtest.js';
-import { fetchWallStreetConsensus } from '../lib/wallStreet.js';
 import { fetchRecommendationTrend } from '../lib/finnhubData.js';
-import { getMultiTimeframeTrends, scoreTimeframeAlignment } from '../lib/multiTimeframe.js';
+import { getTrendsFromCandles, scoreTimeframeAlignment } from '../lib/multiTimeframe.js';
+import { fetchIntradayCandles } from '../lib/intradayCandles.js';
 import { classifySetup } from '../lib/setupClassifier.js';
 import { computeTradeGrade } from '../lib/tradeGrade.js';
 import { getPerformanceMetrics } from '../lib/performanceMetrics.js';
@@ -554,16 +554,6 @@ export function assessCorroboration({ setup, backtest, wallStreet, analystRating
       text: `${bull}% buy / ${bear}% sell across ${analystRatings.total} analysts (${analystRatings.consensus})`
           + (conflicts ? ' — points the other way' : agrees ? ' — agrees with this direction' : ' — no clear lean'),
       points: pts });
-  } else if (wallStreet?.targetMean && price > 0) {
-    const upside = ((wallStreet.targetMean - price) / price) * 100;
-    const agrees = isLong ? upside > 3 : upside < -3;
-    const conflicts = isLong ? upside < -3 : upside > 3;
-    const pts = agrees ? 7 : conflicts ? -8 : 0;
-    adj += pts;
-    items.push({ name: 'Wall Street targets',
-      verdict: agrees ? 'pass' : conflicts ? 'fail' : 'partial',
-      text: `Mean target $${wallStreet.targetMean.toFixed(2)} (${upside >= 0 ? '+' : ''}${upside.toFixed(1)}% from here)`,
-      points: pts });
   } else {
     items.push({ name: 'Analyst consensus', verdict: 'partial',
       text: 'No analyst coverage for this instrument — no weight applied', points: 0 });
@@ -571,8 +561,13 @@ export function assessCorroboration({ setup, backtest, wallStreet, analystRating
 
   // 3. Trend agreement across 4h/daily/weekly/monthly (-10 .. +8)
   if (mtfAlignment && typeof mtfAlignment.aligned === 'number') {
-    const { aligned, opposing } = mtfAlignment;
-    const pts = aligned >= 4 ? 8 : aligned === 3 ? 5 : opposing >= 3 ? -10 : opposing === 2 ? -5 : 0;
+    const { aligned, opposing, total } = mtfAlignment;
+    // Scored on the share of timeframes that could be judged, since the
+    // intraday read is not always available and a missing one should not
+    // count against the trade.
+    const share = total ? aligned / total : 0;
+    const against = total ? opposing / total : 0;
+    const pts = share === 1 ? 8 : share >= 0.66 ? 5 : against >= 0.66 ? -10 : against >= 0.5 ? -5 : 0;
     adj += pts;
     items.push({ name: 'Multi-timeframe trend',
       verdict: pts > 0 ? 'pass' : pts === 0 ? 'partial' : 'fail',
@@ -954,13 +949,18 @@ router.get('/:ticker', async (req, res) => {
   // ── STOCK / FOREX / COMMODITY BRANCH (existing logic, unchanged) ──────
   try {
     // Parallel fetch of all data sources
-    const [full, weeklyTrend, news, earningsRaw, vix, wallStreet, fullForBacktest, analystConsensus, extendedHours] = await Promise.all([
+    const [full, weeklyTrend, news, earningsRaw, vix, wallStreet, fullForBacktest, analystConsensus, extendedHours, hourlyCandles] = await Promise.all([
       fetchFull(ticker, '3mo'),
       getWeeklyTrend(ticker),
       enrichTicker(ticker),
       fetchNextEarnings(ticker),
       getVIX(),
-      fetchWallStreetConsensus(ticker),
+      // Yahoo's quoteSummary is gone — it answers 429 for every ticker without
+      // an authenticated crumb — so this returned null on every request and the
+      // "Wall Street" panel it fed never once rendered. The live source for
+      // outside opinion is Finnhub's recommendation trend, fetched below, and
+      // the panel is built from that instead.
+      Promise.resolve(null),
       // Two years for the analogue search. Six months leaves roughly 65
       // testable bars once the indicator warm-up and the forward horizon are
       // taken out, which produced samples of one or two — too thin to weigh.
@@ -971,7 +971,12 @@ router.get('/:ticker', async (req, res) => {
       // indicators; the analyst did not, so the same stock read differently on
       // the two pages — SMCI showed -1.98% pre-market on the board while the
       // analyst was still working from the previous close.
-      fetchExtendedHours(ticker).catch(() => null)
+      fetchExtendedHours(ticker).catch(() => null),
+      // Hourly bars for the 4h trend read. Through the shared cached client
+      // the scanner already warms, so this is usually free — and on a 24-48h
+      // hold the 4h trend is the most relevant of the four timeframes, which
+      // is exactly the one that was missing.
+      fetchIntradayCandles(ticker, { interval: '60m', range: '3mo' }).catch(() => null)
     ]);
 
     if (!full.candles || full.candles.length < 30) {
@@ -1039,7 +1044,9 @@ router.get('/:ticker', async (req, res) => {
     // Multi-timeframe alignment (4h / daily / weekly / monthly)
     let mtfTrends = null, mtfAlignment = null;
     try {
-      mtfTrends = await getMultiTimeframeTrends(ticker);
+      // Derived from the two-year daily series already fetched for the
+      // backtest — no extra requests, and nothing left to be rate-limited.
+      mtfTrends = getTrendsFromCandles(fullForBacktest?.candles || full.candles, hourlyCandles);
       if (setup) mtfAlignment = scoreTimeframeAlignment(mtfTrends, setup.direction);
     } catch {}
 
@@ -1117,7 +1124,21 @@ router.get('/:ticker', async (req, res) => {
       invalidation,
       sectorContext,
       backtest,
-      wallStreet,
+      // Rebuilt from the feed that actually answers. Price targets are not
+      // available on the free Finnhub tier, so the panel shows the rating
+      // breakdown and omits targets rather than rendering empty ones.
+      wallStreet: analystConsensus?.total >= 1 ? {
+        analystCount: analystConsensus.total,
+        recommendationLabel: analystConsensus.consensus === 'BULLISH' ? 'BUY'
+                           : analystConsensus.consensus === 'BEARISH' ? 'SELL' : 'HOLD',
+        strongBuy: analystConsensus.strongBuy, buy: analystConsensus.buy,
+        hold: analystConsensus.hold, sell: analystConsensus.sell,
+        strongSell: analystConsensus.strongSell,
+        bullPct: analystConsensus.bullPct, bearPct: analystConsensus.bearPct,
+        period: analystConsensus.period, shift: analystConsensus.shift,
+        targetLow: null, targetMean: null, targetHigh: null,
+        source: 'Finnhub'
+      } : null,
       mtfTrends,
       mtfAlignment,
       performance,

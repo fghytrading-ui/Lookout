@@ -96,6 +96,20 @@ function coalesce(key, work) {
 }
 
 // ── Core fetch (quote + candles in one call) ──────────────────────────────
+
+// Mean daily volume over the last `days` sessions of a candle series.
+// Returns null when the series has no usable volume, so callers can still tell
+// "unknown" apart from "low".
+function avgDailyVolume(candles, days = 60) {
+  if (!Array.isArray(candles) || !candles.length) return null;
+  const vols = candles
+    .slice(-days)
+    .map(c => c && c.volume)
+    .filter(v => Number.isFinite(v) && v > 0);
+  if (vols.length < 5) return null;
+  return Math.round(vols.reduce((a, b) => a + b, 0) / vols.length);
+}
+
 export async function fetchFull(ticker, range = '3mo') {
   const cacheKey = `full:${ticker}:${range}`;
   const cached = cacheGet(cacheKey);
@@ -181,7 +195,17 @@ async function fetchFullUncached(ticker, range, cacheKey) {
       currency:                 meta.currency || 'USD',
       exchangeName:             meta.exchangeName || meta.fullExchangeName || '',
       longName:                 meta.longName || meta.shortName || ticker,
-      averageDailyVolume3Month: meta.averageDailyVolume3Month || null,
+      // Yahoo's chart endpoint does not carry this — it lives on quoteSummary,
+      // which answers 429 for everything now — so it arrived null on every
+      // ticker and took a lot of the system down with it silently: the minimum
+      // liquidity filter never ran, volume never moved signal confidence, the
+      // reviewer could never reject a setup for no participation, and the
+      // analyst's volume score sat at a flat 5 out of 15 forever.
+      //
+      // Every daily candle carries volume, so the average is computed from the
+      // history already in hand rather than depending on a field that is not
+      // coming back. 60 sessions is close to the three months the name implies.
+      averageDailyVolume3Month: meta.averageDailyVolume3Month || avgDailyVolume(candles) || null,
       timestamp:                new Date().toISOString()
     },
     candles
