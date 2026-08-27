@@ -10,6 +10,13 @@ const cache = new Map();
 const TTL = 15 * 60 * 1000;
 registerCache('crypto-context', cache);
 
+// Last successful CoinGecko global reading, kept across throttles. Six hours
+// is well inside the span over which dominance and total cap stay meaningful,
+// and past it we would rather show nothing than something misleading.
+let lastGoodGlobal = null;
+const GLOBAL_MAX_AGE_MIN = 6 * 60;
+const INCOMPLETE_TTL = 90 * 1000;
+
 const HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
 };
@@ -253,8 +260,19 @@ function getActiveCryptoSession() {
 }
 
 export async function getCryptoContext() {
+  // A result with a hole in it is cached only briefly. Holding an incomplete
+  // context for the full fifteen minutes meant one throttled call blanked
+  // dominance across every crypto card for a quarter of an hour, and the cache
+  // survives restarts, so a hole outlived the process that made it.
   const cached = cache.get('context');
-  if (cached && Date.now() - cached.ts < TTL) return cached.data;
+  const ttl = cached?.data?.global ? TTL : INCOMPLETE_TTL;
+  if (cached && Date.now() - cached.ts < ttl) return cached.data;
+
+  // The cache survives restarts, so an expired entry still carries the last
+  // reading we ever got — worth holding on to on a host that restarts often.
+  if (!lastGoodGlobal && cached?.data?.global) {
+    lastGoodGlobal = { data: cached.data.global, ts: cached.ts };
+  }
 
   const [global, fearGreed, funding] = await Promise.all([
     fetchGlobalCrypto(), fetchFearGreed(), fetchFundingRates()
@@ -267,7 +285,21 @@ export async function getCryptoContext() {
   // Pulled from Yahoo BTC quote, computed in the scanner where we have it.
   // Here we just leave a placeholder; scanner attaches btcChange24h before sending to client.
 
-  const result = { global, fearGreed, funding, session, timestamp: new Date().toISOString() };
+  // CoinGecko's free endpoint rate-limits without warning, and it is the only
+  // source for BTC dominance and total market cap. Both move slowly, so a
+  // reading from earlier is worth far more than nothing: dropping to null
+  // silently removed the alt-season and market-breadth reads from every crypto
+  // signal for as long as the throttle lasted. Keep the last good one and say
+  // how old it is rather than pretending we have no view.
+  let globalOut = global;
+  if (global) {
+    lastGoodGlobal = { data: global, ts: Date.now() };
+  } else if (lastGoodGlobal) {
+    const ageMin = Math.round((Date.now() - lastGoodGlobal.ts) / 60000);
+    if (ageMin <= GLOBAL_MAX_AGE_MIN) globalOut = { ...lastGoodGlobal.data, ageMinutes: ageMin };
+  }
+
+  const result = { global: globalOut, fearGreed, funding, session, timestamp: new Date().toISOString() };
   cache.set('context', { data: result, ts: Date.now() });
   return result;
 }

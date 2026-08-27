@@ -141,8 +141,15 @@ app.get('/api/system/sources', async (req, res) => {
   const sources = [
     { name: 'Yahoo Finance', drives: 'Prices, candles, pre/post market',
       active: true },
+    // Throttling is a pause, not an outage: the limiter backs off for seconds
+    // and prices come from Yahoo meanwhile, so nothing on screen goes blank.
+    // Flagging the feed dead every time the minute's budget filled reported a
+    // fault where the fallback was working exactly as designed.
     { name: 'Finnhub Quotes', drives: 'Real-time US stock prices',
-      active: finnhub.enabled && !finnhub.throttled },
+      active: finnhub.enabled,
+      note: finnhub.throttled
+        ? `at its per-minute limit — Yahoo prices for the next ${finnhub.retryInSec}s`
+        : null },
     { name: 'Finnhub News', drives: 'Company news for catalyst detection',
       active: finnhub.enabled },
     { name: 'Finnhub Analysts', drives: 'Buy/sell ratings and rating changes',
@@ -155,9 +162,15 @@ app.get('/api/system/sources', async (req, res) => {
       note: cryptoCtx?.funding?.source && cryptoCtx.funding.source !== 'binance'
         ? `funding via ${cryptoCtx.funding.source} (Binance blocks this host)`
         : (cryptoCtx?.funding ? null : 'funding rates unavailable from this host') },
+    // Dominance and total cap move slowly enough that the last reading still
+    // informs a signal, so a throttle only matters once it has gone stale.
     { name: 'CoinGecko', drives: 'BTC dominance, total crypto market cap',
       active: !!cryptoCtx?.global?.btcDominance,
-      note: cryptoCtx?.global?.btcDominance ? null : 'rate limited — retries automatically' },
+      note: !cryptoCtx?.global?.btcDominance
+        ? 'rate limited and no recent reading — retries automatically'
+        : (cryptoCtx.global.ageMinutes
+            ? `rate limited — using the reading from ${cryptoCtx.global.ageMinutes} min ago`
+            : null) },
     { name: 'Fear & Greed', drives: 'Crypto sentiment extremes',
       active: cryptoCtx?.fearGreed?.value != null },
     // The invented-events fallback was removed, so there is nothing to degrade
