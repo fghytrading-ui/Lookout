@@ -1,96 +1,171 @@
-// Walk through the last 6 months of candles and find similar setups.
-// For each historical occurrence, check if TP would have been hit before SL.
-// Returns true win rate of this setup pattern on this specific stock.
+// "When this instrument looked like this before, what happened next?"
+//
+// The previous version answered a different question and, in practice, never
+// answered it at all. It looked for one hardcoded pattern — RSI below 45 while
+// price sat above both a rising 20 and 50 SMA — and those conditions are very
+// nearly mutually exclusive: measured across 390 bars on six instruments it
+// matched exactly zero times. RSI dropped under 45 on 15-36 bars each and
+// price was above both averages on 10-43, and the intersection was always
+// empty. So the analyst's "Historical backtest" line reported "not enough
+// similar setups to judge — no weight applied" on every ticker, every time.
+// A whole input, permanently silent.
+//
+// Two things changed. It now matches on how similar a past bar was to TODAY
+// rather than to a fixed template, so it tests the setup actually being
+// proposed. And it scores those matches with the trade's own geometry and the
+// real staged exit — a third at TP0, a third at TP1, a runner, stop to
+// breakeven once TP0 fills — reported in R, the same measure the scanner and
+// the goal tracker use. The old all-or-nothing win rate could not be compared
+// with anything else in the system.
 
 import { calculateRSI, calculateATR, calculateSMA } from '../utils/signals.js';
 
-// Conditions that define a "long pullback to support in uptrend" setup
-function detectsLongPullback(rsi, price, sma20, sma50) {
-  return rsi != null && sma20 != null && sma50 != null &&
-         price > sma50 && price > sma20 && rsi < 45 && sma20 > sma50;
-}
-// Mirror for short
-function detectsShortRally(rsi, price, sma20, sma50) {
-  return rsi != null && sma20 != null && sma50 != null &&
-         price < sma50 && price < sma20 && rsi > 55 && sma20 < sma50;
+// How close a past bar has to be to today's reading to count as an analogue.
+const RSI_TOLERANCE = 8;      // RSI points
+const SMA_TOLERANCE = 3.0;    // percentage points of distance from each average
+const MIN_SPACING   = 4;      // bars between matches, so one move is not counted repeatedly
+const MIN_MATCHES   = 5;
+
+function state(closes, highLowCloses, price) {
+  const rsi   = calculateRSI(closes);
+  const sma20 = calculateSMA(closes, 20);
+  const sma50 = calculateSMA(closes, 50);
+  const atr   = calculateATR(highLowCloses);
+  if ([rsi, sma20, sma50, atr].some(v => v == null) || !(price > 0)) return null;
+  return {
+    rsi,
+    d20: ((price - sma20) / price) * 100,   // distance from each average, in %
+    d50: ((price - sma50) / price) * 100,
+    trendUp: sma20 > sma50,
+    atr
+  };
 }
 
-// Simulate same-day trade: did price hit TP (1.5 ATR) before SL (0.7 ATR) within 1-2 days?
-// (we use daily candles, so 1-2 daily candles = "same session" approximation)
-function simulateTrade(candles, startIdx, direction, atr) {
-  if (startIdx + 2 > candles.length) return null;
+function similar(a, b) {
+  return Math.abs(a.rsi - b.rsi) <= RSI_TOLERANCE
+      && Math.abs(a.d20 - b.d20) <= SMA_TOLERANCE
+      && Math.abs(a.d50 - b.d50) <= SMA_TOLERANCE
+      && a.trendUp === b.trendUp;
+}
+
+/**
+ * Walk forward from a matched bar under the real scale-out plan and return the
+ * realised result in R. Mirrors lib/realisedR.js, computed from candles rather
+ * than from a closed record.
+ */
+function simulate(candles, startIdx, direction, stopDist, targetDist, horizonBars) {
   const entry = candles[startIdx].close;
-  const tp = direction === 'LONG' ? entry + atr * 1.5 : entry - atr * 1.5;
-  const sl = direction === 'LONG' ? entry - atr * 0.7 : entry + atr * 0.7;
-  for (let i = startIdx + 1; i <= Math.min(startIdx + 2, candles.length - 1); i++) {
-    const c = candles[i];
-    if (direction === 'LONG') {
-      if (c.low  <= sl) return 'LOSS';
-      if (c.high >= tp) return 'WIN';
-    } else {
-      if (c.high >= sl) return 'LOSS';
-      if (c.low  <= tp) return 'WIN';
-    }
+  if (!(stopDist > 0) || !(targetDist > 0)) return null;
+  const long = direction === 'LONG';
+  const rr   = targetDist / stopDist;
+  const dir  = long ? 1 : -1;
+
+  const tp0 = entry + dir * targetDist * 0.30;
+  const tp1 = entry + dir * targetDist;
+  const tp2 = entry + dir * targetDist * 1.2;
+  let stop  = entry - dir * stopDist;
+
+  let scaled = false;
+  const last = Math.min(startIdx + horizonBars, candles.length - 1);
+
+  for (let i = startIdx + 1; i <= last; i++) {
+    const { high, low } = candles[i];
+    const hitStop = long ? low <= stop : high >= stop;
+    const hitTp0  = long ? high >= tp0 : low <= tp0;
+    const hitTp1  = long ? high >= tp1 : low <= tp1;
+    const hitTp2  = long ? high >= tp2 : low <= tp2;
+
+    // Within a bar the order is unknown. Resolve against the trade, so this
+    // never flatters itself: the stop is taken first unless the first scale
+    // had already filled on an earlier bar.
+    if (hitStop && !scaled) return -1.0;
+    if (!scaled && hitTp0) scaled = true;   // stop moves to breakeven with it
+    if (scaled) stop = entry;
+    if (hitTp2) return (0.3 * rr) / 3 + rr / 3 + (1.2 * rr) / 3;
+    if (hitTp1) return (0.3 * rr) / 3 + rr / 3;
+    if (hitStop && scaled) return (0.3 * rr) / 3;
   }
-  return 'TIMEOUT'; // Neither hit within 1-2 sessions
+
+  // Ran out of horizon: settle where it closed, as the live monitor does.
+  const close = candles[last].close;
+  const move = ((close - entry) * dir) / stopDist;
+  return scaled ? (0.3 * rr) / 3 + (move * 2) / 3 : move;
 }
 
-// Main: run backtest for a given direction over the candle history
-export function backtestSetup(candles, direction) {
-  if (!candles || candles.length < 60) return null;
-
-  const detector = direction === 'LONG' ? detectsLongPullback : detectsShortRally;
-  const trades = [];
-
-  // Look at every candle from 50 onwards (need history for indicators) until 11 from end (need time to simulate)
-  for (let i = 50; i < candles.length - 11; i++) {
-    const slice = candles.slice(0, i + 1);
-    const closes = slice.map(c => c.close);
-    const rsi = calculateRSI(closes);
-    const sma20 = calculateSMA(closes, 20);
-    const sma50 = calculateSMA(closes, 50);
-    const atr = calculateATR(slice.map(c => ({ high: c.high, low: c.low, close: c.close })));
-
-    if (!atr) continue;
-    if (!detector(rsi, candles[i].close, sma20, sma50)) continue;
-
-    // Avoid trading too close to previous trade (overlap)
-    if (trades.length && i - trades[trades.length - 1].idx < 5) continue;
-
-    const result = simulateTrade(candles, i, direction, atr);
-    if (result) trades.push({ idx: i, date: candles[i].date, result });
+/**
+ * @param candles   daily candles, oldest first
+ * @param direction 'LONG' | 'SHORT'
+ * @param geometry  { stopDist, targetDist, horizonBars } in price terms; falls
+ *                  back to ATR defaults when the caller has no setup to pass.
+ */
+export function backtestSetup(candles, direction, geometry = {}) {
+  if (!candles || candles.length < 70) {
+    return { sampleSize: 0, winRate: null, expectancy: null,
+             message: 'Not enough price history to find comparable sessions' };
   }
 
-  if (!trades.length) {
-    return { sampleSize: 0, winRate: null, message: 'No similar setups in last 6 months — insufficient historical data' };
+  const closes = candles.map(c => c.close);
+  const hlc    = candles.map(c => ({ high: c.high, low: c.low, close: c.close }));
+  const today  = state(closes, hlc, candles[candles.length - 1].close);
+  if (!today) {
+    return { sampleSize: 0, winRate: null, expectancy: null,
+             message: 'Indicators unavailable — no comparison possible' };
   }
 
-  const wins    = trades.filter(t => t.result === 'WIN').length;
-  const losses  = trades.filter(t => t.result === 'LOSS').length;
-  const timeouts = trades.filter(t => t.result === 'TIMEOUT').length;
-  const decided = wins + losses;
-  const winRate = decided ? Math.round((wins / decided) * 100) : null;
+  const horizonBars = geometry.horizonBars > 0 ? geometry.horizonBars : 3;
+  const stopDist    = geometry.stopDist   > 0 ? geometry.stopDist   : today.atr * 0.7;
+  const targetDist  = geometry.targetDist > 0 ? geometry.targetDist : today.atr * 1.5;
 
-  let confidence;
-  if (trades.length < 4)       confidence = 'low';
-  else if (trades.length < 10) confidence = 'medium';
-  else                          confidence = 'high';
+  const results = [];
+  let lastIdx = -Infinity;
+  // Stop far enough from the end that every match gets its full horizon.
+  for (let i = 55; i < candles.length - horizonBars - 1; i++) {
+    if (i - lastIdx < MIN_SPACING) continue;
+    const past = state(closes.slice(0, i + 1), hlc.slice(0, i + 1), candles[i].close);
+    if (!past || !similar(past, today)) continue;
 
-  // Return last 5 historical matches with actual outcomes for the UI
-  const recentMatches = trades.slice(-5).reverse().map(t => ({
-    date: t.date,
-    result: t.result
-  }));
+    // Scale the geometry to the volatility of the day being matched, so a
+    // quiet stretch is not judged against today's range.
+    const scale = today.atr > 0 ? past.atr / today.atr : 1;
+    const r = simulate(candles, i, direction, stopDist * scale, targetDist * scale, horizonBars);
+    if (r === null) continue;
+    results.push({ idx: i, date: candles[i].date, r });
+    lastIdx = i;
+  }
+
+  if (results.length < MIN_MATCHES) {
+    return {
+      sampleSize: results.length, winRate: null, expectancy: null,
+      message: results.length
+        ? `Only ${results.length} comparable session${results.length === 1 ? '' : 's'} in the history — too few to draw on`
+        : 'No comparable sessions in the price history'
+    };
+  }
+
+  const rs        = results.map(x => x.r);
+  const expectancy = rs.reduce((a, b) => a + b, 0) / rs.length;
+  const green      = rs.filter(r => r > 0).length;
+  const greenRate  = Math.round((green / rs.length) * 100);
+  const reachedTp  = rs.filter(r => r >= (targetDist / stopDist) / 3).length;
+  const winRate    = Math.round((reachedTp / rs.length) * 100);
+
+  const confidence = results.length >= 12 ? 'high' : results.length >= 8 ? 'medium' : 'low';
 
   return {
-    sampleSize: trades.length,
-    wins, losses, timeouts,
-    winRate,
+    sampleSize: results.length,
+    winRate,                                   // reached the first target or better
+    greenRate,                                 // finished in profit
+    expectancy: parseFloat(expectancy.toFixed(3)),
     confidence,
-    recentMatches,
-    message: winRate >= 65 ? `Strong: this setup hit TP ${winRate}% of the time (${wins}/${decided}) over last 6mo`
-           : winRate >= 50 ? `Mixed: ${winRate}% win rate (${wins}/${decided}) — slight edge`
-           : winRate != null ? `Weak: only ${winRate}% historical win rate (${wins}/${decided}) — caution`
-           : 'No conclusive historical data'
+    recentMatches: results.slice(-5).reverse().map(x => ({
+      date: x.date,
+      result: x.r > 0 ? 'WIN' : x.r < 0 ? 'LOSS' : 'FLAT',
+      r: parseFloat(x.r.toFixed(2))
+    })),
+    message: expectancy > 0.15
+        ? `When it last looked like this, the trade returned ${expectancy.toFixed(2)}R on average (${green}/${rs.length} green)`
+      : expectancy > 0
+        ? `Slight edge historically — ${expectancy.toFixed(2)}R average over ${rs.length} comparable sessions`
+        : `Historically negative here — ${expectancy.toFixed(2)}R average over ${rs.length} comparable sessions`
   };
 }

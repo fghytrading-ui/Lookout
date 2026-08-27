@@ -520,13 +520,16 @@ export function assessCorroboration({ setup, backtest, wallStreet, analystRating
   let adj = 0;
 
   // 1. This pattern's own record on this instrument (-10 .. +8)
-  if (backtest && backtest.winRate != null && backtest.sampleSize >= 4) {
-    const wr = backtest.winRate;
-    const pts = wr >= 65 ? 8 : wr >= 50 ? 4 : wr >= 35 ? -4 : -10;
+  // Scored on what the comparable sessions RETURNED, under this trade's own
+  // geometry and the real staged exit — the same measure the scanner and the
+  // goal tracker use, so the two pages can finally be compared.
+  if (backtest && backtest.expectancy != null && backtest.sampleSize >= 5) {
+    const e = backtest.expectancy;
+    const pts = e >= 0.30 ? 8 : e >= 0.10 ? 4 : e >= -0.10 ? 0 : e >= -0.30 ? -4 : -10;
     adj += pts;
     items.push({ name: 'Historical backtest',
       verdict: pts > 0 ? 'pass' : pts === 0 ? 'partial' : 'fail',
-      text: `${wr}% of similar setups on this instrument reached target (${backtest.sampleSize} found)`,
+      text: `${backtest.sampleSize} comparable sessions on this instrument returned ${e >= 0 ? '+' : ''}${e.toFixed(2)}R on average · ${backtest.greenRate}% finished green`,
       points: pts });
   } else {
     items.push({ name: 'Historical backtest', verdict: 'partial',
@@ -958,7 +961,10 @@ router.get('/:ticker', async (req, res) => {
       fetchNextEarnings(ticker),
       getVIX(),
       fetchWallStreetConsensus(ticker),
-      fetchFull(ticker, '6mo'),  // 6 months of candles for backtest
+      // Two years for the analogue search. Six months leaves roughly 65
+      // testable bars once the indicator warm-up and the forward horizon are
+      // taken out, which produced samples of one or two — too thin to weigh.
+      fetchFull(ticker, '2y'),
       // Real analyst ratings — same feed the scanner uses, so both pages agree
       fetchRecommendationTrend(ticker).catch(() => null),
       // Pre/post-market action. The scanner has always spliced this into its
@@ -1017,7 +1023,15 @@ router.get('/:ticker', async (req, res) => {
     const sectorContext = await getSectorContext(ticker, fetchFull);
 
     // Backtest: run only if we have a setup direction
-    const backtest = setup ? backtestSetup(fullForBacktest.candles, setup.direction) : null;
+    // Test the trade actually being proposed — its own stop and target
+    // distances and its own horizon — rather than a generic ATR template.
+    const backtest = setup
+      ? backtestSetup(fullForBacktest.candles, setup.direction, {
+          stopDist:    Math.abs(setup.entry - setup.sl),
+          targetDist:  Math.abs(setup.tp - setup.entry),
+          horizonBars: Math.max(2, Math.min(8, Math.round(setup.expectedDays || 3)))
+        })
+      : null;
 
     // Classify setup type
     const setupType = setup ? classifySetup(quote, candles, { ...signalData, direction: setup.direction }) : null;

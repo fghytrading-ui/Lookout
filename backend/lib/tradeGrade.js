@@ -52,18 +52,24 @@ export function computeTradeGrade({ setup, review, reliability, mtfAlignment, ba
   });
 
   // 5. Historical backtest (10% weight)
-  if (backtest && backtest.winRate != null) {
-    const btPts = Math.min(10, (backtest.winRate - 40) / 4); // 40% wr = 0pts, 80% wr = 10pts
+  //
+  // Scored on what the comparable sessions returned, not on how many reached
+  // the far target. With a staged exit the target-hit rate is structurally low
+  // — a trade can bank its first third and finish green without ever touching
+  // TP1 — so grading on it would mark down setups that made money. -0.2R earns
+  // nothing, +0.4R earns full marks.
+  if (backtest && backtest.expectancy != null) {
+    const btPts = Math.min(10, ((backtest.expectancy + 0.2) / 0.6) * 10);
     score += Math.max(0, btPts);
     breakdown.push({
-      factor: 'Historical win rate',
+      factor: 'Historical performance',
       points: Math.round(Math.max(0, btPts)),
       max: 10,
-      detail: `${backtest.winRate}% historical (${backtest.sampleSize} samples)`
+      detail: `${backtest.expectancy >= 0 ? '+' : ''}${backtest.expectancy}R over ${backtest.sampleSize} comparable sessions`
     });
   } else {
     score += 4; // partial credit
-    breakdown.push({ factor: 'Historical win rate', points: 4, max: 10, detail: 'Insufficient history' });
+    breakdown.push({ factor: 'Historical performance', points: 4, max: 10, detail: 'Insufficient history' });
   }
 
   // 6. Sentiment alignment (5% weight)

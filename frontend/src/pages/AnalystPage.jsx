@@ -728,31 +728,34 @@ export default function AnalystPage() {
           {/* ── BACKTEST VALIDATION (historical win rate) ──────────────────── */}
           {data.backtest && (
             <div className={`rounded p-5 border ${
-              data.backtest.winRate >= 65 ? 'bg-green-500/8 border-green-500/30' :
-              data.backtest.winRate >= 50 ? 'bg-amber-500/8 border-amber-500/30' :
-              data.backtest.winRate != null ? 'bg-red-500/8 border-red-500/30' :
+              data.backtest.expectancy >= 0.15 ? 'bg-green-500/8 border-green-500/30' :
+              data.backtest.expectancy > 0 ? 'bg-amber-500/8 border-amber-500/30' :
+              data.backtest.expectancy != null ? 'bg-red-500/8 border-red-500/30' :
                                                 'bg-[#0e0e0e] border-[#1f1f1f]'
             }`}>
               <div className="flex items-center justify-between mb-2">
                 <div>
-                  <div className="text-[10px] uppercase tracking-widest font-mono text-[#888]">📊 Backtest — Historical Performance on {data.ticker}</div>
-                  <div className="text-[10px] text-[#444] font-mono mt-0.5">This exact setup pattern simulated over the last 6 months</div>
+                  <div className="text-[10px] uppercase tracking-widest font-mono text-[#888]">📊 Backtest — When {data.ticker} last looked like this</div>
+                  <div className="text-[10px] text-[#444] font-mono mt-0.5">This trade's own stop and target, run on comparable sessions over two years</div>
                 </div>
-                {data.backtest.winRate != null && (
+                {data.backtest.expectancy != null && (
                   <div className={`text-2xl font-condensed font-bold tracking-wider ${
-                    data.backtest.winRate >= 65 ? 'text-green-400' :
-                    data.backtest.winRate >= 50 ? 'text-amber-400' : 'text-red-400'
-                  }`}>{data.backtest.winRate}% WIN</div>
+                    data.backtest.expectancy >= 0.15 ? 'text-green-400' :
+                    data.backtest.expectancy > 0 ? 'text-amber-400' : 'text-red-400'
+                  }`}>{data.backtest.expectancy > 0 ? '+' : ''}{data.backtest.expectancy}R</div>
                 )}
               </div>
               <p className="text-[12px] font-mono text-[#aaa] mb-2">{data.backtest.message}</p>
               {data.backtest.sampleSize > 0 && (
                 <>
                   <div className="text-[10px] font-mono text-[#555] flex gap-4 flex-wrap">
-                    <span>Sample size: <span className="text-[#aaa]">{data.backtest.sampleSize}</span></span>
-                    <span>✓ Wins: <span className="text-green-400">{data.backtest.wins}</span></span>
-                    <span>✗ Losses: <span className="text-red-400">{data.backtest.losses}</span></span>
-                    {data.backtest.timeouts > 0 && <span>⏱ Timeouts: <span className="text-amber-400">{data.backtest.timeouts}</span></span>}
+                    <span>Comparable sessions: <span className="text-[#aaa]">{data.backtest.sampleSize}</span></span>
+                    {data.backtest.greenRate != null && (
+                      <span>Finished green: <span className="text-green-400">{data.backtest.greenRate}%</span></span>
+                    )}
+                    {data.backtest.winRate != null && (
+                      <span>Reached target: <span className="text-[#aaa]">{data.backtest.winRate}%</span></span>
+                    )}
                     <span>Confidence: <span className="text-[#aaa]">{data.backtest.confidence}</span></span>
                   </div>
                   {data.backtest.recentMatches?.length > 0 && (
@@ -765,8 +768,13 @@ export default function AnalystPage() {
                               m.result === 'WIN'  ? 'bg-green-500/20 text-green-300' :
                               m.result === 'LOSS' ? 'bg-red-500/20 text-red-300' :
                                                      'bg-amber-500/20 text-amber-300'
-                            }`}>{m.result === 'WIN' ? '✓ WIN' : m.result === 'LOSS' ? '✗ LOSS' : '— TIME'}</span>
-                            <span className="text-[#888]">Setup detected {m.date}</span>
+                            }`}>{m.result === 'WIN' ? '✓ WIN' : m.result === 'LOSS' ? '✗ LOSS' : '— FLAT'}</span>
+                            <span className="text-[#888]">{m.date}</span>
+                            {m.r != null && (
+                              <span className={m.r > 0 ? 'text-green-400/80' : m.r < 0 ? 'text-red-400/80' : 'text-[#666]'}>
+                                {m.r > 0 ? '+' : ''}{m.r}R
+                              </span>
+                            )}
                           </li>
                         ))}
                       </ul>
