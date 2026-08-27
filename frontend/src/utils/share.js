@@ -61,7 +61,7 @@ export function formatTradeText(trade, opts = {}) {
   // a sample to quote.
   if (trade.setupType) {
     const rec = trade.historicalStats
-      ? ` · ${Math.round(trade.historicalStats.winRate * 100)}% tracked (n=${trade.historicalStats.sampleSize})`
+      ? ` · ${Math.round((trade.historicalStats.greenRate ?? trade.historicalStats.winRate) * 100)}% finished green (n=${trade.historicalStats.sampleSize})`
       : '';
     lines.push(`${trade.setupType.label} · ${trade.setupType.idealHold}${rec}`);
   }

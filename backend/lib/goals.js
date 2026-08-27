@@ -23,6 +23,7 @@
 // decides whether the system makes money; the rest are diagnostic.
 import { getAllSignals } from './signalLog.js';
 import { getLearningState } from './learning.js';
+import { realisedR } from './realisedR.js';
 
 // When the calibration materially changed. Trades before this were produced by
 // different settings and cannot judge the current ones.
@@ -48,18 +49,6 @@ const GOALS = {
 };
 
 /** Realised R for one closed signal, under the scale-out plan. */
-function realisedR(s) {
-  const rr = s.rrRatio, rr2 = s.rrRatio2 || (rr ? rr * 1.2 : null);
-  if (!rr) return null;
-  switch (s.closeReason) {
-    case 'SL':        return -1.0;
-    case 'TP1':       return (0.3 * rr) / 3 + rr / 3;
-    case 'TP2':       return (0.3 * rr) / 3 + rr / 3 + rr2 / 3;
-    case 'SCALED_BE': return (0.3 * rr) / 3;
-    case 'EXPIRED':   return 0.0;
-    default:          return null;
-  }
-}
 
 function measure(rows) {
   const vals = rows.map(realisedR).filter(v => v !== null);

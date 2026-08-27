@@ -80,8 +80,18 @@ function excursions(market) {
       if (!entry || !sl || !tp || mfePct == null || maePct == null) return null;
       const risk = Math.abs(entry - sl), tpd = Math.abs(tp - entry);
       if (risk <= 0 || tpd <= 0) return null;
+      // Where it was actually closed, in R. Needed for trades that reached
+      // neither the first scale nor the stop: they were being counted as a
+      // flat zero when in the tracked record they settled at +0.50R on
+      // average, so every candidate target was scored as if its slow winners
+      // had been worth nothing.
+      let settleR = 0;
+      if (Number.isFinite(s.closePrice)) {
+        const dir = s.direction === 'SHORT' ? -1 : 1;
+        settleR = ((s.closePrice - entry) * dir) / risk;
+      }
       return { mfe: (mfePct / 100) * tpd, mae: (maePct / 100) * risk, risk,
-               stopPct: risk / entry, outcome: s.outcome };
+               stopPct: risk / entry, outcome: s.outcome, settleR };
     })
     .filter(Boolean);
 }
@@ -98,6 +108,7 @@ function expectancy(rows, targetR) {
     else if (r.mfe >= tp1)  tot += (0.3 * targetR) / 3 + targetR / 3;
     else if (r.mfe >= tp0)  tot += (0.3 * targetR) / 3;
     else if (r.mae >= r.risk) tot += -1.0;
+    else tot += r.settleR ?? 0;   // reached neither: settles where it closed
   }
   return tot / rows.length;
 }

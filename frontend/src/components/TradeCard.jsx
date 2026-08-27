@@ -503,7 +503,9 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
             </div>
             <p className="text-[10px] text-[#888] font-mono leading-snug">{trade.setupType.description}</p>
             {/* EXPECTANCY — the number that decides whether this trade makes
-                money if repeated: (winRate x R:R) - (1 - winRate), in R. */}
+                money if repeated, in R. Measured from what this setup's tracked
+                trades actually returned, including the ones that banked the
+                first scale and the ones that ran their horizon out in profit. */}
             {trade.expectancy != null && (
               <div className={`text-[10px] font-mono mt-2 pt-2 border-t border-[#1a1a1a] flex items-center gap-2 flex-wrap ${
                 trade.expectancy > 0 ? 'text-green-400/90' : 'text-red-400/90'
@@ -515,7 +517,7 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
                 <span className="text-[#555]">
                   {trade.breakEvenRR != null
                     ? `· needs R:R ≥ ${trade.breakEvenRR} to break even · this trade is ${trade.rrRatio}`
-                    : `· this setup has no recorded wins yet — no reward-to-risk makes it profitable`}
+                    : `· not enough tracked history to place a breakeven yet`}
                 </span>
                 {trade.expectancy <= 0 && (
                   <span className="px-1.5 py-0.5 rounded border border-red-500/40 text-red-400">
@@ -529,18 +531,26 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
             {trade.historicalStats && (
               <div className="text-[10px] font-mono text-[#666] mt-2 pt-2 border-t border-[#1a1a1a] flex items-center gap-2 flex-wrap">
                 <span className="text-[#888]">📊 This system's record on {trade.setupType.label}:</span>
+                {/* The share that FINISHED IN PROFIT, not the share that
+                    reached the far target. Showing the latter put "21% wins"
+                    in red on a setup whose trades came out green 59% of the
+                    time and made money overall — the same wrong number that
+                    was quarantining it in the scanner. */}
                 <span className={`font-bold ${
-                  trade.historicalStats.winRate >= 0.6 ? 'text-green-400' :
-                  trade.historicalStats.winRate >= 0.5 ? 'text-amber-400' :
-                  trade.historicalStats.winRate >= 0.4 ? 'text-orange-400' : 'text-red-400'
+                  trade.historicalStats.greenRate >= 0.6 ? 'text-green-400' :
+                  trade.historicalStats.greenRate >= 0.5 ? 'text-amber-400' :
+                  trade.historicalStats.greenRate >= 0.4 ? 'text-orange-400' : 'text-red-400'
                 }`}>
-                  {(trade.historicalStats.winRate * 100).toFixed(0)}% wins
+                  {((trade.historicalStats.greenRate ?? trade.historicalStats.winRate) * 100).toFixed(0)}% finished green
+                </span>
+                <span className="text-[#555]">
+                  ({(trade.historicalStats.winRate * 100).toFixed(0)}% ran all the way to target)
                 </span>
                 <span>(n={trade.historicalStats.sampleSize}, last 60d)</span>
                 {trade.confidenceAdjustment != null && trade.confidenceAdjustment !== 0 && (
                   <span className={`text-[9px] px-1.5 py-0.5 rounded border ${
                     trade.confidenceAdjustment > 0 ? 'border-green-500/30 text-green-400' : 'border-red-500/30 text-red-400'
-                  }`} title="Confidence auto-adjusted based on this setup's historical win rate">
+                  }`} title="Confidence auto-adjusted from the share of this setup's tracked trades that finished in profit">
                     confidence {trade.confidenceAdjustment > 0 ? '+' : ''}{trade.confidenceAdjustment}
                   </span>
                 )}

@@ -8,6 +8,7 @@
 // Persistence: JSON file at backend/data/signal-log.json. Survives restarts.
 
 import fs from 'fs';
+import { expectancyOf, greenRateOf } from './realisedR.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -264,10 +265,22 @@ export function getSetupTypeStats(setupType, { market = null, lookbackDays = 60,
   const mfeAvg = sample.reduce((a, s) => a + (s.mfePct || 0), 0) / sample.length;
   const maeAvg = sample.reduce((a, s) => a + (s.maePct || 0), 0) / sample.length;
 
+  // Realised return, which is what the gate and the confidence feedback now
+  // judge on. winRate is kept for display but must not be used to decide
+  // whether a setup trades: it counts profitable scale-outs and profitable
+  // expiries as failures, which is how the best pattern in the record came to
+  // look like a 21% loser.
+  const exp = expectancyOf(sample);
+
   return {
     winRate: wins / sample.length,
     wins,                       // raw counts — needed for a significance test
     losses,
+    trades: sample,             // for the expectancy test
+    expectancy: exp.mean,
+    expectancyUpper: exp.upper,
+    expectancyLower: exp.lower,
+    greenRate: greenRateOf(sample),
     lossRate: losses / sample.length,
     tpHitRate: tpHits / sample.length,
     slHitRate: slHits / sample.length,

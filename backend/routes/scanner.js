@@ -9,7 +9,7 @@ import { getCryptoContext, tickerToBinanceSymbol, getCryptoEntryTiming } from '.
 import { fetchCryptoCandlesBatch, computeSessionVWAP } from '../lib/cryptoCandles.js';
 import { getInventoryReleases, evaluateInventoryRisk } from '../lib/inventoryReleases.js';
 import { logSignal, getSetupTypeStats } from '../lib/signalLog.js';
-import { assessSetupEvidence } from '../lib/evidence.js';
+import { assessSetupEvidence, assessSetupExpectancy } from '../lib/evidence.js';
 import { withLiveBar } from '../lib/liveBar.js';
 import { fetchIntradayBatch } from '../lib/intradayCandles.js';
 import { analyseCatalysts, catalystSignals } from '../lib/catalystEngine.js';
@@ -1004,7 +1004,10 @@ router.get('/scan', async (req, res) => {
       // quarter for this to be safe.
       const hist = setupKey ? getSetupTypeStats(setupKey, { market, lookbackDays: 90, minSamples: 8 }) : null;
       if (hist) {
-        card.historicalStats = hist;
+        // Everything except the raw sample, which is only there for the
+        // expectancy test and would otherwise be serialised to the client.
+        const { trades: _sample, ...histPublic } = hist;
+        card.historicalStats = histPublic;
         let adj = 0;
         // "Block" tier. This was `winRate < 0.25 && sampleSize >= 15`, a
         // threshold that never actually reaches significance — 10 wins from 50
@@ -1016,25 +1019,41 @@ router.get('/scan', async (req, res) => {
         // confidence interval is below the win rate it needs to break even, and
         // the verdict is recomputed on every scan, so it releases itself as
         // soon as the evidence stops supporting the block.
-        const evidence = assessSetupEvidence({
-          wins: hist.wins ?? Math.round(hist.winRate * hist.sampleSize),
-          sampleSize: hist.sampleSize,
-          rrRatio: card.rrRatio || 0
-        });
+        // Judged on what the trades RETURNED, not on how many reached the far
+        // target. The win-rate form of this test counted a scale-out that
+        // banked a third at TP0 and a trade that ran its horizon out in profit
+        // as failures, then measured the result against the breakeven of an
+        // all-or-nothing trade — a structure this scanner does not use.
+        //
+        // On the tracked record that test quarantined Trend Continuation Long
+        // (182 trades, +0.072R, the most profitable pattern here) along with
+        // stocks and crypto as a whole, while passing forex, the one market
+        // actually losing money (-0.330R). It was blocking the winners and
+        // waving the loser through.
+        const evidence = assessSetupExpectancy({ trades: hist.trades || [] });
         card.setupEvidence = {
-          winRate: evidence.winRate,
-          upperBound: parseFloat(evidence.upperBound.toFixed(3)),
-          breakeven: parseFloat(evidence.breakeven.toFixed(3)),
+          expectancy: evidence.expectancy != null ? parseFloat(evidence.expectancy.toFixed(3)) : null,
+          upperBound: evidence.upperBound != null ? parseFloat(evidence.upperBound.toFixed(3)) : null,
           sampleSize: evidence.sampleSize,
+          winRate: hist.winRate,
+          greenRate: hist.greenRate,
           proven: evidence.proven
         };
         if (evidence.proven) {
           adj = -25;
           card.setupBlocked = true;  // barred from ENTER NOW below
-        } else if (hist.winRate < 0.35) adj = -15;
-        else if (hist.winRate < 0.45) adj = -8;
-        else if (hist.winRate > 0.60) adj = 8;
-        else if (hist.winRate > 0.55) adj = 4;
+        } else {
+          // Nudged on the share of trades that finished in profit rather than
+          // the share that reached the far target. Under the old field almost
+          // every setup sat near 21%, so nearly every card took the full -15
+          // and the adjustment stopped discriminating between them at all.
+          const g = hist.greenRate;
+          if (g == null) adj = 0;
+          else if (g < 0.35) adj = -15;
+          else if (g < 0.45) adj = -8;
+          else if (g > 0.60) adj = 8;
+          else if (g > 0.55) adj = 4;
+        }
         if (adj !== 0) {
           card.confidence = Math.max(15, Math.min(95, card.confidence + adj));
           card.confidenceAdjustment = adj;
@@ -1047,14 +1066,23 @@ router.get('/scan', async (req, res) => {
         // setups that bled out because R:R never covered the loss rate.
         // Anything with negative expectancy is now flagged and kept out of
         // ENTER NOW, regardless of how good its technicals look.
+        // Measured, not inferred. The formula below it -- E = winRate x R:R -
+        // (1 - winRate) -- is correct arithmetic fed a wrong input: winRate
+        // treats every profitable scale-out and expiry as a loss, so it
+        // returned about -0.31R for essentially every card and flagged the
+        // whole book as negative expectancy. That single flag is what emptied
+        // ENTER NOW across all four markets.
         const rr = card.rrRatio || 0;
-        const expectancy = (hist.winRate * rr) - (1 - hist.winRate);
+        const expectancy = hist.expectancy != null
+          ? hist.expectancy
+          : (hist.winRate * rr) - (1 - hist.winRate);
         card.expectancy = parseFloat(expectancy.toFixed(3));
+        card.expectancySource = hist.expectancy != null ? 'measured' : 'estimated';
         // With zero recorded wins the breakeven R:R is undefined, and the
         // clamped version rendered as an absurd "needs R:R >= 100". Report it
         // as unreachable instead, which is what it actually means.
-        card.breakEvenRR = hist.winRate > 0
-          ? parseFloat(((1 - hist.winRate) / hist.winRate).toFixed(2))
+        card.breakEvenRR = hist.greenRate > 0
+          ? parseFloat(((1 - hist.greenRate) / hist.greenRate).toFixed(2))
           : null;
         if (expectancy <= 0) {
           card.negativeExpectancy = true;
