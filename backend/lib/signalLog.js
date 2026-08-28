@@ -243,7 +243,8 @@ export function getSetupTypeStats(setupType, { market = null, lookbackDays = 60,
   const inWindow = signals.filter(s =>
     s.status === 'CLOSED' &&
     s.setupType === setupType &&
-    s.closedAt >= since
+    s.closedAt >= since &&
+    s.closeReason !== 'NEVER_FILLED'   // never a position, so not evidence
   );
 
   // Prefer market-specific stats, but a setup's edge is mostly about the
@@ -302,6 +303,7 @@ export function getAggregateStats({ lookbackDays = 30 } = {}) {
   const byField = (field) => {
     const map = {};
     for (const s of closed) {
+      if (s.closeReason === 'NEVER_FILLED') continue;   // never a position
       const key = s[field] || 'unknown';
       if (!map[key]) map[key] = { wins: 0, losses: 0, expired: 0, total: 0, mfeSum: 0, maeSum: 0 };
       map[key].total++;
@@ -331,21 +333,39 @@ export function getAggregateStats({ lookbackDays = 30 } = {}) {
   // that banked the first scale and then stopped at breakeven. This is the
   // number that answers "how many of the trades you showed me made money",
   // which is not the same as the full-target hit rate.
-  const green = closed.filter(s => s.outcome === 'WIN' || s.outcome === 'SCRATCH').length;
+  //
+  // A signal whose entry limit was never reached is NOT a trade — there was no
+  // position, so it can be neither green nor red, and averaging it in either
+  // direction misstates the record. It is reported on its own line instead,
+  // because the share of signals that never fill decides how many chances the
+  // day actually offers.
+  const taken   = closed.filter(s => s.closeReason !== 'NEVER_FILLED');
+  const unfilled = closed.filter(s => s.closeReason === 'NEVER_FILLED');
+  const green = taken.filter(s => s.outcome === 'WIN' || s.outcome === 'SCRATCH').length;
+  const exp = expectancyOf(taken);
 
   return {
     lookbackDays,
-    greenRate: closed.length ? green / closed.length : null,
+    greenRate: taken.length ? green / taken.length : null,
     greenCount: green,
-    scratchCount: closed.filter(s => s.outcome === 'SCRATCH').length,
+    scratchCount: taken.filter(s => s.outcome === 'SCRATCH').length,
     totalSignals: allRecent.length,
     open: open.length,
     closed: closed.length,
-    wins: closed.filter(s => s.outcome === 'WIN').length,
-    losses: closed.filter(s => s.outcome === 'LOSS').length,
-    expired: closed.filter(s => s.outcome === 'EXPIRED').length,
-    overallWinRate: closed.length
-      ? closed.filter(s => s.outcome === 'WIN').length / closed.length
+    // Trades actually entered, and the signals that never became one.
+    taken: taken.length,
+    neverFilled: unfilled.length,
+    fillRate: closed.length ? taken.length / closed.length : null,
+    // The number that decides whether any of this makes money.
+    expectancyR: exp.mean != null ? parseFloat(exp.mean.toFixed(3)) : null,
+    expectancyLow: exp.lower != null ? parseFloat(exp.lower.toFixed(3)) : null,
+    expectancyHigh: exp.upper != null ? parseFloat(exp.upper.toFixed(3)) : null,
+    totalR: exp.n ? parseFloat((exp.mean * exp.n).toFixed(1)) : null,
+    wins: taken.filter(s => s.outcome === 'WIN').length,
+    losses: taken.filter(s => s.outcome === 'LOSS').length,
+    expired: taken.filter(s => s.outcome === 'EXPIRED').length,
+    overallWinRate: taken.length
+      ? taken.filter(s => s.outcome === 'WIN').length / taken.length
       : null,
     byMarket: byField('market'),
     bySetupType: byField('setupType'),

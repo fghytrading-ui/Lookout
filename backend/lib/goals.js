@@ -23,7 +23,7 @@
 // decides whether the system makes money; the rest are diagnostic.
 import { getAllSignals } from './signalLog.js';
 import { getLearningState } from './learning.js';
-import { realisedR } from './realisedR.js';
+import { realisedR, expectancyOf } from './realisedR.js';
 
 // When the calibration materially changed. Trades before this were produced by
 // different settings and cannot judge the current ones.
@@ -93,6 +93,38 @@ export function assessGoals() {
   const cur = measure(current);
   const prev = measure(previous);
 
+  // ── THE WHOLE-RECORD VERDICT ────────────────────────────────────────
+  //
+  // Separate from the calibration comparison above, which only ever looks at
+  // trades since the last settings change and so stays silent for weeks. This
+  // asks the blunt question over every trade that was actually entered: does
+  // this make money? A confidence interval sitting entirely below zero is not
+  // a bad patch, it is a measured negative edge, and the honest response is to
+  // say so on the page rather than keep presenting cards that look tradeable.
+  //
+  // Signals whose entry never filled are excluded by realisedR — there was no
+  // position — and the fill rate is reported alongside so the two are never
+  // confused.
+  const entered = all.filter(s => s.status === 'CLOSED' && s.closeReason !== 'NEVER_FILLED');
+  const neverFilled = all.filter(s => s.closeReason === 'NEVER_FILLED').length;
+  const whole = expectancyOf(entered);
+  const edge = whole.n >= 100 && whole.upper !== null ? {
+    n: whole.n,
+    neverFilled,
+    expectancy: parseFloat(whole.mean.toFixed(3)),
+    low: parseFloat(whole.lower.toFixed(3)),
+    high: parseFloat(whole.upper.toFixed(3)),
+    totalR: parseFloat((whole.mean * whole.n).toFixed(1)),
+    verdict: whole.upper < 0 ? 'NEGATIVE'
+           : whole.lower > 0 ? 'POSITIVE'
+           : 'UNPROVEN',
+    headline: whole.upper < 0
+      ? `Measured edge is negative: ${whole.mean.toFixed(3)}R per trade over ${whole.n} entered trades, and the whole confidence interval sits below zero. Trading this loses money.`
+      : whole.lower > 0
+        ? `Measured edge is positive: +${whole.mean.toFixed(3)}R per trade over ${whole.n} entered trades.`
+        : `No measurable edge either way: ${whole.mean.toFixed(3)}R over ${whole.n} trades, interval spans zero. Not proven to make or lose money.`
+  } : null;
+
   const goals = [];
   const enough = cur && cur.n >= MIN_JUDGE;
 
@@ -151,6 +183,7 @@ export function assessGoals() {
         : 'Meeting its goals',
     goals, trend,
     current: cur, previous: prev, pendingCurrent,
+    edge,
     calibrationEpoch: new Date(epoch).toISOString().slice(0, 10),
     assessedAt: new Date().toISOString()
   };

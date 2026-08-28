@@ -81,9 +81,34 @@ export function determineOutcome(signal, candles) {
   let scaledOut = false;      // first target filled — a third is already banked
   let effectiveSl = sl;       // moves to breakeven once the scale fills
 
+  // ── HAS THE ENTRY ACTUALLY FILLED? ──────────────────────────────────
+  //
+  // This walker used to book the position from the signal onward without ever
+  // asking whether price traded at the entry. The entry is a limit: for a long
+  // on a strong RSI it is set 0.6% BELOW the market, so the trade only exists
+  // if the stock dips to it. When a stock instead ran straight up, no order
+  // filled, the trader held nothing — and this loop still followed the price
+  // to the target and recorded a win.
+  //
+  // Across the tracked record that was 53 of 477 closed trades, every single
+  // one of them a winner (30 TP1, 11 TP2, no stops at all — of course, since
+  // an unfilled trade cannot lose), worth a phantom +58.5R. Their absence from
+  // the loss column is exactly why they were invisible. Removing them takes
+  // measured expectancy from -0.077R to -0.229R: the performance page has been
+  // reporting a system markedly better than the one that could be traded, and
+  // the gap was concentrated in the trades that looked best.
+  let filled = false;
+
   for (const c of candles) {
     const high = c.high;
     const low  = c.low;
+
+    // A resting limit fills when price trades through it. Until then there is
+    // no position, so nothing is measured — no excursion, no target, no stop.
+    if (!filled) {
+      filled = direction === 'LONG' ? low <= entry : high >= entry;
+      if (!filled) continue;
+    }
     // Bar open/close direction tiebreaker: when TP AND SL are both touched
     // inside the same bar, the open→close direction tells us which came first.
     // Green bar (close > open) after a long entry → price ran up first, so TP
@@ -169,6 +194,16 @@ export function determineOutcome(signal, candles) {
   const mfePct = tpDistance > 0 ? (mfeAbs / tpDistance) * 100 : 0;
   const maePct = slDistance > 0 ? (maeAbs / slDistance) * 100 : 0;
 
+  // Never got in. Not a win and not a loss — the trader was flat throughout,
+  // and calling it either would misstate the record.
+  if (!filled) {
+    if (Date.now() > signal.expiresAt) {
+      return { reason: 'NEVER_FILLED', closePrice: signal.entry, mfe: 0, mae: 0,
+               mfePct: 0, maePct: 0, closedAt: signal.expiresAt, scaledOut: false };
+    }
+    return null;   // still inside its window — the entry may yet be reached
+  }
+
   if (closeReason) {
     return { reason: closeReason, closePrice, mfe: mfeAbs, mae: maeAbs, mfePct, maePct, closedAt, scaledOut };
   }
@@ -191,6 +226,10 @@ export function determineOutcome(signal, candles) {
 // GREEN, not red. Scoring those as losses is what made the tracked hit rate
 // look like 28% when 70% of trades actually went far enough to pay something.
 function classifyOutcome(reason, scaledOut) {
+  // Distinct from every other outcome: there was no position, so this is
+  // neither a win nor a loss and must not be averaged in with trades that
+  // were actually taken.
+  if (reason === 'NEVER_FILLED') return 'NEVER_FILLED';
   if (reason === 'TP1' || reason === 'TP2') return 'WIN';
   if (reason === 'SCALED_BE') return 'SCRATCH';   // partial profit banked, runner flat
   if (reason === 'SL') return 'LOSS';

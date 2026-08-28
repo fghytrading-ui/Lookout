@@ -28,6 +28,12 @@ export function realisedR(s) {
   const rr2 = s.rrRatio2 || rr * 1.2;
 
   switch (s.closeReason) {
+    // The entry limit was never reached, so no position existed. Excluded
+    // rather than scored zero: a zero would be averaged in and drag every
+    // expectancy toward the middle, when the honest statement is that this
+    // was not a trade at all. The share of signals that never fill is
+    // reported separately, because it decides how many chances you get.
+    case 'NEVER_FILLED': return null;
     case 'SL':        return -1.0;
     case 'TP1':       return (0.3 * rr) / 3 + rr / 3;
     case 'TP2':       return (0.3 * rr) / 3 + rr / 3 + rr2 / 3;

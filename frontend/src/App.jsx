@@ -267,6 +267,48 @@ export default function App() {
         </div>
       )}
 
+      {/* ── MEASURED EDGE ────────────────────────────────────────────────
+          Always visible, not behind a panel. When the tracked record says
+          these signals lose money, that has to be the first thing on the page
+          — showing entry prices and targets above a hidden warning is how a
+          losing system keeps getting traded. */}
+      {goals?.edge && goals.edge.verdict !== 'POSITIVE' && (
+        <div className={`mx-4 mt-3 p-3 rounded border ${
+          goals.edge.verdict === 'NEGATIVE'
+            ? 'border-red-500/50 bg-red-500/10'
+            : 'border-amber-500/40 bg-amber-500/[0.07]'
+        }`}>
+          <div className="flex items-start gap-2">
+            <span className="text-sm leading-none mt-0.5">
+              {goals.edge.verdict === 'NEGATIVE' ? '🛑' : '⚠'}
+            </span>
+            <div className="min-w-0">
+              <div className={`text-[11px] font-mono font-bold tracking-wide ${
+                goals.edge.verdict === 'NEGATIVE' ? 'text-red-300' : 'text-amber-300'
+              }`}>
+                {goals.edge.verdict === 'NEGATIVE'
+                  ? 'THE TRACKED RECORD SAYS THESE LOSE MONEY'
+                  : 'NO PROVEN EDGE YET'}
+              </div>
+              <p className="text-[11px] font-mono text-[#999] mt-1 leading-snug">
+                {goals.edge.headline}
+              </p>
+              <p className="text-[10px] font-mono text-[#666] mt-1 leading-snug">
+                {goals.edge.expectancy}R per trade across {goals.edge.n} entered trades
+                {' '}({goals.edge.totalR}R in total), 95% range {goals.edge.low} to {goals.edge.high}.
+                {goals.edge.neverFilled > 0 &&
+                  ` A further ${goals.edge.neverFilled} signals never reached their entry — you would have been flat on those, and they are not counted here.`}
+              </p>
+              {goals.edge.verdict === 'NEGATIVE' && (
+                <p className="text-[10px] font-mono text-red-400/80 mt-1.5 leading-snug">
+                  Treat what follows as research, not recommendations. Paper-trade until this turns positive.
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {showSources && goals && (
         <div className="mx-4 mt-3 p-3 rounded border border-[#1a1a1a] bg-[#0a0a0a]">
           <div className="flex items-center justify-between mb-2">
