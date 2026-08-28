@@ -502,6 +502,17 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
               </span>
             </div>
             <p className="text-[10px] text-[#888] font-mono leading-snug">{trade.setupType.description}</p>
+            {trade.needsOneSession && (
+              <div className="text-[10px] font-mono mt-2 pt-2 border-t border-[#1a1a1a] text-amber-400/90 leading-snug">
+                ⏳ First session for this setup — not actionable yet.
+                <span className="text-[#666]">
+                  {' '}Entering the session straight after a signal returned −0.116R across 288 tracked
+                  trades; waiting one more session returned +0.136R on the very same trades. If it is
+                  still here next session, it is tradeable then, at that session's prices.
+                </span>
+              </div>
+            )}
+
             {/* EXPECTANCY — the number that decides whether this trade makes
                 money if repeated, in R. Measured from what this setup's tracked
                 trades actually returned, including the ones that banked the

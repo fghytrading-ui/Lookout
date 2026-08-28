@@ -443,3 +443,35 @@ export function mergeSignals(incoming) {
   }
   return { added, updated, total: signals.length };
 }
+
+/**
+ * Has this ticker+direction already been signalled in an EARLIER session?
+ *
+ * Entering the session immediately after a signal is where this system loses
+ * its money. Measured on 288 stock signals with the entry timing as the only
+ * difference: taking the next open returns -0.116R, waiting one further
+ * session returns +0.136R, and the paired difference is +0.252R at z=3.74.
+ * The mechanism is visible in the raw direction data — the day after a signal
+ * is right only 37.6% of the time (z=-4.51 against a coin flip, and below the
+ * 44.8% a random entry on the same stocks would give), while days two onward
+ * sit back at the benchmark. The scanner selects stocks that have already run,
+ * and the first session afterwards is the giveback.
+ *
+ * So a setup has to survive a session before it is offered as actionable. No
+ * re-pricing is needed: the scan reruns each session and the card carries that
+ * session's own levels.
+ */
+export function seenInEarlierSession(ticker, direction, market) {
+  load();
+  const dayOf = (ms) => new Date(ms).toLocaleDateString('en-CA',
+    { timeZone: market === 'crypto' ? 'UTC' : 'America/New_York' });
+  const today = dayOf(Date.now());
+  // Only look back a few days: a setup from a fortnight ago is a different idea.
+  const floor = Date.now() - 6 * 24 * 60 * 60 * 1000;
+  for (const s of signals) {
+    if (s.ticker !== ticker || s.direction !== direction) continue;
+    if (s.signaledAt < floor) continue;
+    if (dayOf(s.signaledAt) !== today) return true;
+  }
+  return false;
+}

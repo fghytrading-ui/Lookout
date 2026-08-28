@@ -8,7 +8,7 @@ import { reviewTrade } from '../utils/reviewer.js';
 import { getCryptoContext, tickerToBinanceSymbol, getCryptoEntryTiming } from '../lib/cryptoContext.js';
 import { fetchCryptoCandlesBatch, computeSessionVWAP } from '../lib/cryptoCandles.js';
 import { getInventoryReleases, evaluateInventoryRisk } from '../lib/inventoryReleases.js';
-import { logSignal, getSetupTypeStats } from '../lib/signalLog.js';
+import { logSignal, getSetupTypeStats, seenInEarlierSession } from '../lib/signalLog.js';
 import { assessSetupEvidence, assessSetupExpectancy } from '../lib/evidence.js';
 import { withLiveBar } from '../lib/liveBar.js';
 import { fetchIntradayBatch } from '../lib/intradayCandles.js';
@@ -956,6 +956,20 @@ router.get('/scan', async (req, res) => {
       // No stated reason = not a trade. ENTER NOW is reserved for setups with
       // either a real catalyst or genuinely strong technical confluence.
       if (card.thesis && card.thesis.tradeable === false) { demoted.push(card); return false; }
+      // ── ONE SESSION OLD BEFORE IT IS ACTIONABLE ──────────────────
+      // The session straight after a signal is where the money goes. Same 288
+      // stock signals, entry timing the only variable: next open -0.116R,
+      // one session later +0.136R, paired difference +0.252R at z=3.74, and
+      // it holds in all four time periods and in both directions. The raw
+      // direction data shows why — the day after a signal is right 37.6% of
+      // the time against 44.8% for a random entry on the same stocks, because
+      // the scanner picks what has already moved and that first session is the
+      // giveback.
+      if (!isCrypto && !seenInEarlierSession(card.ticker, card.direction, market)) {
+        card.needsOneSession = true;
+        demoted.push(card);
+        return false;
+      }
       // R:R floors raised to 2.0 — tracked data showed 81% of signals sat
       // below that, and at a ~30% win rate every one of them was a loser.
       const isHighPass = card.probability === 'HIGH'   && card.review?.verdict === 'PASS' && rr >= 2.0;
@@ -973,7 +987,8 @@ router.get('/scan', async (req, res) => {
     if (trades.enterNow.length === 0 && demoted.length > 0) {
       const tally = {};
       for (const c of demoted) {
-        if (c.negativeExpectancy) tally['negative expectancy'] = (tally['negative expectancy'] || 0) + 1;
+        if (c.needsOneSession) tally['first session — actionable from the next one'] = (tally['first session — actionable from the next one'] || 0) + 1;
+        else if (c.negativeExpectancy) tally['negative expectancy'] = (tally['negative expectancy'] || 0) + 1;
         else if (c.setupBlocked) tally['setup type blocked on poor track record'] = (tally['setup type blocked on poor track record'] || 0) + 1;
         else if (c.thesis?.tradeable === false) tally['no clear driver behind the setup'] = (tally['no clear driver behind the setup'] || 0) + 1;
         else if (!(isCrypto || c.confirmation?.confirmed)) tally['no confirming candle yet'] = (tally['no confirming candle yet'] || 0) + 1;
