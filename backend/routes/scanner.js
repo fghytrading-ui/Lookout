@@ -19,6 +19,7 @@ import { getLearnedParams } from '../lib/learning.js';
 import { buildThesis } from '../lib/thesis.js';
 import { getUpcomingMacro, buildEventTimeline } from '../lib/upcomingEvents.js';
 import { getMarketUniverse } from '../lib/marketUniverse.js';
+import { getEarningsDriftCandidates, buildDriftSetup } from '../lib/earningsDrift.js';
 import {
   analyzeSignals, generateTradeSetup, calculateSMA, calculateATR,
   TIME_SPANS, getTimespanKey, getExitWindow, generateAnalystNotes
@@ -1223,6 +1224,47 @@ router.get('/scan', async (req, res) => {
   } catch (err) {
     console.error('Scanner error:', err);
     res.status(500).json({ error: 'Scan failed', details: err.message });
+  }
+});
+
+// Post-earnings drift candidates. A separate path from the pattern scanner
+// above: it starts from the event rather than the chart, holds for a fixed
+// three sessions rather than to a target, and only goes long a beat. See
+// lib/earningsDrift.js for what was measured and on how much data.
+router.get('/earnings-drift', async (req, res) => {
+  try {
+    const candidates = await getEarningsDriftCandidates({ daysBack: 2 });
+    if (!candidates.length) {
+      return res.json({ trades: [], count: 0,
+        note: 'No company has beaten by more than 5% in the last two sessions.',
+        timestamp: new Date().toISOString() });
+    }
+    // Live prices, so the levels shown are the ones you could actually use.
+    const quotes = await fetchFullBatch(candidates.map(c => c.ticker).slice(0, 25))
+      .catch(() => ({}));
+
+    const trades = [];
+    for (const c of candidates.slice(0, 25)) {
+      const q = quotes[c.ticker]?.quote;
+      if (!q?.price) continue;
+      const setup = buildDriftSetup(c, q.price);
+      if (!setup) continue;
+      trades.push({
+        ticker: c.ticker,
+        name: q.longName || c.ticker,
+        price: q.price,
+        changePercent: q.changePercent ?? null,
+        ...setup,
+        surprisePct: c.surprisePct,
+        surpriseLabel: c.surpriseLabel,
+        reportedOn: c.reportedOn,
+        reportedWhen: c.reportedWhen,
+        source: 'earnings-drift'
+      });
+    }
+    res.json({ trades, count: trades.length, timestamp: new Date().toISOString() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
