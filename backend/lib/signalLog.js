@@ -108,12 +108,28 @@ export function logSignal(card, extras = {}) {
   const now = Date.now();
   const dedupeWindowMs = 24 * 60 * 60 * 1000;
 
-  // Find existing open signal for ticker+direction
+  // One record per idea per session, whatever became of it.
+  //
+  // This used to require status === 'OPEN', so a signal that closed between
+  // scans was logged again as if it were new. With the scan running every few
+  // minutes that produced up to thirteen copies of the same idea in a day —
+  // 78 duplicate records on 21 Aug alone — and each copy carried its own
+  // outcome into the performance record, so one losing trade could be counted
+  // thirteen times. It made that day look responsible for 37% of all losses
+  // when the true figure was 7%.
+  //
+  // The trigger was a separate bug that closed signals almost instantly, fixed
+  // on 22 Aug, after which the duplicates nearly stopped. But the dedupe
+  // itself was the fragile part: whether an idea is new has nothing to do with
+  // whether the previous one is still running.
+  const sessionOf = (ms) => new Date(ms).toLocaleDateString('en-CA',
+    { timeZone: (extras.market || card.market) === 'crypto' ? 'UTC' : 'America/New_York' });
+  const thisSession = sessionOf(now);
   const existing = signals.find(s =>
-    s.status === 'OPEN' &&
     s.ticker === card.ticker &&
     s.direction === card.direction &&
-    now - s.signaledAt < dedupeWindowMs
+    now - s.signaledAt < dedupeWindowMs &&
+    sessionOf(s.signaledAt) === thisSession
   );
   if (existing) {
     // Update lastSeenAt so we know it's still firing

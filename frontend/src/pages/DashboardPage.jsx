@@ -121,6 +121,16 @@ function enrichTrades(trades, livePrices, hasLiveData) {
 }
 
 export default function DashboardPage({ market = 'stocks', title = null }) {
+  // Whether the tracked record currently supports trading these at all.
+  const [edge, setEdge] = useState(null);
+  const [showLosing, setShowLosing] = useState(false);
+  useEffect(() => {
+    fetch('/api/system/goals')
+      .then(r => r.json())
+      .then(d => setEdge(d?.edge || null))
+      .catch(() => {});
+  }, []);
+
   const TICKER_TAPE = market === 'forex' ? FOREX_TAPE
                     : market === 'commodities' ? COMMODITIES_TAPE
                     : market === 'crypto' ? CRYPTO_TAPE
@@ -669,8 +679,49 @@ export default function DashboardPage({ market = 'stocks', title = null }) {
                                                       : marketStatus?.entryTiming,
                 onTakeTrade: handleTakeTrade
               };
+              // If the tracked record says these lose money, they are not
+              // trades and showing them with a warning attached is the worst
+              // of both — it puts a losing system in front of you and asks you
+              // to override it. They are collapsed behind one line instead,
+              // still reachable, not presented as something to take.
+              const losing = edge?.verdict === 'NEGATIVE';
+              const total = liveEnter.length + liveBounce.length + liveCarry.length;
+
+              if (losing && !showLosing) {
+                return (
+                  <div className="mt-4 p-4 rounded border border-[#1f1f1f] bg-[#0a0a0a]">
+                    <div className="text-[13px] font-mono text-[#ccc]">
+                      Nothing here worth trading today.
+                    </div>
+                    <p className="text-[11px] font-mono text-[#777] mt-1.5 leading-snug">
+                      {total > 0
+                        ? `${total} chart setup${total === 1 ? '' : 's'} were found, but this kind of setup has returned ${edge.expectancy}R per trade across ${edge.n} tracked trades — it loses money, so they are not being offered as trades.`
+                        : `No setup qualified. This kind of setup has also returned ${edge.expectancy}R per trade across ${edge.n} tracked trades.`}
+                    </p>
+                    {total > 0 && (
+                      <button
+                        onClick={() => setShowLosing(true)}
+                        className="mt-3 text-[10px] font-mono uppercase tracking-widest text-[#666] hover:text-[#999] border border-[#222] hover:border-[#333] rounded px-2.5 py-1"
+                      >
+                        Show them anyway
+                      </button>
+                    )}
+                  </div>
+                );
+              }
               return (
                 <>
+                  {losing && showLosing && (
+                    <div className="mt-3 mb-1 flex items-center justify-between gap-3 px-3 py-2 rounded border border-amber-500/25 bg-amber-500/[0.06]">
+                      <span className="text-[10px] font-mono text-amber-400/90">
+                        Shown at your request — the record says this kind of setup loses money.
+                      </span>
+                      <button onClick={() => setShowLosing(false)}
+                        className="text-[10px] font-mono uppercase tracking-widest text-[#777] hover:text-[#aaa] shrink-0">
+                        Hide
+                      </button>
+                    </div>
+                  )}
                   <TradeSection trades={liveEnter}  type="enter"  {...commonProps} emptyReason={scanStats.enterNowEmptyReason} />
                   <TradeSection trades={liveBounce} type="bounce" {...commonProps} />
                   <TradeSection trades={liveCarry}  type="carry"  {...commonProps} />

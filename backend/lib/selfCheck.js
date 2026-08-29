@@ -171,6 +171,78 @@ function checkGoals() {
   return ok('goals', 'Meeting its goals', g.goals.map(x => x.detail).join('; '));
 }
 
+
+// ── 9. A flood of signals in one session ─────────────────────────────
+//
+// On 21 Aug the scanner logged 119 signals in a single day, with an average
+// stop of 3.97% and an average reward:risk of 2.83. Those trades alone cost
+// -34.9R, which is 37% of everything this system has ever lost. Nothing
+// capped the count and nothing remarked on it — it took a retrospective
+// months later to notice.
+//
+// A day producing several times the usual number is not an unusually rich
+// day. It means a filter has come loose, and no one can act on 119 ideas
+// anyway.
+function checkSignalVolume(signals) {
+  // Distinct ideas, not records. Counting records made 21 Aug look like 119
+  // signals when it was 41 ideas logged repeatedly.
+  const seen = new Set();
+  const byDay = {};
+  for (const s of signals) {
+    const d = new Date(s.signaledAt).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+    const key = `${d}|${s.ticker}|${s.direction}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    byDay[d] = (byDay[d] || 0) + 1;
+  }
+  const days = Object.keys(byDay).sort();
+  if (days.length < 4) return skip('volume', 'Signal volume', 'Not enough days to compare');
+
+  const counts = days.map(d => byDay[d]).sort((a, b) => a - b);
+  const median = counts[Math.floor(counts.length / 2)];
+  const today = byDay[days[days.length - 1]] || 0;
+  const worst = Math.max(...Object.values(byDay));
+  const worstDay = days.find(d => byDay[d] === worst);
+
+  if (median > 0 && today > median * 3 && today > 40) {
+    return fail('volume', 'Signal volume',
+      `${today} signals today against a typical ${median}`,
+      'A day producing several times the usual count means a filter has come loose, not that the market is unusually generous');
+  }
+  return ok('volume', 'Signal volume',
+    `${today} today, typically ${median} a day (busiest was ${worst} on ${worstDay})`);
+}
+
+// ── 10. Are the entries reachable? ───────────────────────────────────
+//
+// For months every signal was counted from the moment it was logged, without
+// checking that price ever traded at the entry. 53 of 477 closed trades had
+// never been enterable, all of them winners — an unfilled trade cannot lose —
+// and they inflated measured performance threefold. The bug was invisible
+// precisely because it only ever added good news.
+//
+// A fill rate that collapses means the entries are being placed where price
+// does not go; one at 100% means the check has stopped running.
+function checkFillRate(signals) {
+  const closed = signals.filter(s => s.status === 'CLOSED');
+  if (closed.length < 50) return skip('fills', 'Entries reachable', 'Too few closed trades to judge');
+  const unfilled = closed.filter(s => s.closeReason === 'NEVER_FILLED').length;
+  const rate = (closed.length - unfilled) / closed.length;
+
+  if (unfilled === 0) {
+    return warn('fills', 'Entries reachable',
+      `Every one of ${closed.length} closed trades is recorded as filled`,
+      'Some entries should always go unreached — none at all suggests the fill check has stopped running, which is how performance was overstated threefold before');
+  }
+  if (rate < 0.6) {
+    return fail('fills', 'Entries reachable',
+      `Only ${Math.round(rate * 100)}% of signals reached their entry`,
+      'Entries are being placed where price does not trade, so most of these are not trades you could take');
+  }
+  return ok('fills', 'Entries reachable',
+    `${Math.round(rate * 100)}% of signals traded at their entry · ${unfilled} never did and are excluded from the record`);
+}
+
 /**
  * Run every check. `cards` and `sources` are optional; checks needing them
  * report 'skip' rather than failing when they are absent.
@@ -185,6 +257,8 @@ export function runSelfCheck({ cards = null, sources = null } = {}) {
     checkGeometry(cards),
     checkForConstants(cards),
     checkSources(sources),
+    checkSignalVolume(signals),
+    checkFillRate(signals),
     checkGoals()
   ];
   const counts = checks.reduce((a, c) => ({ ...a, [c.status]: (a[c.status] || 0) + 1 }), {});
