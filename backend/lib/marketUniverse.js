@@ -15,6 +15,7 @@
 
 import axios from 'axios';
 import { registerCache } from './persistentCache.js';
+import { getCatalystNames } from './catalystFeed.js';
 
 const cache = new Map();
 const TTL = 15 * 60_000;   // market movers shift intraday, but not by the second
@@ -77,9 +78,17 @@ export async function getMarketUniverse(core = [], { max = 150 } = {}) {
   const cached = cache.get('universe');
   if (cached && Date.now() - cached.ts < TTL) return cached.data;
 
-  const results = await Promise.allSettled(
-    SCREENS.map(s => fetchScreen(s.id).then(list => ({ screen: s, list })))
-  );
+  const [results, catalystNames] = await Promise.all([
+    Promise.allSettled(SCREENS.map(s => fetchScreen(s.id).then(list => ({ screen: s, list })))),
+    // Names that are here because something HAPPENED, not because they have
+    // already moved. Every screen above selects on price — most actives, day
+    // gainers, day losers — so a company that filed something material this
+    // morning but has not moved yet could never enter the scan. That is the
+    // same bias measured in the record: the session after a signal is right
+    // 37.6% of the time against 44.8% for a random entry, because the move had
+    // already happened by the time the name qualified.
+    getCatalystNames({ earningsDaysBack: 3 }).catch(() => [])
+  ]);
 
   const seen = new Map();
   const sources = {};
@@ -104,6 +113,22 @@ export async function getMarketUniverse(core = [], { max = 150 } = {}) {
     }
   }
 
+  // Catalyst names join the pool. Liquidity, price and market-cap gates stay
+  // where they already are — in the signal engine — rather than being repeated
+  // here; a name that cannot be traded simply produces no setup.
+  let catalystAdded = 0;
+  for (const c of catalystNames) {
+    const existing = seen.get(c.ticker);
+    if (existing) {
+      if (!existing.from.includes(c.source)) existing.from.push(c.source);
+      existing.catalystReason = c.reasons[0];
+    } else {
+      seen.set(c.ticker, { symbol: c.ticker, from: [c.source], catalystReason: c.reasons[0] });
+      catalystAdded++;
+    }
+  }
+  sources.catalysts = catalystNames.length;
+
   let universe = [...seen.values()];
 
   // If the cap bites, keep the names appearing on the most screens first —
@@ -115,6 +140,12 @@ export async function getMarketUniverse(core = [], { max = 150 } = {}) {
       const aCore = coreSet.has(a.symbol) ? 1 : 0;
       const bCore = coreSet.has(b.symbol) ? 1 : 0;
       if (aCore !== bCore) return bCore - aCore;
+      // A name with a real event outranks one that merely appears on several
+      // price screens — appearing on three momentum lists is one fact stated
+      // three times, whereas a filing is a different kind of evidence.
+      const aCat = a.catalystReason ? 1 : 0;
+      const bCat = b.catalystReason ? 1 : 0;
+      if (aCat !== bCat) return bCat - aCat;
       return (b.from?.length || 0) - (a.from?.length || 0);
     });
     universe = universe.slice(0, max);
@@ -125,6 +156,8 @@ export async function getMarketUniverse(core = [], { max = 150 } = {}) {
     detail: universe,
     sources,
     fromScreens: universe.filter(u => !u.from.includes('watchlist')).length,
+    fromCatalysts: universe.filter(u => u.catalystReason).length,
+    catalystAdded,
     fromWatchlist: core.length,
     total: universe.length,
     builtAt: new Date().toISOString()

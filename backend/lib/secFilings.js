@@ -51,22 +51,36 @@ const ITEMS = {
 };
 
 let tickerMap = null, tickerMapAt = 0;
+let cikMap = null;          // reverse: CIK -> ticker, for the market-wide feed
+
+async function loadTickerMap() {
+  if (tickerMap && Date.now() - tickerMapAt <= MAP_TTL) return tickerMap;
+  try {
+    const { data } = await axios.get('https://www.sec.gov/files/company_tickers.json',
+      { headers: HEADERS, timeout: 15000 });
+    tickerMap = {}; cikMap = {};
+    for (const v of Object.values(data || {})) {
+      if (!v?.ticker) continue;
+      const cik = String(v.cik_str).padStart(10, '0');
+      tickerMap[v.ticker] = cik;
+      cikMap[String(Number(v.cik_str))] = v.ticker;   // unpadded, as EDGAR prints it
+    }
+    tickerMapAt = Date.now();
+  } catch { /* leave whatever we had */ }
+  return tickerMap;
+}
+
+/** CIK (as it appears in an EDGAR feed) -> ticker. Null when not listed. */
+export async function tickerForCik(cik) {
+  await loadTickerMap();
+  return cikMap?.[String(Number(cik))] || null;
+}
 
 async function getCik(ticker) {
   // Only US-listed equities file with the SEC — futures, FX and crypto do not.
   if (!/^[A-Z][A-Z.-]{0,5}$/.test(ticker)) return null;
-  if (!tickerMap || Date.now() - tickerMapAt > MAP_TTL) {
-    try {
-      const { data } = await axios.get('https://www.sec.gov/files/company_tickers.json',
-        { headers: HEADERS, timeout: 15000 });
-      tickerMap = {};
-      for (const v of Object.values(data || {})) {
-        if (v?.ticker) tickerMap[v.ticker] = String(v.cik_str).padStart(10, '0');
-      }
-      tickerMapAt = Date.now();
-    } catch { return null; }
-  }
-  return tickerMap[ticker] || null;
+  await loadTickerMap();
+  return tickerMap?.[ticker] || null;
 }
 
 /**
