@@ -114,7 +114,10 @@ function timeAgo(iso) {
   return `${Math.floor(hrs / 24)}d ago`;
 }
 
-export default function TradeCard({ trade, type, isNew, accountSize = 10000, riskPct = 1, entryTiming, onTakeTrade }) {
+export default function TradeCard({ trade, type, isNew, accountSize = 10000, riskPct = 1, entryTiming: boardTiming, onTakeTrade }) {
+  // A card can carry its own session — the commodity board mixes CME futures
+  // with US-listed ETFs, and they do not keep the same hours.
+  const entryTiming = trade.entryTiming || boardTiming;
   if (!trade) return null;
 
   // Position sizing: how many shares for `riskPct%` of `accountSize`?

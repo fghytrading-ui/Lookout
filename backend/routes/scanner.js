@@ -23,7 +23,8 @@ import {
   analyzeSignals, generateTradeSetup, calculateSMA, calculateATR,
   TIME_SPANS, getTimespanKey, getExitWindow, generateAnalystNotes
 } from '../utils/signals.js';
-import { getEntryTiming, buildIntradayTiming } from '../utils/market.js';
+import { getEntryTiming, buildIntradayTiming, getForexEntryTiming,
+         getFuturesEntryTiming, getCommodityEntryTiming } from '../utils/market.js';
 
 // Determine broad market regime from SPY's trend
 // Market regime on the horizon this software actually trades.
@@ -1007,7 +1008,21 @@ router.get('/scan', async (req, res) => {
 
     // Build the entry timing context — crypto uses its own session-aware function,
     // others use the US stock market entryTiming.
-    const entryTiming = isCrypto ? getCryptoEntryTiming() : getEntryTiming();
+    // Each market on its own calendar. Forex and futures were both using the
+    // US equity day, which told you FX was shut on a Tuesday evening and sent
+    // you to Monday's stock open after a Saturday, when FX reopens Sunday.
+    const entryTiming = isCrypto ? getCryptoEntryTiming()
+                      : isForexMarket ? getForexEntryTiming()
+                      : isCommodities ? getFuturesEntryTiming()
+                      : getEntryTiming();
+
+    // The commodity board mixes CME futures with US-listed ETFs, which keep
+    // different hours, so those cards carry their own.
+    if (isCommodities) {
+      for (const c of [...trades.enterNow, ...trades.waitForBounce, ...trades.carryForward]) {
+        c.entryTiming = getCommodityEntryTiming(c.ticker);
+      }
+    }
 
     // Log every surviving signal + attach historical setup-type stats for feedback loop.
     // The monitor (lib/signalMonitor.js) tracks each from here to its outcome.

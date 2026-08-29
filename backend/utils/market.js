@@ -290,3 +290,87 @@ export function isEarlyClose(nyDate = getNYTime()) {
   if (weekday(julyThird)) dates.push(julyThird);
   return dates.map(ymd).includes(key);
 }
+
+// ── FOREX AND FUTURES SESSIONS ──────────────────────────────────────────
+//
+// Both markets were falling through to getEntryTiming(), which models the US
+// equity day. That is simply the wrong calendar for either of them, and it
+// showed: on a Saturday the board told you to place a forex order for "Mon
+// 2:30pm UK" when FX actually reopens Sunday evening, and on any weekday
+// evening it reported forex closed while it was trading normally.
+
+const DAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+// Minutes since Sunday 00:00 ET — makes "is it inside the week's session"
+// a single comparison instead of a pile of day/hour special cases.
+function etWeekMinutes(et = getNYTime()) {
+  return et.getDay() * 24 * 60 + et.getHours() * 60 + et.getMinutes();
+}
+
+function nextWeekday(et, targetDow) {
+  const d = new Date(et);
+  do { d.setDate(d.getDate() + 1); } while (d.getDay() !== targetDow);
+  return d;
+}
+
+/**
+ * Spot FX: continuous from Sunday 17:00 ET to Friday 17:00 ET.
+ * No daily close, no exchange holidays — liquidity thins, it does not stop.
+ */
+export function getForexEntryTiming(et = getNYTime()) {
+  const OPEN  = 0 * 1440 + 17 * 60;   // Sunday 17:00 ET
+  const CLOSE = 5 * 1440 + 17 * 60;   // Friday  17:00 ET
+  const now = etWeekMinutes(et);
+
+  if (now >= OPEN && now < CLOSE) {
+    return { label: 'ENTER NOW', urgency: 'now',
+             detail: 'Forex trades around the clock Sunday evening to Friday evening — the market is open' };
+  }
+  // Closed: the weekend gap between Friday 5pm and Sunday 5pm ET.
+  const sunday = et.getDay() === 0 && now < OPEN ? new Date(et) : nextWeekday(et, 0);
+  const uk = ukTimeForET(sunday, 17);
+  const sameDay = sunday.toDateString() === et.toDateString();
+  return {
+    label: `ENTER ${sameDay ? '' : DAY[0] + ' '}${uk}`.replace(/\s+/g, ' ').trim(),
+    detail: `Forex is shut for the weekend — it reopens Sunday at ${uk}`,
+    urgency: 'wait'
+  };
+}
+
+/**
+ * CME futures (the =F tickers): Sunday 18:00 ET to Friday 17:00 ET, with a
+ * one-hour maintenance halt each weekday at 17:00 ET.
+ */
+export function getFuturesEntryTiming(et = getNYTime()) {
+  const OPEN  = 0 * 1440 + 18 * 60;   // Sunday 18:00 ET
+  const CLOSE = 5 * 1440 + 17 * 60;   // Friday  17:00 ET
+  const now = etWeekMinutes(et);
+  const inWeek = now >= OPEN && now < CLOSE;
+
+  if (inWeek) {
+    // Daily halt 17:00-18:00 ET, Monday through Thursday.
+    const mins = et.getHours() * 60 + et.getMinutes();
+    if (mins >= 17 * 60 && mins < 18 * 60) {
+      const uk = ukTimeForET(et, 18);
+      return { label: `ENTER ${uk}`, urgency: 'soon',
+               detail: `Daily maintenance break — futures reopen at ${uk}` };
+    }
+    return { label: 'ENTER NOW', urgency: 'now',
+             detail: 'Futures trade almost around the clock — the market is open' };
+  }
+  const sunday = et.getDay() === 0 && now < OPEN ? new Date(et) : nextWeekday(et, 0);
+  const uk = ukTimeForET(sunday, 18);
+  const sameDay = sunday.toDateString() === et.toDateString();
+  return {
+    label: `ENTER ${sameDay ? '' : 'Sun '}${uk}`.replace(/\s+/g, ' ').trim(),
+    detail: `Futures are shut for the weekend — they reopen Sunday at ${uk}`,
+    urgency: 'wait'
+  };
+}
+
+/** A commodity board holds both futures (=F) and US-listed ETFs. */
+export function getCommodityEntryTiming(ticker, et = getNYTime()) {
+  return String(ticker || '').endsWith('=F')
+    ? getFuturesEntryTiming(et)
+    : getEntryTiming();
+}
