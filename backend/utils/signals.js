@@ -413,6 +413,12 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
   // CRYPTO:   24/7 intraday — wider stops (volatility eats tight ones), wider TPs
   // SWING:    multi-day targets
   let tp1Mult, tp2Mult, slMult;
+  // Declared once for the whole chain. It used to be scoped inside the
+  // sameDay branch, so the hourly path that also reads it threw a
+  // ReferenceError — swallowed by the empty catch around the refinement call,
+  // which then silently kept the daily levels. A parameter that only one of
+  // two paths can see is how the last recalibration quietly went missing.
+  const targetR = opts.targetR > 0 ? opts.targetR : 1.5;
   if (tradeStyle === 'commodities') {
     // Commodities keep the wider targets. They are the one market these
     // settings actually work on — +0.127R realised over 25 trades against
@@ -469,8 +475,12 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
     // multipliers that must stay in step. opts.targetR arrives from
     // getLearnedParams(); absent it, this is the hand-set 1.5.
     slMult  = 0.68;                             // stop unchanged — see CAL note
-    const targetR = opts.targetR > 0 ? opts.targetR : 1.5;
-    tp1Mult = targetR * slMult + (trendStrength * 0.20);
+    // The trend bonus was adding roughly 0.29 to the reward:risk for every
+    // point of trend strength, which pushed a 1.0 target back out to 1.43 and
+    // undid most of the move. A stronger trend is a reason to expect the move
+    // to continue, not a reason to place the target where price reaches it
+    // only a quarter of the time — the runner already carries that idea.
+    tp1Mult = targetR * slMult + (trendStrength * 0.06);
     tp2Mult = tp1Mult * 1.22;                   // runner ~1.2x TP1
   } else if (tradeStyle === 'intradayStock') {
     // Hourly equity bars. ATR per hourly bar measures ~0.75% of price against
@@ -488,9 +498,15 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
     // refinement REPLACES the daily levels on most cards, so leaving these
     // wide would have silently undone the recalibration — six of seven cards
     // came back at R:R 2.8-4.0 on the first test after only sameDay changed.
-    tp1Mult = 4.15 + (trendStrength * 0.47);
-    tp2Mult = 5.05 + (trendStrength * 0.60);   // ~1.2x TP1
+    // Driven by targetR, like the daily path. These were fixed numbers, so
+    // the hourly refinement — which replaces the daily levels on most cards —
+    // pinned every card at reward:risk 1.43 no matter what targetR said. The
+    // parameter existed and one of the two paths that set the target ignored
+    // it, which is the same way the previous recalibration was silently
+    // undone.
     slMult  = 2.90;
+    tp1Mult = targetR * slMult + (trendStrength * 0.25);
+    tp2Mult = tp1Mult * 1.22;                  // runner ~1.2x TP1
   } else if (tradeStyle === 'crypto') {
     // 4h ATR is ~1/sqrt(6) of daily ATR — multipliers scaled accordingly.
     // SL = 1.5 × ATR_4h ≈ 1.6% BTC stop (tight but not wick-bait)
@@ -529,7 +545,7 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
     // get taken out before the idea can work) which the scoring fix did not
     // affect.
     sameDay: { slCapPct: 0.045, slMinPct: 0.022, slFloorATR: 0.9, slRangeMin: 0.9, slRangeMax: 1.8,
-               maxDaysTP1: 4,  maxDaysTP2: 8, minTP1ATR: 0.9, minTP2ATR: 1.1, minRR: 1.3,
+               maxDaysTP1: 4,  maxDaysTP2: 8, minTP1ATR: 0.6, minTP2ATR: 0.8, minRR: 0.7,
                maxStopPct: 0.040 },
     // Commodities keep the previous, profitable settings.
     commodities: { slCapPct: 0.045, slMinPct: 0.022, slFloorATR: 0.9, slRangeMin: 0.9, slRangeMax: 1.8,
@@ -539,7 +555,7 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
     // fields are scaled for hourly bars. "days" here counts BARS: 39 hourly
     // bars is about six sessions, matching the daily ceiling it replaces.
     intradayStock: { slCapPct: 0.045, slMinPct: 0.022, slFloorATR: 2.9, slRangeMin: 2.9, slRangeMax: 5.5,
-               maxDaysTP1: 48, maxDaysTP2: 96, minTP1ATR: 3.6, minTP2ATR: 4.4, minRR: 1.3,
+               maxDaysTP1: 48, maxDaysTP2: 96, minTP1ATR: 2.4, minTP2ATR: 3.0, minRR: 0.7,
                maxStopPct: 0.040 },
     // Forex. slMinPct/slCapPct are shares of PRICE, so they cannot be reused
     // from sameDay: 2.2% of EURUSD is ~4.7 ATR, which would demand a ~4.4%

@@ -931,7 +931,7 @@ router.get('/scan', async (req, res) => {
       const hasConfirmation = isCrypto ? true : card.confirmation?.confirmed === true;
       // Choppy market: only the gold-standard setups (HIGH+PASS+confirmation+R:R≥2.0)
       if (isChoppy) {
-        const passes = card.probability === 'HIGH' && card.review?.verdict === 'PASS' && rr >= 2.0 && hasConfirmation;
+        const passes = card.probability === 'HIGH' && card.review?.verdict === 'PASS' && rr >= 1.2 && hasConfirmation;
         if (passes) return true;
         demoted.push(card);
         return false;
@@ -941,7 +941,7 @@ router.get('/scan', async (req, res) => {
       if (isMixed) {
         if (macroBlackout) { demoted.push(card); return false; }
       if (card.setupBlocked) { demoted.push(card); return false; }
-        const passes = card.probability === 'HIGH' && card.review?.verdict === 'PASS' && rr >= 1.7 && hasConfirmation;
+        const passes = card.probability === 'HIGH' && card.review?.verdict === 'PASS' && rr >= 1.0 && hasConfirmation;
         if (passes) return true;
         demoted.push(card);
         return false;
@@ -971,10 +971,11 @@ router.get('/scan', async (req, res) => {
         demoted.push(card);
         return false;
       }
-      // R:R floors raised to 2.0 — tracked data showed 81% of signals sat
-      // below that, and at a ~30% win rate every one of them was a loser.
-      const isHighPass = card.probability === 'HIGH'   && card.review?.verdict === 'PASS' && rr >= 2.0;
-      const isMedPass  = card.probability === 'MEDIUM' && card.review?.verdict === 'PASS' && rr >= 2.3;
+      // These floors were set when the target sat 2+ stops away and most
+      // signals could not clear them. With the target at roughly one stop the
+      // same floors would reject everything, so they move with it.
+      const isHighPass = card.probability === 'HIGH'   && card.review?.verdict === 'PASS' && rr >= 0.9;
+      const isMedPass  = card.probability === 'MEDIUM' && card.review?.verdict === 'PASS' && rr >= 1.1;
       const qualifies = (isHighPass || isMedPass) && hasConfirmation;
       if (qualifies) return true;
       demoted.push(card);

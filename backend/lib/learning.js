@@ -46,7 +46,18 @@ const Z_CRIT     = 1.96;
 // Hand-set starting points. Learning moves away from these within MAX_DRIFT;
 // it never loses them, so the system can always be put back.
 const BASELINE = {
-  stocks:      { targetR: 1.5, maxStopPct: 0.040 },
+  // Target at roughly one stop distance rather than 1.5.
+  //
+  // Reaching a target 2.5 stops away happens 14% of the time; at one stop it
+  // is 41%, and 70% of trades finish green against 57%. Measured expectancy
+  // barely moves across that whole range (+0.011R to +0.056R, none of them
+  // significant) because a closer target trades size of win for frequency, and
+  // the two very nearly cancel. What changes is whether the thing is
+  // executable: a system that fails 86% of the time does not get followed
+  // through its losing runs, and an edge nobody can sit through pays nothing.
+  // Trades also resolve in 1.4 sessions instead of 2.2, which is the actual
+  // holding period this is for.
+  stocks:      { targetR: 1.0, maxStopPct: 0.040 },
   crypto:      { targetR: 2.4, maxStopPct: 0.060 },
   commodities: { targetR: 2.4, maxStopPct: 0.060 },
   forex:       { targetR: 2.4, maxStopPct: 0.020 }
