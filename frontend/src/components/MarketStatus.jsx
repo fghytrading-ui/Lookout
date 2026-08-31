@@ -20,7 +20,15 @@ export default function MarketStatus({ status, lastUpdated, scanning }) {
       </div>
       {lastUpdated && (
         <span className="text-[10px] text-[#444] font-mono hidden sm:block">
-          Updated {lastUpdated.toLocaleTimeString('en-US', { timeZone: 'Europe/London', hour: 'numeric', minute: '2-digit', hour12: true }).toLowerCase()} UK
+          {(() => {
+            // Say how old the data is, not merely when it arrived. A stale
+            // board with a fresh timestamp is worse than an obviously stale
+            // one, because it is trusted.
+            const secs = Math.max(0, Math.round((Date.now() - lastUpdated.getTime()) / 1000));
+            const when = lastUpdated.toLocaleTimeString('en-US', { timeZone: 'Europe/London', hour: 'numeric', minute: '2-digit', hour12: true }).toLowerCase();
+            const age = secs < 90 ? 'live' : secs < 600 ? `${Math.round(secs / 60)} min old` : `${Math.round(secs / 60)} min old — stale`;
+            return <>Data {age} · {when} UK</>;
+          })()}
         </span>
       )}
       {scanning && (

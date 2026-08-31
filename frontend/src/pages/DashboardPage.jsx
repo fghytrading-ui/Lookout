@@ -293,7 +293,10 @@ export default function DashboardPage({ market = 'stocks', title = null }) {
         inventoryReleases: d.inventoryReleases,
         entryTiming: d.entryTiming   // crypto: getCryptoEntryTiming(); else: US getEntryTiming()
       });
-      setLastUpdated(new Date());
+      // When the DATA was current, not when we asked for it. These differ:
+      // the board runs on candles cached for ten minutes, so stamping the
+      // fetch time labelled a ten-minute-old analysis as up to the second.
+      setLastUpdated(d.dataAsOf ? new Date(d.dataAsOf) : new Date());
       lastScanTimeRef.current = Date.now();
       setError(null);
 

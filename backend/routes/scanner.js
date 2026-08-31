@@ -675,6 +675,36 @@ router.get('/scan', async (req, res) => {
     // still clears every gate; otherwise the daily setup stands.
     if (market === 'stocks') {
       const refineTargets = [...trades.enterNow, ...trades.waitForBounce, ...trades.carryForward];
+
+      // ── BRING THE SURVIVING CARDS UP TO DATE ────────────────────────
+      //
+      // The broad scan runs on candles cached for ten minutes, which is right
+      // for 150 instruments and wrong for the handful being looked at. Three
+      // scans a minute apart returned an identical NVDA — price frozen at
+      // 219.82 while the live quote had moved to 220.01 — so refreshing the
+      // page produced the same board, computed from the market as it stood ten
+      // minutes earlier. The displayed price updates every ten seconds on its
+      // own, which made it look current while the analysis behind it was not.
+      //
+      // Completed daily bars genuinely do not change, so the cache is not the
+      // problem; the forming bar is, and it comes from the quote. Refreshing
+      // just the cards costs a handful of requests rather than 150, which is
+      // why this is not simply a shorter lifetime on everything.
+      const FRESH_MS = 45_000;
+      await Promise.allSettled(refineTargets.map(async (card) => {
+        try {
+          const fresh = await fetchFull(card.ticker, '3mo', { maxAgeMs: FRESH_MS });
+          const q = fresh?.quote;
+          if (!q?.price) return;
+          card.price = q.price;
+          card.changePercent = q.changePercent ?? card.changePercent;
+          card.volume = q.volume ?? card.volume;
+          card._quote = { ...(card._quote || {}), ...adaptQuote(q) };
+          card._historical = withLiveBar(fresh.candles, q, null);
+          card.dataAsOf = q.timestamp || new Date().toISOString();
+        } catch { /* the cached view stands */ }
+      }));
+
       const hourlyMap = await fetchIntradayBatch(refineTargets.map(c => c.ticker)).catch(() => ({}));
       let refined = 0;
       for (const card of refineTargets) {
@@ -1282,6 +1312,14 @@ router.get('/scan', async (req, res) => {
       enterNowEmptyReason,
       droppedForRecord: droppedSummary,
       macroBlackout,
+      // How current the board actually is, so freshness is visible rather than
+      // assumed. The displayed price refreshes on its own every ten seconds,
+      // which made a ten-minute-old analysis look live.
+      dataAsOf: (() => {
+        const cards = [...trades.enterNow, ...trades.waitForBounce, ...trades.carryForward];
+        const stamps = cards.map(c => c.dataAsOf).filter(Boolean).sort();
+        return stamps.length ? stamps[0] : new Date().toISOString();
+      })(),
       scannedCount: tickerList.length,
       universe: universeMeta ? {
         total: universeMeta.total,

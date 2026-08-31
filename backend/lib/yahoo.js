@@ -29,10 +29,15 @@ function ttlFor(key) {
   return CACHE_TTL_MS;
 }
 
-function cacheGet(key) {
+function cacheGet(key, maxAgeMs = null) {
   const entry = cache.get(key);
   if (!entry) return null;
-  if (Date.now() - entry.ts > ttlFor(key)) { cache.delete(key); return null; }
+  // A caller can demand something fresher than the standard lifetime. Used for
+  // the handful of instruments that actually became cards: the broad scan can
+  // run on ten-minute-old candles, but a setup the trader is looking at should
+  // not be describing the market as it stood ten minutes ago.
+  const limit = maxAgeMs != null ? Math.min(maxAgeMs, ttlFor(key)) : ttlFor(key);
+  if (Date.now() - entry.ts > limit) { cache.delete(key); return null; }
   return entry.data;
 }
 function cacheSet(key, data) {
@@ -110,9 +115,9 @@ function avgDailyVolume(candles, days = 60) {
   return Math.round(vols.reduce((a, b) => a + b, 0) / vols.length);
 }
 
-export async function fetchFull(ticker, range = '3mo') {
+export async function fetchFull(ticker, range = '3mo', { maxAgeMs = null } = {}) {
   const cacheKey = `full:${ticker}:${range}`;
-  const cached = cacheGet(cacheKey);
+  const cached = cacheGet(cacheKey, maxAgeMs);
   if (cached) return cached;
   return coalesce(cacheKey, () => fetchFullUncached(ticker, range, cacheKey));
 }

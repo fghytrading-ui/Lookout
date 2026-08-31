@@ -16,7 +16,10 @@ import { registerCache } from './persistentCache.js';
 const cache = new Map();
 registerCache('sec-filings', cache);
 
-const TTL       = 60 * 60 * 1000;        // filings per ticker — hourly is plenty
+// Fifteen minutes, not an hour. An 8-K is a material event and the reaction
+// is over in a session; learning about it fifty minutes late is learning about
+// it after the move. EDGAR is free and unmetered for this volume.
+const TTL       = 15 * 60 * 1000;        // filings per ticker — hourly is plenty
 const MAP_TTL   = 24 * 60 * 60 * 1000;   // ticker -> CIK map changes rarely
 const LOOKBACK_DAYS = 21;
 
