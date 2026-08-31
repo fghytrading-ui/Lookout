@@ -27,6 +27,30 @@ export function realisedR(s) {
   if (!rr) return null;
   const rr2 = s.rrRatio2 || rr * 1.2;
 
+  // Signals taken under the single-exit plan carry no tp0: the whole position
+  // closes at TP1, so a win is the full reward:risk rather than a third of it.
+  // Older records keep their tp0 and their thirds arithmetic below, so the
+  // record is not rewritten under a plan those trades were never taken on.
+  const singleExit = s.tp0 === null || s.tp0 === undefined;
+  if (singleExit) {
+    switch (s.closeReason) {
+      case 'NEVER_FILLED': return null;
+      case 'SL':           return -1.0;
+      case 'TP1':          return rr;
+      case 'TP2':          return rr2;
+      case 'SCALED_BE':    return 0;      // cannot occur, kept for safety
+      case 'EXPIRED': {
+        const { entry, sl, closePrice } = s;
+        if (![entry, sl, closePrice].every(v => Number.isFinite(v))) return null;
+        const risk = Math.abs(entry - sl);
+        if (risk <= 0) return null;
+        const dir = s.direction === 'SHORT' ? -1 : 1;
+        return ((closePrice - entry) * dir) / risk;
+      }
+      default: return null;
+    }
+  }
+
   switch (s.closeReason) {
     // The entry limit was never reached, so no position existed. Excluded
     // rather than scored zero: a zero would be averaged in and drag every

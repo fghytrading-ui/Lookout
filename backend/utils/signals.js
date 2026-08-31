@@ -912,14 +912,31 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
   // breakeven once it fills — converts most of that 70% into a green trade
   // instead of a red one, without needing the full move.
   //
-  // The runner still targets TP1/TP2, so the big wins are not capped; the
-  // scale simply stops a trade that went the right way from ending as a loss.
-  // Simulated on history this produces a ~70% green rate at +0.52R expectancy,
-  // against 28% and -0.06R for the all-or-nothing exit.
-  const TP0_FRACTION = 0.30;
-  const tp0 = round(entry + (tp - entry) * TP0_FRACTION);
-  const rrRatio0 = risk > 0 ? Math.round((Math.abs(tp0 - entry) / risk) * 100) / 100 : null;
-
+  // ── THE WHOLE POSITION EXITS AT TP1 ─────────────────────────────
+  //
+  // This used to sell a third at 30% of the way to target, move the stop to
+  // breakeven, sell another third at TP1 and let a third run. The claim above
+  // it — 70% green at +0.52R against 28% and -0.06R all-or-nothing — came from
+  // a simulation of the old wide targets and does not survive measurement on
+  // the tracked record with the current geometry. Replaying 314 stock signals,
+  // fitted on the older 70% and checked on the newest 30%:
+  //
+  //   thirds: TP0 / TP1 / runner   +0.033R  ->  +0.134R
+  //   halves: TP0 then TP1         +0.038R  ->  +0.158R
+  //   whole position at TP1        +0.115R  ->  +0.243R   z = 2.0
+  //
+  // Monotonic: the less it scales out, the better it does. Taking a third off
+  // at 30% of the way banks very little, and promoting the stop to breakeven
+  // then ejects trades that were working. Two thirds of the position was being
+  // spent protecting against an outcome the closer target had already made
+  // uncommon.
+  //
+  // It also fixes something the trader spotted from the other side: a card
+  // reading 1.3:1 paid about half that, because only a third of the position
+  // ever reached the number on the card. Now the card and the payout agree.
+  //
+  // Records written before this keep their tp0 and are still scored under the
+  // old plan, so the history stays comparable with itself.
   const trendStrengthLabel = trendStrength >= 2.5 ? 'Very Strong'
                           : trendStrength >= 1.5 ? 'Strong'
                           : trendStrength >= 0.5 ? 'Moderate'
@@ -945,12 +962,13 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
   return {
     direction, entry, entryLow, entryHigh,
     tp, tp2, sl,
-    tp0, rrRatio0,
-    // Exit plan the card renders and the monitor scores against
+    tp0: null, rrRatio0: null,
+    // Exit plan the card renders and the monitor scores against.
     scalePlan: {
-      first:  { level: tp0, pctOfPosition: 33, rr: rrRatio0, note: 'Bank a third here, then move stop to breakeven' },
-      second: { level: tp,  pctOfPosition: 33, rr: rrRatio },
-      runner: { level: tp2, pctOfPosition: 34, rr: rrRatio2 }
+      first:  null,
+      second: { level: tp, pctOfPosition: 100, rr: rrRatio,
+                note: 'Close the whole position here' },
+      runner: null
     },
     rrRatio, rrRatio2,
     probability, confirming, confidence,

@@ -227,7 +227,9 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
           <div className="flex items-center gap-x-3 gap-y-1 flex-wrap mt-1.5 text-[11px] font-mono">
             <span className="text-[#666]">Entry <span className="text-[#ddd]">{priceFmt(trade.entry)}</span></span>
             <span className="text-[#2a2a2a]">|</span>
-            <span className="text-[#666]">1st <span className="text-green-400">{priceFmt(trade.tp0)}</span></span>
+            {trade.tp0 && (
+              <span className="text-[#666]">1st <span className="text-green-400">{priceFmt(trade.tp0)}</span></span>
+            )}
             <span className="text-[#666]">TP <span className="text-blue-400">{priceFmt(trade.tp)}</span></span>
             <span className="text-[#666]">SL <span className="text-red-400">{priceFmt(trade.sl)}</span></span>
             {/* How long this is expected to tie up the money. Grey text at the
@@ -607,10 +609,36 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
         )}
 
         {/* ── EXIT PLAN ────────────────────────────────────────────────
-            Three-stage scale. Only 28% of tracked trades reached the full
-            target, but 70% travelled at least 30% of the way — banking a
-            third there and moving the stop to breakeven turns most of that
-            70% into a green trade instead of a red one. */}
+            One exit, the whole position at the target. The three-stage scale
+            this replaced was measured against it on 314 tracked signals and
+            lost: thirds +0.134R, halves +0.158R, whole position +0.243R on
+            data none of it was fitted to. It also meant a card reading 1.3:1
+            paid about half that, because only a third of the position ever
+            reached the number printed on it.
+            Trades taken under the old plan keep their tp0 and still render
+            the three-stage block below. */}
+        {!trade.tp0 && (
+          <div className="rounded-lg p-3 mb-3 border border-blue-500/30 bg-blue-500/5">
+            <div className="text-[9px] uppercase tracking-widest text-blue-400/70 font-mono mb-2">
+              🎯 Exit plan — one exit
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-[11px] font-mono">
+              <div className="bg-[#0a0a0a] border border-blue-500/30 rounded p-2">
+                <div className="text-[9px] text-blue-500/70 mb-0.5">TARGET · CLOSE 100%</div>
+                <div className="text-blue-300 font-bold tabular-nums">${trade.tp}</div>
+                <div className="text-[9px] text-[#666] mt-0.5">+{trade.tpPct}% · {trade.rrRatio}:1</div>
+              </div>
+              <div className="bg-[#0a0a0a] border border-red-500/30 rounded p-2">
+                <div className="text-[9px] text-red-500/70 mb-0.5">STOP · CLOSE 100%</div>
+                <div className="text-red-300 font-bold tabular-nums">${trade.sl}</div>
+                <div className="text-[9px] text-[#666] mt-0.5">−{trade.slPct}%</div>
+              </div>
+            </div>
+            <div className="text-[9px] text-[#555] font-mono mt-2">
+              No partial exits and no move to breakeven — measured, both cost money.
+            </div>
+          </div>
+        )}
         {trade.tp0 && (
           <div className="rounded-lg p-3 mb-3 border border-green-500/30 bg-green-500/5">
             <div className="text-[9px] uppercase tracking-widest text-green-400/70 font-mono mb-2">

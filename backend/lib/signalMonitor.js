@@ -70,9 +70,18 @@ export function determineOutcome(signal, candles) {
   }
 
   const { direction, entry, tp, tp2, sl } = signal;
-  // First scale-out. Older records predate it, so derive the same 30% level
-  // rather than skipping them — otherwise historical comparisons break.
-  const tp0 = signal.tp0 ?? (entry + (tp - entry) * 0.30);
+  // Signals now close the whole position at TP1 and carry tp0 === null. Older
+  // records were written under the thirds plan and keep their tp0, so they go
+  // on being scored the way they were taken — the history stays comparable
+  // with itself rather than being retroactively rewritten.
+  //
+  // For a single-exit signal tp0 is set beyond any reachable price, which
+  // makes the scale-out branches below unreachable without duplicating the
+  // walk. TP1 then closes the position outright.
+  const singleExit = signal.tp0 === null || signal.tp0 === undefined;
+  const tp0 = singleExit
+    ? (direction === 'LONG' ? Infinity : -Infinity)
+    : signal.tp0;
   let mfeRunning = entry;
   let maeRunning = entry;
   let closeReason = null;
