@@ -93,11 +93,25 @@ function checkMarketCoverage(signals) {
 // "60% historical win rate" sat on every trade for months looking plausible.
 function checkForConstants(cards) {
   if (!cards || cards.length < 4) return skip('constants', 'Card values vary', 'Too few cards to compare');
-  const fields = ['confidence', 'rrRatio', 'expectedDays'];
+  // Compare what was COMPUTED, not what is displayed. rrRatio is stored
+  // rounded to one decimal, and the calibration deliberately aims at a narrow
+  // band — 1.15 to 1.25 — so every card rounds to 1.2 and this check called
+  // a correctly-computed field hardcoded. It would have fired on crypto every
+  // day, and a check that cries wolf daily teaches you to stop reading the
+  // panel. Derived at full precision the same five cards were all distinct:
+  // 1.15, 1.1507, 1.2353, 1.2294, 1.2267.
+  const trueRR = (c) => (c.entry != null && c.tp != null && c.sl != null && c.entry !== c.sl)
+    ? Math.abs(c.tp - c.entry) / Math.abs(c.entry - c.sl)
+    : null;
+  const fields = [
+    { name: 'confidence',   get: c => c.confidence },
+    { name: 'rrRatio',      get: trueRR },
+    { name: 'expectedDays', get: c => c.expectedDays }
+  ];
   const frozen = [];
   for (const f of fields) {
-    const vals = cards.map(c => c[f]).filter(v => v != null);
-    if (vals.length >= 4 && new Set(vals).size === 1) frozen.push(`${f} is ${vals[0]} on all ${vals.length}`);
+    const vals = cards.map(f.get).filter(v => v != null);
+    if (vals.length >= 4 && new Set(vals).size === 1) frozen.push(`${f.name} is ${vals[0]} on all ${vals.length}`);
   }
   if (frozen.length) {
     return warn('constants', 'Card values vary', frozen.join('; '),
