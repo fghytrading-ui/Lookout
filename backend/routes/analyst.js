@@ -7,6 +7,7 @@ import { backtestSetup } from '../lib/backtest.js';
 import { fetchRecommendationTrend } from '../lib/finnhubData.js';
 import { getTrendsFromCandles, scoreTimeframeAlignment } from '../lib/multiTimeframe.js';
 import { fetchIntradayCandles } from '../lib/intradayCandles.js';
+import { fetchDailyBars, ALPACA_ENABLED } from '../lib/alpaca.js';
 import { classifySetup } from '../lib/setupClassifier.js';
 import { computeTradeGrade } from '../lib/tradeGrade.js';
 import { getPerformanceMetrics } from '../lib/performanceMetrics.js';
@@ -1032,10 +1033,25 @@ router.get('/:ticker', async (req, res) => {
     const sectorContext = await getSectorContext(ticker, fetchFull);
 
     // Backtest: run only if we have a setup direction
+    // Six years of daily bars from Alpaca where available, against Yahoo's
+    // two. The analogue search compares today's reading to every past session
+    // that resembled it, so its whole worth is how many comparable sessions it
+    // has to draw on — two years left it reporting samples of one or two on
+    // instruments whose current state is at all unusual. Daily bars are the
+    // safe kind from that feed: measured at 0.03% to 0.16% against Yahoo,
+    // unlike the hourly ones, whose ranges are a quarter off.
+    let backtestCandles = fullForBacktest?.candles;
+    if (ALPACA_ENABLED) {
+      try {
+        const deep = await fetchDailyBars(ticker, { days: 1500 });
+        if (deep && deep.length > (backtestCandles?.length || 0)) backtestCandles = deep;
+      } catch { /* Yahoo's two years stand */ }
+    }
+
     // Test the trade actually being proposed — its own stop and target
     // distances and its own horizon — rather than a generic ATR template.
     const backtest = setup
-      ? backtestSetup(fullForBacktest.candles, setup.direction, {
+      ? backtestSetup(backtestCandles, setup.direction, {
           stopDist:    Math.abs(setup.entry - setup.sl),
           targetDist:  Math.abs(setup.tp - setup.entry),
           horizonBars: Math.max(2, Math.min(8, Math.round(setup.expectedDays || 3)))
@@ -1050,7 +1066,7 @@ router.get('/:ticker', async (req, res) => {
     try {
       // Derived from the two-year daily series already fetched for the
       // backtest — no extra requests, and nothing left to be rate-limited.
-      mtfTrends = getTrendsFromCandles(fullForBacktest?.candles || full.candles, hourlyCandles);
+      mtfTrends = getTrendsFromCandles(backtestCandles || full.candles, hourlyCandles);
       if (setup) mtfAlignment = scoreTimeframeAlignment(mtfTrends, setup.direction);
     } catch {}
 
