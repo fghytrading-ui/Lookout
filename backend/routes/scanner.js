@@ -1058,6 +1058,15 @@ router.get('/scan', async (req, res) => {
       const parts = Object.entries(tally).sort((a, b) => b[1] - a[1])
         .map(([k, n]) => `${n} ${k}`);
       enterNowEmptyReason = `${demoted.length} setup${demoted.length === 1 ? '' : 's'} reviewed, none qualified — ${parts.join('; ')}.`;
+    } else if (!trades.enterNow.length && !demoted.length && tickerList.length > 0
+               && !trades.waitForBounce.length && !trades.carryForward.length) {
+      // Nothing even reached the review stage. Silence here reads as a broken
+      // scanner, when the usual cause is that every candidate's reward failed
+      // to clear the minimum against its own stop — which is exactly what
+      // should happen on an instrument whose targets are not reachable at a
+      // ratio worth taking.
+      enterNowEmptyReason = `${tickerList.length} instruments scanned, none produced a setup worth taking `
+        + `— the reward against the stop did not clear the minimum on any of them.`;
     }
 
     trades.enterNow = sortTrades(trades.enterNow).slice(0, 6);  // 6 best max — quality not quantity

@@ -557,18 +557,26 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
     // separate finding (stops inside ~2% of price sit in the noise band and
     // get taken out before the idea can work) which the scoring fix did not
     // affect.
+    // minRR 1.15 is the break-even line, not a preference. The whole position
+    // now exits at the target and the measured hit rate at this geometry is
+    // about 46%, so a trade needs (1 - 0.46) / 0.46 = 1.17 just to come out
+    // level. A 0.9:1 card — which the previous 0.7 floor allowed — asks you to
+    // risk 100 to make 90 on a coin that lands 46%, which is a slow way to
+    // lose. Cards near 1.25:1 carry a real margin over the line; cards below
+    // 1.15 carry none, and there is no version of the record that supports
+    // taking them.
     sameDay: { slCapPct: 0.045, slMinPct: 0.022, slFloorATR: 0.9, slRangeMin: 0.9, slRangeMax: 1.8,
-               maxDaysTP1: 4,  maxDaysTP2: 8, minTP1ATR: 0.6, minTP2ATR: 0.8, minRR: 0.7,
+               maxDaysTP1: 4,  maxDaysTP2: 8, minTP1ATR: 0.6, minTP2ATR: 0.8, minRR: 1.15,
                maxStopPct: 0.040 },
     // Commodities keep the previous, profitable settings.
     commodities: { slCapPct: 0.045, slMinPct: 0.022, slFloorATR: 0.9, slRangeMin: 0.9, slRangeMax: 1.8,
-               maxDaysTP1: 6,  maxDaysTP2: 12, minTP1ATR: 0.6, minTP2ATR: 0.8, minRR: 0.7 },
+               maxDaysTP1: 6,  maxDaysTP2: 12, minTP1ATR: 0.6, minTP2ATR: 0.8, minRR: 1.15 },
     // Same percentage guardrails as sameDay — slCapPct and slMinPct are shares
     // of price and so are timeframe-independent — but the ATR-denominated
     // fields are scaled for hourly bars. "days" here counts BARS: 39 hourly
     // bars is about six sessions, matching the daily ceiling it replaces.
     intradayStock: { slCapPct: 0.045, slMinPct: 0.022, slFloorATR: 2.9, slRangeMin: 2.9, slRangeMax: 5.5,
-               maxDaysTP1: 48, maxDaysTP2: 96, minTP1ATR: 2.4, minTP2ATR: 3.0, minRR: 0.7,
+               maxDaysTP1: 48, maxDaysTP2: 96, minTP1ATR: 2.4, minTP2ATR: 3.0, minRR: 1.15,
                maxStopPct: 0.040 },
     // Forex. slMinPct/slCapPct are shares of PRICE, so they cannot be reused
     // from sameDay: 2.2% of EURUSD is ~4.7 ATR, which would demand a ~4.4%
@@ -577,12 +585,12 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
     // a percentage (2.2% / 2.5% ATR); applied to FX's ~0.5% ATR that is ~0.45%.
     // The cap is scaled by the same ratio. ATR-denominated fields are unchanged.
     forex:   { slCapPct: 0.012, slMinPct: 0.0045, slFloorATR: 0.9, slRangeMin: 0.9, slRangeMax: 1.8,
-               maxDaysTP1: 6,  maxDaysTP2: 12, minTP1ATR: 0.6, minTP2ATR: 0.8, minRR: 0.7 },
+               maxDaysTP1: 6,  maxDaysTP2: 12, minTP1ATR: 0.6, minTP2ATR: 0.8, minRR: 1.15 },
     // Crypto runs on 4-hour candles. "days" in this object = bars held.
     // ATR here is per-4h-bar (~1/sqrt(6) of daily ATR), so multipliers are larger.
     // Ceilings: TP1 within 16 bars (~64h), TP2 within 30 bars (~5d).
     crypto:  { slCapPct: 0.045, slFloorATR: 1.1, slRangeMin: 1.1, slRangeMax: 2.2,
-               maxDaysTP1: 16, maxDaysTP2: 30, minTP1ATR: 1.1, minTP2ATR: 1.4, minRR: 0.7 },
+               maxDaysTP1: 16, maxDaysTP2: 30, minTP1ATR: 1.1, minTP2ATR: 1.4, minRR: 1.15 },
     swing:   { slCapPct: 0.04,  slFloorATR: 0.9, slRangeMin: 1.0, slRangeMax: 1.8,
                maxDaysTP1: 10, maxDaysTP2: 16, minTP1ATR: 1.2, minTP2ATR: 2.0, minRR: 1.3 }
   }[tradeStyle] || { slCapPct: 0.04, slFloorATR: 0.9, slRangeMin: 1.0, slRangeMax: 1.8,
