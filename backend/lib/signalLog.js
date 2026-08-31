@@ -44,6 +44,34 @@ function ensureDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
+// ── Records that cannot be true ──────────────────────────────────────────
+// A trade cannot close before it was signalled. Until 2026-08-22 the monitor
+// compared stock signals against their OWN day's daily bar — a bar stamped at
+// midnight, covering a session that had already finished — so the day's low
+// took out stops that were never live, and the outcome was stamped with the
+// bar's timestamp, hours before the signal existed. The filter was fixed
+// (signalMonitor.js) and the local record was cleaned.
+//
+// They came back anyway. The store has three doors — the file on disk, the
+// shipped seed, and the client mirror POSTed to /performance/restore — and
+// only the file had been cleaned. Render's free tier wipes the disk on every
+// deploy, so after today's deploy the browser pushed its own months-old
+// mirror back and re-admitted 21 of them, none newer than 2026-08-20.
+//
+// They are not neutral noise: those 21 closed 76% at the stop against 42% for
+// honestly-scored trades, exactly the pessimistic skew the old bug produced,
+// and nothing downstream filters on timing — goals, learning and expectancy
+// all counted them. So the guard belongs at the boundary, on every door, not
+// in each consumer.
+function isCoherent(rec) {
+  if (!rec || typeof rec !== 'object' || !rec.id || !rec.ticker) return false;
+  if (rec.status === 'CLOSED') {
+    if (typeof rec.timeToCloseHrs === 'number' && rec.timeToCloseHrs < 0) return false;
+    if (rec.closedAt && rec.signaledAt && rec.closedAt < rec.signaledAt) return false;
+  }
+  return true;
+}
+
 function load() {
   if (loaded) return;
   ensureDir();
@@ -51,9 +79,13 @@ function load() {
     if (fs.existsSync(LOG_PATH)) {
       const raw = fs.readFileSync(LOG_PATH, 'utf-8');
       const parsed = JSON.parse(raw);
-      signals = Array.isArray(parsed) ? parsed : [];
+      const all = Array.isArray(parsed) ? parsed : [];
+      signals = all.filter(isCoherent);
+      const dropped = all.length - signals.length;
       indexById = new Map(signals.map(s => [s.id, s]));
-      console.log(`  ✓ Loaded ${signals.length} signals from log`);
+      if (dropped) dirty = true;   // rewrite without them
+      console.log(`  ✓ Loaded ${signals.length} signals from log`
+        + (dropped ? ` (dropped ${dropped} that closed before they opened)` : ''));
     }
   } catch (err) {
     console.error('  ⚠ Could not load signal log:', err.message);
@@ -66,7 +98,7 @@ function load() {
       const seed = JSON.parse(fs.readFileSync(SEED_PATH, 'utf-8'));
       let added = 0;
       for (const rec of Array.isArray(seed) ? seed : []) {
-        if (!rec || !rec.id || indexById.has(rec.id)) continue;
+        if (!isCoherent(rec) || indexById.has(rec.id)) continue;
         signals.push(rec);
         indexById.set(rec.id, rec);
         added++;
@@ -429,10 +461,10 @@ export function getLogSize() { load(); return signals.length; }
 export function mergeSignals(incoming) {
   load();
   if (!Array.isArray(incoming)) return { added: 0, updated: 0, total: signals.length };
-  let added = 0, updated = 0;
+  let added = 0, updated = 0, rejected = 0;
 
   for (const rec of incoming) {
-    if (!rec || typeof rec !== 'object' || !rec.id || !rec.ticker) continue;
+    if (!isCoherent(rec)) { rejected++; continue; }
     const existing = indexById.get(rec.id);
     if (!existing) {
       signals.push(rec);
@@ -457,7 +489,8 @@ export function mergeSignals(incoming) {
     dirty = true;
     persist();
   }
-  return { added, updated, total: signals.length };
+  if (rejected) console.log(`  ⚠ Restore rejected ${rejected} incoherent record(s)`);
+  return { added, updated, rejected, total: signals.length };
 }
 
 /**
