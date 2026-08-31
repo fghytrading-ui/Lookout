@@ -420,10 +420,13 @@ router.get('/scan', async (req, res) => {
     let dynamicList = null;
     if (market === 'stocks' && !req.query.tickers) {
       try {
-        // Raised from 150 with the budget freed by dropping the forex and
-        // commodity boards. Only 8 of 150 were getting through, so the cap
-        // was the limit on candidates rather than the market being quiet.
-        universeMeta = await getMarketUniverse(WATCHLIST, { max: 210 });
+        // Held at 150. Raising it to 210 with the budget freed by dropping the
+        // forex and commodity boards seemed obvious and was wrong: measured
+        // cold, the wider universe took 245.6s against 101.6s and drew 554
+        // rate-limit rejections against 427, for exactly the same eight
+        // candidates. The cap was never what limited candidates — the quality
+        // gates were — so the extra names were pure cost.
+        universeMeta = await getMarketUniverse(WATCHLIST, { max: 150 });
         if (universeMeta?.tickers?.length) dynamicList = universeMeta.tickers;
       } catch { /* fall back to the curated watchlist */ }
     }
