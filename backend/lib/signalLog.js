@@ -72,6 +72,51 @@ function isCoherent(rec) {
   return true;
 }
 
+// One idea, one record, however many times the store is rebuilt.
+//
+// logSignal already refuses to log the same ticker+direction twice in a
+// session, but it can only see the records the running process holds. Render
+// wipes the disk on every deploy and spin-down, so a scan after a restart has
+// an empty store, logs an idea it already logged that morning, and the client
+// mirror later merges the earlier copy back in beside it. mergeSignals only
+// de-duped on id, so both survived: measured on the live record, 225 of 635
+// closed rows were the same idea counted more than once, and one AAPL LONG on
+// 2026-08-30 was present twice with identical entry, stop and target, thirteen
+// hours apart.
+//
+// It biases the record it inflates. Deduplicated, expectancy over the same
+// trades moves from -0.024R to +0.029R — neither significant on its own, both
+// CIs straddling zero, but the calibration is fitted to this record and it was
+// being fitted to double counts.
+function sessionKeyOf(rec) {
+  const tz = rec.market === 'crypto' ? 'UTC' : 'America/New_York';
+  const day = new Date(rec.signaledAt).toLocaleDateString('en-CA', { timeZone: tz });
+  return `${rec.ticker}|${rec.direction}|${day}`;
+}
+
+// Which of two records for the same idea to keep: a resolved outcome beats an
+// unresolved one, and otherwise the first one written — that is the idea as it
+// was actually offered.
+function preferred(a, b) {
+  const aClosed = a.status === 'CLOSED', bClosed = b.status === 'CLOSED';
+  if (aClosed !== bClosed) return aClosed ? a : b;
+  return a.signaledAt <= b.signaledAt ? a : b;
+}
+
+function dedupeBySession(rows) {
+  const bySession = new Map();
+  for (const r of rows) {
+    if (!r?.signaledAt || !r.ticker || !r.direction) continue;
+    const k = sessionKeyOf(r);
+    const cur = bySession.get(k);
+    bySession.set(k, cur ? preferred(cur, r) : r);
+  }
+  const kept = new Set(bySession.values());
+  return rows.filter(r => kept.has(r));
+}
+
+let indexBySession = new Map();
+
 function load() {
   if (loaded) return;
   ensureDir();
@@ -80,12 +125,15 @@ function load() {
       const raw = fs.readFileSync(LOG_PATH, 'utf-8');
       const parsed = JSON.parse(raw);
       const all = Array.isArray(parsed) ? parsed : [];
-      signals = all.filter(isCoherent);
-      const dropped = all.length - signals.length;
+      const coherent = all.filter(isCoherent);
+      const dropped = all.length - coherent.length;
+      signals = dedupeBySession(coherent);
+      const deduped = coherent.length - signals.length;
       indexById = new Map(signals.map(s => [s.id, s]));
-      if (dropped) dirty = true;   // rewrite without them
+      if (dropped || deduped) dirty = true;   // rewrite without them
       console.log(`  ✓ Loaded ${signals.length} signals from log`
-        + (dropped ? ` (dropped ${dropped} that closed before they opened)` : ''));
+        + (dropped ? ` (dropped ${dropped} that closed before they opened)` : '')
+        + (deduped ? ` (merged ${deduped} duplicate record(s) of the same idea)` : ''));
     }
   } catch (err) {
     console.error('  ⚠ Could not load signal log:', err.message);
@@ -97,8 +145,16 @@ function load() {
     if (fs.existsSync(SEED_PATH)) {
       const seed = JSON.parse(fs.readFileSync(SEED_PATH, 'utf-8'));
       let added = 0;
+      // The session index has to be built BEFORE the seed is merged, not after.
+      // Deduping the file drops the surplus copies of an idea, and those copies
+      // are in the shipped seed too — matching on id alone re-admitted every one
+      // of them, putting the file straight back to the count it started at.
+      const seenSessions = new Set(signals.map(sessionKeyOf));
       for (const rec of Array.isArray(seed) ? seed : []) {
         if (!isCoherent(rec) || indexById.has(rec.id)) continue;
+        const k = sessionKeyOf(rec);
+        if (seenSessions.has(k)) continue;
+        seenSessions.add(k);
         signals.push(rec);
         indexById.set(rec.id, rec);
         added++;
@@ -112,6 +168,7 @@ function load() {
     console.error('  ⚠ Could not read shipped record:', err.message);
   }
 
+  indexBySession = new Map(signals.map(s => [sessionKeyOf(s), s]));
   loaded = true;
 }
 
@@ -248,6 +305,9 @@ export function logSignal(card, extras = {}) {
   };
   signals.push(record);
   indexById.set(record.id, record);
+  // Keep the session index in step, or a restore arriving later would not see
+  // this record and would admit its own copy of the same idea beside it.
+  indexBySession.set(sessionKeyOf(record), record);
   dirty = true;
   return record;
 }
@@ -461,21 +521,29 @@ export function getLogSize() { load(); return signals.length; }
 export function mergeSignals(incoming) {
   load();
   if (!Array.isArray(incoming)) return { added: 0, updated: 0, total: signals.length };
-  let added = 0, updated = 0, rejected = 0;
+  let added = 0, updated = 0, rejected = 0, duplicates = 0;
 
   for (const rec of incoming) {
     if (!isCoherent(rec)) { rejected++; continue; }
-    const existing = indexById.get(rec.id);
+    // Same idea, different id. A client mirror written before a restart carries
+    // its own record of a signal this store logged again afterwards; matching
+    // on id alone let both in. Match on the idea — ticker, direction, session —
+    // exactly as logSignal does.
+    const existing = indexById.get(rec.id) || indexBySession.get(sessionKeyOf(rec));
     if (!existing) {
       signals.push(rec);
       indexById.set(rec.id, rec);
+      indexBySession.set(sessionKeyOf(rec), rec);
       added++;
       continue;
     }
     // Conflict: prefer the CLOSED record — a resolved outcome beats an open one
     if (existing.status !== 'CLOSED' && rec.status === 'CLOSED') {
-      Object.assign(existing, rec);
+      const keptId = existing.id;
+      Object.assign(existing, rec, { id: keptId });   // keep the id already indexed
       updated++;
+    } else {
+      duplicates++;
     }
   }
 
@@ -489,8 +557,10 @@ export function mergeSignals(incoming) {
     dirty = true;
     persist();
   }
-  if (rejected) console.log(`  ⚠ Restore rejected ${rejected} incoherent record(s)`);
-  return { added, updated, rejected, total: signals.length };
+  if (rejected || duplicates) {
+    console.log(`  ⚠ Restore rejected ${rejected} incoherent, ${duplicates} duplicate record(s)`);
+  }
+  return { added, updated, rejected, duplicates, total: signals.length };
 }
 
 /**
