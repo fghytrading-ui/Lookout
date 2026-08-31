@@ -97,3 +97,4 @@ export async function fetchDailyBars(ticker, { days = 200 } = {}) {
   const batch = await fetchDailyBarsBatch([ticker], { days });
   return batch[ticker] || null;
 }
+
