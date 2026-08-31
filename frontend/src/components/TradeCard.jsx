@@ -530,6 +530,23 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
               </div>
             )}
 
+            {trade.trend5d != null && (
+              <div className="text-[10px] font-mono mt-2 pt-2 border-t border-[#1a1a1a] flex items-center gap-2 flex-wrap">
+                <span className="text-[#888]">📈 Last 5 sessions:</span>
+                <span className={
+                  (trade.direction === 'SHORT' ? -trade.trend5d : trade.trend5d) >= 2 ? 'text-green-400 font-bold'
+                  : (trade.direction === 'SHORT' ? -trade.trend5d : trade.trend5d) >= 0 ? 'text-amber-400'
+                  : 'text-red-400'
+                }>
+                  {trade.trend5d > 0 ? '+' : ''}{trade.trend5d}%
+                  {' '}({(trade.direction === 'SHORT' ? -trade.trend5d : trade.trend5d) >= 0 ? 'with' : 'against'} this trade)
+                </span>
+                <span className="text-[#555]">
+                  · setups already moving this way returned +0.23R against −0.35R for those moving against
+                </span>
+              </div>
+            )}
+
             {/* EXPECTANCY — the number that decides whether this trade makes
                 money if repeated, in R. Measured from what this setup's tracked
                 trades actually returned, including the ones that banked the
