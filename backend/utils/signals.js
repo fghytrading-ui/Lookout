@@ -606,15 +606,28 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
       const resBased = resistances[0].price - atr * 0.15;
       const dist = resBased - entry;
       // Accept resistance-based TP if reasonable distance
-      if (dist >= atr * 1.3 && dist <= atr * (tp1Mult + 2)) tpCandidate = resBased;
+      // Accept a level only if it sits near the intended target — the old
+      // floor of 1.3 ATR is now further out than the target itself, so it
+      // could only ever push it away.
+      if (dist >= atr * tp1Mult * 0.6 && dist <= atr * (tp1Mult + 1)) tpCandidate = resBased;
     }
     // Psych-level snap
     const psychSnap1 = snapToPsychLevel(tpCandidate, 'LONG');
     if (psychSnap1 < tpCandidate && (tpCandidate - psychSnap1) <= atr * 0.4) {
       tpCandidate = psychSnap1 - 0.05;
     }
-    // Floor: must be at least 3% from entry (meaningful gain)
-    tpCandidate = Math.max(tpCandidate, entry * 1.03);
+    // The target has to be worth taking relative to the RISK, not relative to
+    // a fixed slice of the share price.
+    //
+    // This was a flat 3% of entry, and with the stop floored at 2.2% of price
+    // it forced every reward:risk to at least 1.36 whatever the calibration
+    // asked for. It is the reason targets kept coming back at 1.3-1.7 after
+    // targetR was moved to 1.0 — the floor was quietly overriding it, the same
+    // way the ATR floors and the hourly path did. A 2.4% target against a 2.2%
+    // stop is a perfectly meaningful day trade; 3% of price is a swing-trading
+    // assumption left in place.
+    const minTpDist = Math.abs(entry - sl) * 0.9;
+    tpCandidate = Math.max(tpCandidate, entry + minTpDist);
     // Cap: 52-week high (structural — beyond is "blue sky")
     if (quote.fiftyTwoWeekHigh && tpCandidate > quote.fiftyTwoWeekHigh * 0.998) {
       tpCandidate = quote.fiftyTwoWeekHigh * 0.998;
@@ -673,13 +686,14 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
     if (supports.length > 0) {
       const supBased = supports[0].price + atr * 0.15;
       const dist = entry - supBased;
-      if (dist >= atr * 1.3 && dist <= atr * (tp1Mult + 2)) tpCandidate = supBased;
+      if (dist >= atr * tp1Mult * 0.6 && dist <= atr * (tp1Mult + 1)) tpCandidate = supBased;
     }
     const psychSnap1 = snapToPsychLevel(tpCandidate, 'SHORT');
     if (psychSnap1 > tpCandidate && (psychSnap1 - tpCandidate) <= atr * 0.4) {
       tpCandidate = psychSnap1 + 0.05;
     }
-    tpCandidate = Math.min(tpCandidate, entry * 0.97);
+    // Mirror of the long side: scaled to the risk, not a flat 3% of price.
+    tpCandidate = Math.min(tpCandidate, entry - Math.abs(sl - entry) * 0.9);
     if (quote.fiftyTwoWeekLow && tpCandidate < quote.fiftyTwoWeekLow * 1.002) {
       tpCandidate = quote.fiftyTwoWeekLow * 1.002;
     }
