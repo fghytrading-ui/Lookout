@@ -887,7 +887,6 @@ router.get('/scan', async (req, res) => {
     // ── REVIEWER PASS: stress-test each card, drop REJECTs ─────────────
     const filterCategory = (cards) => {
       const kept = [];
-    let againstTrend = 0;
       for (const card of cards) {
         const cardFunding = isCrypto && cryptoContext?.funding?.rates
           ? cryptoContext.funding.rates[tickerToBinanceSymbol(card.ticker)] ?? null
@@ -924,38 +923,23 @@ router.get('/scan', async (req, res) => {
 
         if (review.verdict === 'REJECT') continue;  // Drop bad trades entirely
 
-        // ── DON'T TRADE AGAINST THE FIVE-SESSION TREND ───────────────
+        // A five-session trend gate was added here and then removed. The
+        // measurement behind it computed the prior move from the signal DAY'S
+        // CLOSING price, which an intraday signal cannot know. Recomputed from
+        // information genuinely available at signal time the separation
+        // collapses, and on the strictest reading the setups it dropped
+        // outperformed the ones it kept:
         //
-        // Replaying 291 stock signals on the live settings, sorted by how far
-        // the stock had already moved over the prior five sessions IN THE
-        // DIRECTION of the trade:
+        //   trend from the signal day close   kept +0.308R   dropped -0.133R
+        //   trend from prior sessions only    kept +0.119R   dropped +0.171R
+        //   trend from the signal day open    kept +0.243R   dropped +0.053R
         //
-        //   fell more than 5% against    -0.353R   z = -2.2
-        //   flat within 2%               -0.131R
-        //   ran 2-6% with                +0.233R   z = +2.2
-        //   ran more than 6% with        +0.191R   z = +2.7
+        // Only the first supports a gate, and only the first is unavailable in
+        // real time. Left out rather than kept on the chance it helps, because
+        // a filter that is wrong removes profitable trades silently.
         //
-        // Monotonic, and it holds out of sample — fitted on the older 70% and
-        // checked on the newest 30%, dropping everything below flat goes from
-        // +0.104R to +0.308R against +0.019R to +0.148R for taking everything.
-        // Crypto agrees on its own signals: -0.647R against the trend at
-        // z = -3.3, versus -0.104R with it. Forex points the same way on too
-        // few trades to count. A separate cross-sectional test over 1102
-        // instruments and 240 days agrees from the other side.
-        //
-        // Commodities are exempt: their own eight against-trend trades came
-        // out positive, which is far too few to mean anything but is enough
-        // reason not to apply a rule there that its own data does not support.
-        //
-        // This sits alongside the one-session wait rather than against it. A
-        // five-session trend persists, a single-session spike gives back; the
-        // wait skips the giveback and this keeps the trend. Dropped here
-        // rather than merely barred from ENTER NOW, because a setup the record
-        // says loses money is not a trade to show at all.
-        if (!isCommodities && card.trend5d != null) {
-          const withTrade = card.direction === 'SHORT' ? -card.trend5d : card.trend5d;
-          if (withTrade < 0) { againstTrend++; continue; }
-        }
+        // card.trend5d is still computed and shown, since the prior move is
+        // worth seeing even where it does not justify a rule.
 
         kept.push(card);
       }

@@ -542,7 +542,9 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
                   {' '}({(trade.direction === 'SHORT' ? -trade.trend5d : trade.trend5d) >= 0 ? 'with' : 'against'} this trade)
                 </span>
                 <span className="text-[#555]">
-                  · setups already moving this way returned +0.23R against −0.35R for those moving against
+                  · context only — tested as a filter and it did not hold once
+                  the prior move was measured from information available at
+                  signal time
                 </span>
               </div>
             )}
