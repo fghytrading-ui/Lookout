@@ -18,6 +18,7 @@ import cryptoRouter from './routes/crypto.js';
 import performanceRouter from './routes/performance.js';
 import { startSignalMonitor } from './lib/signalMonitor.js';
 import { runSelfCheck } from './lib/selfCheck.js';
+import { ALPACA_ENABLED } from './lib/alpaca.js';
 import { runLearning, getLearningState, resetLearning } from './lib/learning.js';
 import { assessGoals } from './lib/goals.js';
 import { isMarketOpen, getSession, getEntryTiming } from './utils/market.js';
@@ -141,7 +142,14 @@ app.get('/api/system/sources', async (req, res) => {
   ]);
 
   const sources = [
-    { name: 'Yahoo Finance', drives: 'Prices, candles, pre/post market',
+    // Added when Alpaca came in. A feed doing most of the heavy lifting and
+    // absent from the panel is a feed nobody can tell has stopped — the key
+    // lives in .env where it cannot be seen, so this line is the only place
+    // its state is visible.
+    { name: 'Alpaca', drives: 'Daily bars — 6 years of history, 150 symbols per request',
+      active: ALPACA_ENABLED,
+      note: ALPACA_ENABLED ? null : 'no key set — Yahoo candles used instead' },
+    { name: 'Yahoo Finance', drives: 'Live prices, pre/post market, candle fallback',
       active: true },
     // Throttling is a pause, not an outage: the limiter backs off for seconds
     // and prices come from Yahoo meanwhile, so nothing on screen goes blank.
