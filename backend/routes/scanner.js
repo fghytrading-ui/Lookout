@@ -19,6 +19,7 @@ import { getLearnedParams } from '../lib/learning.js';
 import { buildThesis } from '../lib/thesis.js';
 import { getUpcomingMacro, buildEventTimeline } from '../lib/upcomingEvents.js';
 import { getMarketUniverse } from '../lib/marketUniverse.js';
+import { fetchDailyBarsBatch, ALPACA_ENABLED } from '../lib/alpaca.js';
 import {
   analyzeSignals, generateTradeSetup, calculateSMA, calculateATR,
   TIME_SPANS, getTimespanKey, getExitWindow, generateAnalystNotes
@@ -461,8 +462,36 @@ router.get('/scan', async (req, res) => {
       isCommodities ? getInventoryReleases().catch(() => null) : Promise.resolve(null)
     ]);
 
-    // Single call per ticker: quote + 3mo candles (Yahoo for everything)
+    // Quote + candles. Yahoo supplies the quote, which is what the live price
+    // and the forming bar are built from; its candles are replaced by Alpaca's
+    // where available.
+    //
+    // Yahoo has been the constraint on this whole project: over 1,500
+    // rate-limit rejections in a single session, 69 seconds for a full
+    // 150-instrument refresh, and a ten-minute cache forced by the throttling
+    // that left the board stale between refreshes. Alpaca returns 126 symbols
+    // of daily bars in one request in 1.2 seconds, with six years of history
+    // behind them, free, at 200 requests a minute.
+    //
+    // Bars only. Live quotes stay with Finnhub and Yahoo — Alpaca's free feed
+    // is IEX-only, around 2.5% of volume, which is too thin to price from. Its
+    // bar coverage is full-market, which is a different matter.
     const fullMap = await fetchFullBatch(tickerList);
+
+    if (ALPACA_ENABLED && market === 'stocks') {
+      try {
+        const bars = await fetchDailyBarsBatch(tickerList, { days: 200 });
+        let swapped = 0;
+        for (const [tk, series] of Object.entries(bars)) {
+          // Only where Alpaca has at least as much history; never trade down.
+          if (!fullMap[tk] || !series?.length) continue;
+          if (series.length < (fullMap[tk].candles?.length || 0)) continue;
+          fullMap[tk] = { ...fullMap[tk], candles: series };
+          swapped++;
+        }
+        if (swapped) console.log(`  ✓ ${swapped}/${tickerList.length} candle series from Alpaca`);
+      } catch { /* Yahoo's candles stand */ }
+    }
 
     // Equities move to hourly bars. Daily candles give one price per session,
     // which is enough to read trend but blind for timing an entry — and the
