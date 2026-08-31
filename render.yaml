@@ -17,3 +17,11 @@ services:
         sync: false   # User adds via Render dashboard (not in git)
       - key: FRED_API_KEY
         sync: false   # User adds via Render dashboard (not in git)
+      # Alpaca supplies the daily bars — 146 of 150 series locally, six years
+      # of history, and no rate limiting. Without these the deployed site
+      # silently falls back to Yahoo candles and the feeds panel shows 9 of 10
+      # rather than 10, which is how this was noticed.
+      - key: ALPACA_KEY_ID
+        sync: false   # User adds via Render dashboard (not in git)
+      - key: ALPACA_SECRET_KEY
+        sync: false   # User adds via Render dashboard (not in git)
