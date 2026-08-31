@@ -230,7 +230,21 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
             <span className="text-[#666]">1st <span className="text-green-400">{priceFmt(trade.tp0)}</span></span>
             <span className="text-[#666]">TP <span className="text-blue-400">{priceFmt(trade.tp)}</span></span>
             <span className="text-[#666]">SL <span className="text-red-400">{priceFmt(trade.sl)}</span></span>
-            {trade.timeSpan && (
+            {/* How long this is expected to tie up the money. Grey text at the
+                end of a row of prices was easy to miss, and on a tool meant for
+                one to three sessions the hold is not a footnote. */}
+            {trade.expectedDays > 0 ? (
+              <>
+                <span className="text-[#2a2a2a]">|</span>
+                <span className={`px-1.5 py-0.5 rounded border font-semibold ${
+                  trade.expectedDays <= 2 ? 'border-green-500/30 text-green-400 bg-green-500/5'
+                  : trade.expectedDays <= 3 ? 'border-blue-500/30 text-blue-300 bg-blue-500/5'
+                  : 'border-amber-500/30 text-amber-300 bg-amber-500/5'
+                }`}>
+                  {trade.expectedDays} session{trade.expectedDays === 1 ? '' : 's'}
+                </span>
+              </>
+            ) : trade.timeSpan && (
               <>
                 <span className="text-[#2a2a2a]">|</span>
                 <span className="text-[#555]">{trade.timeSpan.replace('Short-term — ', '')}</span>

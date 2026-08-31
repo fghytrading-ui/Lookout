@@ -104,6 +104,10 @@ async function getWeeklyTrend(ticker) {
 
 const router = Router();
 
+// The outside edge of what this tool is for. One to three sessions is the
+// intent; four is the tolerance.
+const MAX_HOLD_SESSIONS = 4;
+
 // Crypto watchlist — top liquidity coins on Yahoo
 const CRYPTO_WATCHLIST = [
   'BTC-USD', 'ETH-USD', 'SOL-USD', 'XRP-USD', 'BNB-USD',
@@ -957,6 +961,18 @@ router.get('/scan', async (req, res) => {
       // No stated reason = not a trade. ENTER NOW is reserved for setups with
       // either a real catalyst or genuinely strong technical confluence.
       if (card.thesis && card.thesis.tradeable === false) { demoted.push(card); return false; }
+      // ── HOLD LENGTH ─────────────────────────────────────────────
+      // This is a day-trading tool: one to three sessions, four at the very
+      // outside. A setup whose own duration estimate runs past that is a swing
+      // trade wearing the wrong label, and it ties up risk that the next
+      // session's setup needs. The hourly refinement already rejected anything
+      // over eight sessions; nothing enforced the actual horizon.
+      if (card.expectedDays > MAX_HOLD_SESSIONS) {
+        card.tooSlow = true;
+        demoted.push(card);
+        return false;
+      }
+
       // ── ONE SESSION OLD BEFORE IT IS ACTIONABLE ──────────────────
       // The session straight after a signal is where the money goes. Same 288
       // stock signals, entry timing the only variable: next open -0.116R,
@@ -989,7 +1005,8 @@ router.get('/scan', async (req, res) => {
     if (trades.enterNow.length === 0 && demoted.length > 0) {
       const tally = {};
       for (const c of demoted) {
-        if (c.needsOneSession) tally['first session — actionable from the next one'] = (tally['first session — actionable from the next one'] || 0) + 1;
+        if (c.tooSlow) tally[`expected to take longer than ${MAX_HOLD_SESSIONS} sessions`] = (tally[`expected to take longer than ${MAX_HOLD_SESSIONS} sessions`] || 0) + 1;
+        else if (c.needsOneSession) tally['first session — actionable from the next one'] = (tally['first session — actionable from the next one'] || 0) + 1;
         else if (c.negativeExpectancy) tally['negative expectancy'] = (tally['negative expectancy'] || 0) + 1;
         else if (c.setupBlocked) tally['setup type blocked on poor track record'] = (tally['setup type blocked on poor track record'] || 0) + 1;
         else if (c.thesis?.tradeable === false) tally['no clear driver behind the setup'] = (tally['no clear driver behind the setup'] || 0) + 1;
