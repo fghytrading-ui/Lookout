@@ -1027,7 +1027,13 @@ router.get('/scan', async (req, res) => {
       // the time against 44.8% for a random entry on the same stocks, because
       // the scanner picks what has already moved and that first session is the
       // giveback.
-      if (!isCrypto && !seenInEarlierSession(card.ticker, card.direction, market)) {
+      // Crypto was exempt because the measurement behind this came from daily
+      // stock bars. It has since been tested on crypto's own 98 signals and
+      // the wait helps there too: -0.226R without it against -0.104R with,
+      // which moves it from significantly negative to not distinguishable from
+      // flat. Crypto remains the weakest board — no configuration tested on it
+      // is positive — but the exemption was costing money.
+      if (!seenInEarlierSession(card.ticker, card.direction, market)) {
         card.needsOneSession = true;
         demoted.push(card);
         return false;

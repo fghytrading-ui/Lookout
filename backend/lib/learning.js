@@ -237,12 +237,38 @@ export function runLearning({ apply = false } = {}) {
     }
     state.history = state.history.slice(-200);
     state.updatedAt = new Date().toISOString();
+
     // Trades signalled before a parameter moved were produced by different
     // settings, so the goal tracker must not pool them with what came after.
-    // Stamping the moment here means that boundary maintains itself; a
-    // hand-kept date would silently go stale the first time this applied
-    // something on its own.
-    if (results.some(r => r.applied)) state.lastChangeAt = state.updatedAt;
+    // But this pass runs daily and can move something by a step every time,
+    // and resetting the boundary on each nudge meant the tracker restarted at
+    // "0 of 40 trades" before it could ever reach forty. It would have said
+    // "gathering evidence" forever — a verdict permanently one day away.
+    //
+    // So the boundary moves only when the settings have drifted MATERIALLY
+    // from where they were when it last moved. Small guarded steps accumulate
+    // until they add up to a real change: trades run at targetR 1.00 and 1.05
+    // are the same trade for this purpose, trades at 1.0 and 1.3 are not.
+    const MATERIAL_DRIFT = 0.15;
+    state.epochParams = state.epochParams || {};
+    let material = false;
+    for (const r of results) {
+      if (!r.applied) continue;
+      const now = state.params[r.market] || {};
+      const base = state.epochParams[r.market];
+      if (!base) { material = true; continue; }
+      for (const k of Object.keys(now)) {
+        const a = base[k], b = now[k];
+        if (!Number.isFinite(a) || !Number.isFinite(b) || a === 0) continue;
+        if (Math.abs(b - a) / Math.abs(a) > MATERIAL_DRIFT) material = true;
+      }
+    }
+    if (material) {
+      state.lastChangeAt = state.updatedAt;
+      for (const r of results) {
+        if (r.applied) state.epochParams[r.market] = { ...state.params[r.market] };
+      }
+    }
     writeState(state);
   }
   return {
