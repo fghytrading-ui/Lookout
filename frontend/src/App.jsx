@@ -378,7 +378,16 @@ export default function App() {
                 <span className={`font-bold ${s.active ? 'text-[#ccc]' : 'text-[#555]'}`}>{s.name}</span>
                 <span className="text-[#555] text-[10px]">
                   — {s.drives}
-                  {s.note && <span className="text-amber-500/70"> ({s.note})</span>}
+                  {/* Amber means "this needs you". Every note used to be amber,
+                      so "funding via okx" — which just names the exchange that
+                      answered, with the same ten pairs — was indistinguishable
+                      from a missing API key, and got reported as a fault more
+                      than once. Informational notes are grey. */}
+                  {s.note && (
+                    <span className={s.noteLevel === 'info' ? 'text-[#555]' : 'text-amber-500/70'}>
+                      {' '}({s.note})
+                    </span>
+                  )}
                 </span>
               </div>
             ))}

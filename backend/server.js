@@ -149,7 +149,8 @@ app.get('/api/system/sources', async (req, res) => {
     // its state is visible.
     { name: 'Alpaca', drives: 'Daily bars — 6 years of history, 150 symbols per request',
       active: ALPACA_ENABLED,
-      note: ALPACA_ENABLED ? null : 'no key set — Yahoo candles used instead' },
+      note: ALPACA_ENABLED ? null : 'no key set — Yahoo candles used instead',
+      noteLevel: 'warn' },
     { name: 'Yahoo Finance', drives: 'Live prices, pre/post market, candle fallback',
       active: true },
     // Throttling is a pause, not an outage: the limiter backs off for seconds
@@ -160,7 +161,8 @@ app.get('/api/system/sources', async (req, res) => {
       active: finnhub.enabled,
       note: finnhub.throttled
         ? `at its per-minute limit — Yahoo prices for the next ${finnhub.retryInSec}s`
-        : null },
+        : null,
+      noteLevel: 'info' },
     { name: 'Finnhub News', drives: 'Company news for catalyst detection',
       active: finnhub.enabled },
     { name: 'Finnhub Analysts', drives: 'Buy/sell ratings and rating changes',
@@ -171,8 +173,13 @@ app.get('/api/system/sources', async (req, res) => {
     { name: 'Crypto Exchange', drives: 'Crypto 4h candles, VWAP and funding rates',
       active: !!binanceCandles,
       note: cryptoCtx?.funding?.source && cryptoCtx.funding.source !== 'binance'
-        ? `funding via ${cryptoCtx.funding.source} (Binance blocks this host)`
-        : (cryptoCtx?.funding ? null : 'funding rates unavailable from this host') },
+        ? `funding via ${cryptoCtx.funding.source} — ${Object.keys(cryptoCtx.funding.rates || {}).length} pairs`
+        : (cryptoCtx?.funding ? null : 'funding rates unavailable from this host'),
+      // Which exchange answered is worth showing and is not a fault: Binance
+      // geo-blocks cloud hosts and Bybit blocks US IPs, so on Render OKX is
+      // simply the provider that works, with the same ten pairs. Painted amber
+      // like a real problem, it got read as one repeatedly.
+      noteLevel: cryptoCtx?.funding ? 'info' : 'warn' },
     // Dominance and total cap move slowly enough that the last reading still
     // informs a signal, so a throttle only matters once it has gone stale.
     { name: 'CoinGecko', drives: 'BTC dominance, total crypto market cap',
@@ -188,7 +195,8 @@ app.get('/api/system/sources', async (req, res) => {
             : 'blocked from this host — needs the free COINGECKO_API_KEY')
         : (cryptoCtx.global.ageMinutes
             ? `using the reading from ${cryptoCtx.global.ageMinutes} min ago`
-            : null) },
+            : null),
+      noteLevel: !cryptoCtx?.global?.btcDominance ? 'warn' : 'info' },
     { name: 'Fear & Greed', drives: 'Crypto sentiment extremes',
       active: cryptoCtx?.fearGreed?.value != null },
     // The invented-events fallback was removed, so there is nothing to degrade
@@ -203,7 +211,11 @@ app.get('/api/system/sources', async (req, res) => {
       note: !calendarLive ? 'no provider reachable — no events shown'
           : (calendarLive[0]?.source === 'FRED'
               ? 'via FRED (release dates only — no forecast figures)'
-              : null) }
+              : null),
+      // FRED is a narrower source, not a broken one — the dates are right,
+      // the forecast column is simply absent. Worth stating, not worth
+      // alarming about.
+      noteLevel: !calendarLive ? 'warn' : 'info' }
   ];
 
   res.json({

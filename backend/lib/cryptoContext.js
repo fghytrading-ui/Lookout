@@ -59,18 +59,27 @@ const FUNDING_PROVIDERS = [
   {
     name: 'okx',
     fetch: async () => {
-      const out = {};
-      // OKX is one instrument per call, so only the majors are pulled.
-      for (const sym of FUNDING_SYMBOLS.slice(0, 6)) {
+      // OKX is one instrument per call. The first version walked six of them
+      // sequentially and stopped there to keep the cost down, which meant the
+      // deployed site — where OKX is the provider that answers, because
+      // Binance geo-blocks cloud hosts and Bybit blocks US IPs — averaged
+      // funding over six pairs while a laptop averaged ten. Same gauge, two
+      // different numbers, and near a tier boundary they disagree.
+      //
+      // Measured 2026-08-31: all ten instruments exist on OKX and ten
+      // parallel calls complete in 0.43s, faster than the six sequential ones
+      // were. OKX allows 20 requests per 2s per IP, so ten at once is well
+      // inside the limit. No reason to run short.
+      const results = await Promise.all(FUNDING_SYMBOLS.map(async (sym) => {
         const inst = `${sym.replace('USDT', '')}-USDT-SWAP`;
         try {
           const { data } = await axios.get('https://www.okx.com/api/v5/public/funding-rate',
             { params: { instId: inst }, headers: HEADERS, timeout: 8000 });
           const r = data?.data?.[0]?.fundingRate;
-          if (r != null) out[sym] = parseFloat(r);
-        } catch { /* try the next symbol */ }
-      }
-      return out;
+          return r != null ? [sym, parseFloat(r)] : null;
+        } catch { return null; }
+      }));
+      return Object.fromEntries(results.filter(Boolean));
     }
   }
 ];
