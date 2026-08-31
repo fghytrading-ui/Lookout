@@ -420,7 +420,10 @@ router.get('/scan', async (req, res) => {
     let dynamicList = null;
     if (market === 'stocks' && !req.query.tickers) {
       try {
-        universeMeta = await getMarketUniverse(WATCHLIST, { max: 150 });
+        // Raised from 150 with the budget freed by dropping the forex and
+        // commodity boards. Only 8 of 150 were getting through, so the cap
+        // was the limit on candidates rather than the market being quiet.
+        universeMeta = await getMarketUniverse(WATCHLIST, { max: 210 });
         if (universeMeta?.tickers?.length) dynamicList = universeMeta.tickers;
       } catch { /* fall back to the curated watchlist */ }
     }

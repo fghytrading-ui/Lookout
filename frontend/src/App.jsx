@@ -12,11 +12,20 @@ import { syncSignalBackup } from './utils/signalBackup.js';
 // dashboard, so they collapse into one dropdown that shows whichever
 // market you're currently in. The three tools stay as direct tabs.
 // Keeps mobile to four tap targets instead of a seven-item scroll strip.
+// Forex and commodities are off the board. Replayed on the live settings they
+// produced +1R each across 31 trades — too few to call good or bad, and
+// nothing measurable either way — while costing 47 of the 221 instruments
+// scanned each cycle. Yahoo rate-limits hard enough that the scan budget is
+// the binding constraint (over 1,500 rejections in a single session), so that
+// 21% is not free: it is stock coverage not being bought. The stock universe
+// was pinned at its 150 cap with only 8 getting through, so more names is the
+// one thing that reliably produces more candidates.
+//
+// The pages and their scan routes still exist and still work; they are simply
+// not offered, so nothing has to be rebuilt to bring them back.
 const MARKETS = [
   { id: 'dashboard',   label: 'Stocks',      icon: '\u25ce',  hint: 'Live stock swing setups' },
-  { id: 'crypto',      label: 'Crypto',      icon: '\u20bf',  hint: '24/7 crypto intraday setups' },
-  { id: 'forex',       label: 'Forex',       icon: '\ud83d\udcb1', hint: 'Currency pairs' },
-  { id: 'commodities', label: 'Commodities', icon: '\ud83d\udee2', hint: 'Metals, energy, agriculture' }
+  { id: 'crypto',      label: 'Crypto',      icon: '\u20bf',  hint: '24/7 crypto intraday setups' }
 ];
 
 const TOOLS = [
