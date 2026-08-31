@@ -647,8 +647,20 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
     // way the ATR floors and the hourly path did. A 2.4% target against a 2.2%
     // stop is a perfectly meaningful day trade; 3% of price is a swing-trading
     // assumption left in place.
-    const minTpDist = Math.abs(entry - sl) * 0.9;
-    tpCandidate = Math.max(tpCandidate, entry + minTpDist);
+    // The target is measured from the risk ACTUALLY being taken, not from ATR
+    // on its own.
+    //
+    // The stop is floored at slMinPct — 2.2% of price — so on a quiet stock
+    // the real risk is wider than atr * slMult while the target stayed at
+    // atr * tp1Mult. The two drifted apart: a 1.7% target against a floored
+    // 2.2% stop is 0.77:1 however clearly targetR asked for 1.25. It passed
+    // unnoticed while the minimum sat at 0.7 and rejected all 150 instruments
+    // the moment that floor went to 1.15 — the board emptied completely.
+    //
+    // Deriving it from the final risk keeps the ratio at targetR by
+    // construction, so the stop floor can no longer quietly undo the setting.
+    const risk0 = Math.abs(entry - sl);
+    tpCandidate = Math.max(tpCandidate, entry + risk0 * targetR);
     // Cap: 52-week high (structural — beyond is "blue sky")
     if (quote.fiftyTwoWeekHigh && tpCandidate > quote.fiftyTwoWeekHigh * 0.998) {
       tpCandidate = quote.fiftyTwoWeekHigh * 0.998;
@@ -713,8 +725,8 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
     if (psychSnap1 > tpCandidate && (psychSnap1 - tpCandidate) <= atr * 0.4) {
       tpCandidate = psychSnap1 + 0.05;
     }
-    // Mirror of the long side: scaled to the risk, not a flat 3% of price.
-    tpCandidate = Math.min(tpCandidate, entry - Math.abs(sl - entry) * 0.9);
+    // Mirror of the long side: measured from the risk actually being taken.
+    tpCandidate = Math.min(tpCandidate, entry - Math.abs(sl - entry) * targetR);
     if (quote.fiftyTwoWeekLow && tpCandidate < quote.fiftyTwoWeekLow * 1.002) {
       tpCandidate = quote.fiftyTwoWeekLow * 1.002;
     }

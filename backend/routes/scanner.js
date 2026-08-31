@@ -23,7 +23,7 @@ import {
   analyzeSignals, generateTradeSetup, calculateSMA, calculateATR,
   TIME_SPANS, getTimespanKey, getExitWindow, generateAnalystNotes
 } from '../utils/signals.js';
-import { getEntryTiming, buildIntradayTiming, getForexEntryTiming,
+import { getEntryTiming, buildIntradayTiming, volumeVsExpected, getForexEntryTiming,
          getFuturesEntryTiming, getCommodityEntryTiming } from '../utils/market.js';
 
 // Determine broad market regime from SPY's trend
@@ -306,9 +306,14 @@ function buildCard(ticker, raw, quote, setup, signalData, historical, market = '
   }
 
   // ── Volume context ──────────────────────────────────────────────────
-  const volRatio = raw.averageDailyVolume3Month && raw.volume
-    ? raw.volume / raw.averageDailyVolume3Month
-    : null;
+  // Measured against what is normal BY THIS POINT in the session, not against
+  // a whole day. Eight minutes after the bell every stock has traded a few
+  // percent of its daily average, and comparing the two had the reviewer
+  // rejecting every setup each morning for "no conviction" — the board came up
+  // empty until the afternoon. Harmless while the average-volume field was
+  // null and the check never ran; live the moment that was fixed.
+  const volRatio = volumeVsExpected(raw.volume, raw.averageDailyVolume3Month,
+    undefined, { alwaysOpen: (raw.market || market) === 'crypto' });
 
   // Sparkline = last 20 daily closes
   const sparkline = (historical || []).slice(-20).map(c => c.close);

@@ -374,3 +374,43 @@ export function getCommodityEntryTiming(ticker, et = getNYTime()) {
     ? getFuturesEntryTiming(et)
     : getEntryTiming();
 }
+
+
+/**
+ * How much of the regular session has elapsed, 0 to 1.
+ *
+ * Volume compared against a FULL DAY'S average is meaningless eight minutes
+ * after the bell: every stock is trading at 3% of its daily average because
+ * 97% of the day has not happened. That comparison sat harmless while the
+ * average-volume field was null and the check never ran; the moment it was
+ * fixed, the reviewer began rejecting every setup each morning for "no
+ * conviction" and the board came up empty until late in the session.
+ *
+ * Returns 1 outside regular hours, so a completed or not-yet-started session
+ * compares against the whole day as before.
+ */
+export function sessionProgress(et = getNYTime()) {
+  const mins = et.getHours() * 60 + et.getMinutes();
+  const open = 9 * 60 + 30, close = 16 * 60;
+  if (mins <= open) return 1;          // pre-market: yesterday's full day
+  if (mins >= close) return 1;         // done
+  return Math.max(0.02, (mins - open) / (close - open));
+}
+
+/**
+ * Volume so far against what would be normal BY NOW.
+ *
+ * Intraday volume is U-shaped rather than flat — roughly a third of the day
+ * trades in the first hour and the last — so a straight linear expectation
+ * understates the early session and would still flag healthy opens as thin.
+ * The curve below is a coarse fit to that shape: ahead of linear early,
+ * catching up by the close.
+ */
+export function volumeVsExpected(volumeSoFar, avgDailyVolume, et = getNYTime(), opts = {}) {
+  if (!(volumeSoFar > 0) || !(avgDailyVolume > 0)) return null;
+  // A 24/7 market has no session to be partway through, so scaling by the US
+  // equity clock would read a normal crypto day as several times its average.
+  const p = opts.alwaysOpen ? 1 : sessionProgress(et);
+  const expectedFraction = p >= 1 ? 1 : Math.min(1, Math.pow(p, 0.62));
+  return volumeSoFar / (avgDailyVolume * expectedFraction);
+}
