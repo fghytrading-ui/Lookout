@@ -1,3 +1,4 @@
+import { volumeVsExpected } from './market.js';
 export function calculateRSI(prices, period = 14) {
   if (!prices || prices.length < period + 1) return null;
   let gains = 0, losses = 0;
@@ -100,6 +101,11 @@ export function analyzeSignals(quote, historical, marketRegime = null) {
   const chgPct = quote.regularMarketChangePercent || 0;
   const vol = quote.regularMarketVolume;
   const avgVol = quote.averageDailyVolume3Month || quote.averageDailyVolume10Day;
+  // Against what is normal BY NOW, not against a whole day. Comparing a
+  // part-finished session with a full-day average reads every stock as thin at
+  // the open — the defect that emptied the board each morning.
+  const volVsNow = volumeVsExpected(vol, avgVol, undefined,
+    { alwaysOpen: /-USD$/.test(quote.symbol || '') });
   const high52 = quote.fiftyTwoWeekHigh;
   const low52 = quote.fiftyTwoWeekLow;
 
@@ -110,11 +116,11 @@ export function analyzeSignals(quote, historical, marketRegime = null) {
     else if (rsi > 62) signals.push({ type: 'bearish', text: `RSI ${rsi.toFixed(0)} approaching overbought` });
   }
 
-  if (vol && avgVol) {
-    const vr = vol / avgVol;
-    if (vr > 2.5)      signals.push({ type: chgPct >= 0 ? 'bullish' : 'bearish', text: `Massive volume spike ${vr.toFixed(1)}x avg` });
-    else if (vr > 1.5) signals.push({ type: 'neutral', text: `Above-avg volume ${vr.toFixed(1)}x` });
-    else if (vr < 0.5) warnings.push({ type: 'warning', text: 'Low volume — weak conviction signal' });
+  if (volVsNow != null) {
+    const vr = volVsNow;
+    if (vr > 2.5)      signals.push({ type: chgPct >= 0 ? 'bullish' : 'bearish', text: `Massive volume spike ${vr.toFixed(1)}x normal for this point in the session` });
+    else if (vr > 1.5) signals.push({ type: 'neutral', text: `Above-average volume ${vr.toFixed(1)}x for this point in the session` });
+    else if (vr < 0.5) warnings.push({ type: 'warning', text: 'Volume behind the usual pace for this point in the session' });
   }
 
   if (sma20) {
@@ -890,13 +896,16 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
     else                     confidence -= 12; // moving against us
 
     // c) TODAY's volume conviction (not just average)
-    const vol = quote.regularMarketVolume;
-    const avgVol = quote.averageDailyVolume3Month;
-    if (vol && avgVol) {
-      const vr = vol / avgVol;
+    // Same correction as everywhere else: judged against the pace normal by
+    // this point in the session. Raw against a full day, this docked 10 points
+    // from every stock at the open, when volume is a few percent of a day's
+    // average purely because the day has not happened yet.
+    const vr = volumeVsExpected(quote.regularMarketVolume, quote.averageDailyVolume3Month,
+      undefined, { alwaysOpen: tradeStyle === 'crypto' });
+    if (vr != null) {
       if (vr > 1.5)      confidence += 8;   // institutional participation
       else if (vr > 1.0) confidence += 3;
-      else if (vr < 0.5) confidence -= 10;  // weak volume kills intraday moves
+      else if (vr < 0.5) confidence -= 10;  // genuinely behind the usual pace
     }
 
     // d) Confirmation candle strength — crypto is more forgiving (24/7, daily candles less meaningful)

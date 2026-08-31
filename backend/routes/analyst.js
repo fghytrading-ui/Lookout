@@ -10,7 +10,7 @@ import { fetchIntradayCandles } from '../lib/intradayCandles.js';
 import { classifySetup } from '../lib/setupClassifier.js';
 import { computeTradeGrade } from '../lib/tradeGrade.js';
 import { getPerformanceMetrics } from '../lib/performanceMetrics.js';
-import { ukTimeForET } from '../utils/market.js';
+import { ukTimeForET, volumeVsExpected } from '../utils/market.js';
 import { analyzeSignals, generateTradeSetup, calculateSMA, calculateMACD, TIME_SPANS, getTimespanKey, getExitWindow } from '../utils/signals.js';
 import { reviewTrade } from '../utils/reviewer.js';
 import { fetchCryptoCandles, computeSessionVWAP } from '../lib/cryptoCandles.js';
@@ -853,7 +853,11 @@ router.get('/:ticker', async (req, res) => {
         earnings: null,
         fiftyTwoWeekHigh: raw.fiftyTwoWeekHigh,
         fiftyTwoWeekLow: raw.fiftyTwoWeekLow,
-        volRatio: raw.averageDailyVolume3Month && raw.volume ? raw.volume / raw.averageDailyVolume3Month : null,
+        // Against the pace normal by this point in the session — crypto never
+        // being partway through one. Raw against a full day, this read every
+        // instrument as thin in the morning.
+        volRatio: volumeVsExpected(raw.volume, raw.averageDailyVolume3Month,
+          undefined, { alwaysOpen: true }),
         vwap
       };
       const review = setup ? reviewTrade(card, candles, signalData, {
@@ -1001,7 +1005,7 @@ router.get('/:ticker', async (req, res) => {
       earnings: evaluateEarningsRisk(earningsRaw),
       fiftyTwoWeekHigh: raw.fiftyTwoWeekHigh,
       fiftyTwoWeekLow: raw.fiftyTwoWeekLow,
-      volRatio: raw.averageDailyVolume3Month && raw.volume ? raw.volume / raw.averageDailyVolume3Month : null
+      volRatio: volumeVsExpected(raw.volume, raw.averageDailyVolume3Month)
     };
     const review = setup ? reviewTrade(card, candles, signalData, { weeklyTrend, vix }) : { verdict: 'NO_SETUP', summary: 'No setup found', issues: [], strengths: [] };
     const atrSafe = signalData.atr || raw.price * 0.02;

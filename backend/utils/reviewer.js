@@ -1,3 +1,4 @@
+import { sessionProgress } from './market.js';
 // Second-opinion analyst review — runs AFTER signal generation.
 // Mimics how a human/AI analyst would stress-test a trade.
 // Returns { verdict: 'PASS' | 'CAUTION' | 'REJECT', issues: [...], strengths: [...] }
@@ -92,7 +93,13 @@ export function reviewTrade(card, historical, signalData, marketContext = {}) {
     const today = historical[historical.length - 1];
     if (today) {
       const todayRange = today.high - today.low;
-      if (todayRange > atr * 1.8) {
+      // ATR is a FULL day's range; todayRange at 9:40am is twenty minutes of
+      // one. Compared raw, this check is switched off every morning — the
+      // exact window it is meant to protect — and over-fires late in the day.
+      // Range accumulates roughly with the square root of elapsed time on a
+      // random walk, so that is what the expectation is scaled by.
+      const expectedRange = atr * Math.sqrt(sessionProgress());
+      if (todayRange > expectedRange * 1.8) {
         issues.push({ severity: 'caution', text: `Today's range ${(todayRange / price * 100).toFixed(1)}% — choppy session, signals unreliable` });
       }
     }
