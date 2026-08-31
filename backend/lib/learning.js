@@ -57,8 +57,13 @@ const BASELINE = {
   // through its losing runs, and an edge nobody can sit through pays nothing.
   // Trades also resolve in 1.4 sessions instead of 2.2, which is the actual
   // holding period this is for.
-  stocks:      { targetR: 1.0, maxStopPct: 0.040 },
-  crypto:      { targetR: 1.2, maxStopPct: 0.060 },
+  // 1.25 is the measured optimum and now also the aim, so the setting and the
+  // board agree. It was 1.0 while the minimum reward:risk floor sat at 1.15,
+  // which meant the floor rather than the setting decided the geometry and
+  // only setups pushed above it by a trend bonus survived — selection by side
+  // effect. The self-check caught it: set to 1.00, producing 1.55.
+  stocks:      { targetR: 1.25, maxStopPct: 0.040 },
+  crypto:      { targetR: 1.25, maxStopPct: 0.060 },
   commodities: { targetR: 1.1, maxStopPct: 0.060 },
   forex:       { targetR: 1.0, maxStopPct: 0.020 }
 };
