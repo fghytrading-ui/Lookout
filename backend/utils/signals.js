@@ -424,16 +424,25 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
     // settings actually work on — +0.127R realised over 25 trades against
     // -0.094R on stocks — so the recalibration below deliberately does not
     // touch them.
-    tp1Mult = 1.50 + (trendStrength * 0.20);
-    tp2Mult = 2.40 + (trendStrength * 0.35);
+    // Driven by targetR like the others. Replayed over 33 tracked commodity
+    // trades, the old 2.2 reward:risk reached its target 13% of the time for
+    // +0.022R; a target near one stop distance reaches 31-35% for the same
+    // expectancy inside noise. Same money, in a form that can be followed.
     slMult  = 0.68;
+    tp1Mult = targetR * slMult + (trendStrength * 0.06);
+    tp2Mult = tp1Mult * 1.22;
   } else if (tradeStyle === 'forex') {
-    // Identical ATR multiples to sameDay — these are denominated in ATR and so
-    // carry across instruments unchanged. Only the percentage-of-price
-    // guardrails in CAL below need rescaling for FX.
-    tp1Mult = 1.50 + (trendStrength * 0.20);
-    tp2Mult = 2.40 + (trendStrength * 0.35);
+    // Forex was the worst thing in the system by a distance. Replayed over 31
+    // tracked FX trades the old geometry reached its first target ZERO times
+    // — not rarely, never — for -0.585R at z = -5.3. A target a currency pair
+    // does not reach is not a target. Majors move a fraction of a percent in a
+    // session, so 2.2 stop distances is simply outside the range of the
+    // instrument on this horizon. At one stop distance the same trades reach
+    // it 23% of the time and come out at +0.047R, which is not an edge but is
+    // no longer a guaranteed loss.
     slMult  = 0.68;
+    tp1Mult = targetR * slMult + (trendStrength * 0.06);
+    tp2Mult = tp1Mult * 1.22;
   } else if (tradeStyle === 'sameDay') {
     // RECALIBRATED FROM TRACKED OUTCOMES (52 closed signals, expectancy -0.25R).
     // The old numbers (TP1 0.65-1.25 ATR against a 0.7 ATR stop) capped R:R at
@@ -515,8 +524,12 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
     // Same recalibration as sameDay: old R:R ceiling was ~2.0 at best and
     // usually well under. 2.8-4.0 ATR targets against a 1.3 ATR stop give
     // R:R 2.15-3.1.
-    tp1Mult = 2.8 + (trendStrength * 0.40);
-    tp2Mult = 4.4 + (trendStrength * 0.60);
+    // Also targetR-driven. Crypto loses under every geometry tested — the best
+    // of them is still -0.152R — so this is harm reduction, not a fix: the
+    // target moves from being reached 15% of the time to 34%, and the loss
+    // roughly halves. The slMult below stays as it was; only the target moves.
+    tp1Mult = targetR * 1.3 + (trendStrength * 0.10);
+    tp2Mult = tp1Mult * 1.22;
     slMult  = 1.3;
   } else {
     tp1Mult = 1.6 + (trendStrength * 0.4);
@@ -549,7 +562,7 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
                maxStopPct: 0.040 },
     // Commodities keep the previous, profitable settings.
     commodities: { slCapPct: 0.045, slMinPct: 0.022, slFloorATR: 0.9, slRangeMin: 0.9, slRangeMax: 1.8,
-               maxDaysTP1: 6,  maxDaysTP2: 12, minTP1ATR: 1.6, minTP2ATR: 2.6, minRR: 2.0 },
+               maxDaysTP1: 6,  maxDaysTP2: 12, minTP1ATR: 0.6, minTP2ATR: 0.8, minRR: 0.7 },
     // Same percentage guardrails as sameDay — slCapPct and slMinPct are shares
     // of price and so are timeframe-independent — but the ATR-denominated
     // fields are scaled for hourly bars. "days" here counts BARS: 39 hourly
@@ -564,12 +577,12 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
     // a percentage (2.2% / 2.5% ATR); applied to FX's ~0.5% ATR that is ~0.45%.
     // The cap is scaled by the same ratio. ATR-denominated fields are unchanged.
     forex:   { slCapPct: 0.012, slMinPct: 0.0045, slFloorATR: 0.9, slRangeMin: 0.9, slRangeMax: 1.8,
-               maxDaysTP1: 6,  maxDaysTP2: 12, minTP1ATR: 1.6, minTP2ATR: 2.6, minRR: 2.0 },
+               maxDaysTP1: 6,  maxDaysTP2: 12, minTP1ATR: 0.6, minTP2ATR: 0.8, minRR: 0.7 },
     // Crypto runs on 4-hour candles. "days" in this object = bars held.
     // ATR here is per-4h-bar (~1/sqrt(6) of daily ATR), so multipliers are larger.
     // Ceilings: TP1 within 16 bars (~64h), TP2 within 30 bars (~5d).
     crypto:  { slCapPct: 0.045, slFloorATR: 1.1, slRangeMin: 1.1, slRangeMax: 2.2,
-               maxDaysTP1: 16, maxDaysTP2: 30, minTP1ATR: 2.2, minTP2ATR: 3.2, minRR: 2.0 },
+               maxDaysTP1: 16, maxDaysTP2: 30, minTP1ATR: 1.1, minTP2ATR: 1.4, minRR: 0.7 },
     swing:   { slCapPct: 0.04,  slFloorATR: 0.9, slRangeMin: 1.0, slRangeMax: 1.8,
                maxDaysTP1: 10, maxDaysTP2: 16, minTP1ATR: 1.2, minTP2ATR: 2.0, minRR: 1.3 }
   }[tradeStyle] || { slCapPct: 0.04, slFloorATR: 0.9, slRangeMin: 1.0, slRangeMax: 1.8,

@@ -58,9 +58,9 @@ const BASELINE = {
   // Trades also resolve in 1.4 sessions instead of 2.2, which is the actual
   // holding period this is for.
   stocks:      { targetR: 1.0, maxStopPct: 0.040 },
-  crypto:      { targetR: 2.4, maxStopPct: 0.060 },
-  commodities: { targetR: 2.4, maxStopPct: 0.060 },
-  forex:       { targetR: 2.4, maxStopPct: 0.020 }
+  crypto:      { targetR: 1.2, maxStopPct: 0.060 },
+  commodities: { targetR: 1.1, maxStopPct: 0.060 },
+  forex:       { targetR: 1.0, maxStopPct: 0.020 }
 };
 
 function readState() {
