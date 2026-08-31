@@ -65,8 +65,15 @@ function checkDirectionBalance(signals) {
 }
 
 // ── 3. Every market still produces trades ────────────────────────────
+// Only the boards actually on offer. Forex and commodities were removed from
+// the market menu, so their signals stop and their counts fall to zero within
+// a fortnight — this check would then warn every run about markets nobody
+// asked it to watch. A monitor that cries about something deliberate is worse
+// than no monitor: it trains you to ignore it.
+const LIVE_MARKETS = ['stocks', 'crypto'];
+
 function checkMarketCoverage(signals) {
-  const markets = ['stocks', 'crypto', 'forex', 'commodities'];
+  const markets = LIVE_MARKETS;
   const dead = [];
   const counts = {};
   for (const m of markets) {
