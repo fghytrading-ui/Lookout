@@ -18,8 +18,12 @@ export default function MarketStatus({ status, lastUpdated, scanning }) {
         <div className={`w-2 h-2 rounded-full ${cfg.dot}`} />
         <span className={`text-xs font-bold tracking-widest font-mono ${cfg.text}`}>{cfg.label}</span>
       </div>
+      {/* Visible on a phone too. This was hidden below the small breakpoint,
+          which is where the board is most often read and where a stale one is
+          hardest to spot — the whole point of the line is to say whether the
+          numbers can be trusted. */}
       {lastUpdated && (
-        <span className="text-[10px] text-[#444] font-mono hidden sm:block">
+        <span className="text-[10px] text-[#444] font-mono">
           {(() => {
             // Say how old the data is, not merely when it arrived. A stale
             // board with a fresh timestamp is worse than an obviously stale
