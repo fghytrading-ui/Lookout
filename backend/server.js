@@ -61,18 +61,20 @@ app.post('/api/system/learning/reset', (req, res) => {
 // audit. Reports only; never changes scanner behaviour.
 app.get('/api/system/selfcheck', async (req, res) => {
   try {
-    let cards = null, sources = null;
+    let cards = null, sources = null, scanStats = null;
+    const market = req.query.market || 'stocks';
     try {
-      const r = await fetch(`http://localhost:${PORT}/api/scanner/scan`);
+      const r = await fetch(`http://localhost:${PORT}/api/scanner/scan?market=${encodeURIComponent(market)}`);
       const d = await r.json();
       const tr = d.trades || d;
       cards = ['enterNow', 'waitForBounce', 'carryForward'].flatMap(k => tr[k] || []);
+      scanStats = { scannedCount: d.scannedCount, passedFilter: d.passedFilter };
     } catch { /* checks needing cards will skip */ }
     try {
       const r = await fetch(`http://localhost:${PORT}/api/system/sources`);
       sources = (await r.json()).sources;
     } catch { /* ditto */ }
-    res.json(runSelfCheck({ cards, sources }));
+    res.json(runSelfCheck({ cards, sources, market, scanStats }));
   } catch (err) {
     res.status(500).json({ error: 'Self-check failed', details: err.message });
   }

@@ -18,6 +18,7 @@
 // what the scanner does would be the same class of problem it exists to find.
 import { getAllSignals } from './signalLog.js';
 import { assessGoals } from './goals.js';
+import { getLearnedParams } from './learning.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -243,11 +244,85 @@ function checkFillRate(signals) {
     `${Math.round(rate * 100)}% of signals traded at their entry · ${unfilled} never did and are excluded from the record`);
 }
 
+
+// ── 11. Does the calibration actually reach the output? ──────────────
+//
+// This is the failure this project keeps repeating, four times now and each
+// one costing days: a parameter is set, and something further down the same
+// function quietly overrides it. In order — a minimum-target-in-ATR floor of
+// 0.9 against a 0.68 stop, which pins reward:risk at 1.32 whatever is asked
+// for; the hourly refinement path with its target hardcoded at 4.15 ATR,
+// ignoring the parameter completely; `targetR` declared inside one branch so
+// the other threw a ReferenceError that an empty catch swallowed; and a flat
+// 3%-of-price target floor that forced 1.36 against a 2.2% stop.
+//
+// Every one of them looked like "the change did not work" and every one was
+// found by hand, days later. The setting is knowable and so is the output, so
+// the comparison should not need a person.
+//
+// targetR IS the intended reward:risk. If what the board is producing sits far
+// from it, something downstream is winning.
+function checkCalibrationLands(cards, market) {
+  if (!cards || cards.length < 3) return skip('calibration', 'Calibration reaches the cards', 'Too few cards to compare');
+  const rrs = cards.map(c => c.rrRatio).filter(Number.isFinite);
+  if (rrs.length < 3) return skip('calibration', 'Calibration reaches the cards', 'No reward:risk on the cards');
+
+  let intended;
+  try { intended = getLearnedParams(market || 'stocks')?.targetR; }
+  catch { return skip('calibration', 'Calibration reaches the cards', 'Settings unavailable'); }
+  if (!(intended > 0)) return skip('calibration', 'Calibration reaches the cards', 'No target setting to compare');
+
+  const actual = rrs.reduce((a, b) => a + b, 0) / rrs.length;
+  // Trend bonuses and level snapping move individual cards, so the band is
+  // generous. It is there to catch a floor overriding the setting outright,
+  // not to police normal variation.
+  const drift = (actual - intended) / intended;
+  // Set from the real case rather than picked round: before the 3%-of-price
+  // floor was removed the board produced 1.44 against an intended 1.00, a 44%
+  // drift. A threshold of 0.45 would have sat quietly through the very bug it
+  // exists to catch.
+  if (drift > 0.35) {
+    return fail('calibration', 'Calibration reaches the cards',
+      `Targets are set to ${intended.toFixed(2)}x the stop but the board is producing ${actual.toFixed(2)}x`,
+      'Something downstream is overriding the setting — check the ATR floors, the minimum reward:risk, the flat percentage floors and the hourly refinement path, in that order');
+  }
+  if (drift < -0.35) {
+    return warn('calibration', 'Calibration reaches the cards',
+      `Targets are set to ${intended.toFixed(2)}x but the board is producing ${actual.toFixed(2)}x`,
+      'Targets are landing closer than intended — a cap or a level snap is pulling them in');
+  }
+  return ok('calibration', 'Calibration reaches the cards',
+    `set to ${intended.toFixed(2)}x the stop, board is producing ${actual.toFixed(2)}x`);
+}
+
+// ── 12. Is any gate rejecting everything? ────────────────────────────
+//
+// A filter that rejects every candidate is indistinguishable from a quiet
+// market until someone counts. The analyst's backtest detector required two
+// conditions that are very nearly mutually exclusive and matched zero times in
+// 390 bars, reporting "not enough history" on every ticker for months. Minimum
+// reward:risk floors have twice been left above the target they gate, which
+// rejects every setup the new target produces.
+function checkGatesReachable(scanStats) {
+  if (!scanStats || !Number.isFinite(scanStats.scannedCount)) {
+    return skip('gates', 'Filters are passable', 'No scan statistics available');
+  }
+  const { scannedCount, passedFilter } = scanStats;
+  if (scannedCount < 20) return skip('gates', 'Filters are passable', 'Universe too small to judge');
+  if (!passedFilter) {
+    return warn('gates', 'Filters are passable',
+      `None of ${scannedCount} instruments produced a setup`,
+      'One quiet session is normal; several in a row means a gate is set past what any setup can reach');
+  }
+  return ok('gates', 'Filters are passable',
+    `${passedFilter} of ${scannedCount} scanned produced a setup`);
+}
+
 /**
  * Run every check. `cards` and `sources` are optional; checks needing them
  * report 'skip' rather than failing when they are absent.
  */
-export function runSelfCheck({ cards = null, sources = null } = {}) {
+export function runSelfCheck({ cards = null, sources = null, market = null, scanStats = null } = {}) {
   const signals = getAllSignals();
   const checks = [
     checkScoringIntegrity(signals),
@@ -259,6 +334,8 @@ export function runSelfCheck({ cards = null, sources = null } = {}) {
     checkSources(sources),
     checkSignalVolume(signals),
     checkFillRate(signals),
+    checkCalibrationLands(cards, market),
+    checkGatesReachable(scanStats),
     checkGoals()
   ];
   const counts = checks.reduce((a, c) => ({ ...a, [c.status]: (a[c.status] || 0) + 1 }), {});
