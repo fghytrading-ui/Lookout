@@ -25,3 +25,10 @@ services:
         sync: false   # User adds via Render dashboard (not in git)
       - key: ALPACA_SECRET_KEY
         sync: false   # User adds via Render dashboard (not in git)
+      # CoinGecko's keyless endpoint answers a laptop and refuses Render:
+      # measured 2026-08-31, every call from the live host came back empty
+      # while the same call from home returned 200 in 0.24s. The free Demo
+      # key lifts the datacentre-IP block. Without it BTC dominance and total
+      # market cap are missing from the crypto bar and the analyst's context.
+      - key: COINGECKO_API_KEY
+        sync: false   # User adds via Render dashboard (not in git)

@@ -109,10 +109,31 @@ export function tickerToBinanceSymbol(ticker) {
 }
 
 // CoinGecko global data — BTC dominance + total market cap
+//
+// The keyless endpoint answers a laptop instantly and refuses Render outright:
+// measured 2026-08-31, every call from the live host came back empty while the
+// same call from home returned 200 in 0.24s. CoinGecko throttles datacentre IP
+// ranges, so on the deployed site dominance and total cap were simply missing.
+//
+// The free Demo key (x-cg-demo-api-key, same base URL, 100/min and 10k/month)
+// lifts that. At the 15-minute cache TTL this endpoint costs ~2,900 calls a
+// month, well inside the cap, and failed calls do not spend credits.
+//
+// Deliberately NOT swapped for a keyless rival. CoinPaprika and CoinLore both
+// serve a global endpoint, but measured side by side against CoinGecko they
+// disagree: dominance 56.93 / 59.63 / 59.21, and 24h market-cap change
+// +0.14 / +0.68 / -1.81 — opposite signs. The card thresholds (>55 alts
+// headwind, <50 alt-friendly) and the colour bands are calibrated to
+// CoinGecko's universe, so those feeds are a different number, not the same
+// number from another door.
+const CG_KEY = process.env.COINGECKO_API_KEY || '';
+export const COINGECKO_KEYED = !!CG_KEY;
+
 async function fetchGlobalCrypto() {
   try {
     const { data } = await axios.get('https://api.coingecko.com/api/v3/global', {
-      headers: HEADERS, timeout: 6000
+      headers: CG_KEY ? { ...HEADERS, 'x-cg-demo-api-key': CG_KEY } : HEADERS,
+      timeout: 6000
     });
     const d = data.data;
     return {

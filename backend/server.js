@@ -19,6 +19,7 @@ import performanceRouter from './routes/performance.js';
 import { startSignalMonitor } from './lib/signalMonitor.js';
 import { runSelfCheck } from './lib/selfCheck.js';
 import { ALPACA_ENABLED } from './lib/alpaca.js';
+import { COINGECKO_KEYED } from './lib/cryptoContext.js';
 import { runLearning, getLearningState, resetLearning } from './lib/learning.js';
 import { assessGoals } from './lib/goals.js';
 import { isMarketOpen, getSession, getEntryTiming } from './utils/market.js';
@@ -176,10 +177,17 @@ app.get('/api/system/sources', async (req, res) => {
     // informs a signal, so a throttle only matters once it has gone stale.
     { name: 'CoinGecko', drives: 'BTC dominance, total crypto market cap',
       active: !!cryptoCtx?.global?.btcDominance,
+      // Say which of the two failures this is. "Rate limited, retries
+      // automatically" was true of a passing throttle and wrong about the
+      // state the live host is actually in: keyless CoinGecko refuses
+      // datacentre IPs outright, so no amount of retrying fixes it and the
+      // panel was telling us to wait for something that never arrives.
       note: !cryptoCtx?.global?.btcDominance
-        ? 'rate limited and no recent reading — retries automatically'
+        ? (COINGECKO_KEYED
+            ? 'no reading — retries automatically'
+            : 'blocked from this host — needs the free COINGECKO_API_KEY')
         : (cryptoCtx.global.ageMinutes
-            ? `rate limited — using the reading from ${cryptoCtx.global.ageMinutes} min ago`
+            ? `using the reading from ${cryptoCtx.global.ageMinutes} min ago`
             : null) },
     { name: 'Fear & Greed', drives: 'Crypto sentiment extremes',
       active: cryptoCtx?.fearGreed?.value != null },
