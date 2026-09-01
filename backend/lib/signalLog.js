@@ -96,7 +96,25 @@ function sessionKeyOf(rec) {
 
 // Which of two records for the same idea to keep: a resolved outcome beats an
 // unresolved one, and otherwise the first one written — that is the idea as it
-// was actually offered.
+// was actually offered, and it had the longest honest window to resolve in.
+//
+// Know what this choice is doing before trusting a number that came through
+// it. Of 125 duplicate groups on the live record, 40 held copies that closed
+// DIFFERENTLY, and in 32 of those the copies carried different entry, stop and
+// target — an afternoon scan re-pricing a setup the pre-market scan had
+// already logged. CRWD LONG on 2026-07-28 was logged at 07:21 (entry 180.29,
+// SCALED_BE) and again at 15:48 (entry 182.44, SL). Collapsing those is a
+// judgement, not a fact: logSignal has made the same call since 2026-08-29
+// ("one record per idea per session"), and this only makes the merge path
+// agree with it.
+//
+// Expectancy over the same closed trades, by which copy is kept:
+//   no dedupe        -0.0243R      keep earliest   +0.0287R
+//   keep latest      +0.0168R      keep best       +0.0861R
+//   keep worst       +0.0058R
+// Every dedupe is positive and no-dedupe is negative, so the direction holds
+// whatever you pick — but the magnitude moves 15x across the choices. Quote
+// the range, never the single figure.
 function preferred(a, b) {
   const aClosed = a.status === 'CLOSED', bClosed = b.status === 'CLOSED';
   if (aClosed !== bClosed) return aClosed ? a : b;
