@@ -84,9 +84,10 @@ function isCoherent(rec) {
 // 2026-08-30 was present twice with identical entry, stop and target, thirteen
 // hours apart.
 //
-// It biases the record it inflates. Deduplicated, expectancy over the same
-// trades moves from -0.024R to +0.029R — neither significant on its own, both
-// CIs straddling zero, but the calibration is fitted to this record and it was
+// It biases the record it inflates: undeduplicated expectancy is -0.0243R and
+// every way of deduplicating it comes out positive (see `preferred` below for
+// the range and the caveats). Nothing there is significant on its own — the
+// CIs straddle zero — but the calibration is fitted to this record, and it was
 // being fitted to double counts.
 function sessionKeyOf(rec) {
   const tz = rec.market === 'crypto' ? 'UTC' : 'America/New_York';
