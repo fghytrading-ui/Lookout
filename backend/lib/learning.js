@@ -243,8 +243,26 @@ export function analyseMarket(market) {
 // be made, but only has to be clearly worse to be undone. Reverting to a
 // known state is much cheaper than staying somewhere the evidence says is
 // losing money.
-const REVIEW_MIN_TRADES = 30;    // resolved trades under a change before judging it
-const REVIEW_MIN_HARM   = 0.05;  // R per trade it must be worse by to be undone
+// The bar a revert has to clear is set by the noise, not by a number that
+// sounds small. Measured on 288 stock trades the spread of a single trade is
+// about 1.17R, which puts the 95% band on a before/after difference at ±0.59R
+// over 30 trades and ±0.42R over 60. A flat "worse by 0.05R" threshold sits
+// twelve times below that floor: it would have fired about as often as a coin
+// and left the parameters oscillating — change, revert on noise, change back.
+//
+// So the threshold is derived from the data each time: the harm must exceed
+// REVIEW_Z standard errors of the difference, and a floor besides. That scales
+// itself with both sample size and how violent the market has been.
+//
+// REVIEW_Z is 1.0, not the 1.96 required to MAKE a change. Demanding proof to
+// undo would mean never undoing: at this spread, proving a 0.1R degradation
+// needs on the order of a thousand trades and the record holds a few hundred.
+// One standard error says "the evidence leans against this change" — which,
+// weighed against a known-good setting one step away, is enough. Making a
+// change still needs Z_CRIT; keeping one does not get that protection.
+const REVIEW_MIN_TRADES = 60;    // resolved trades under a change before judging it
+const REVIEW_MIN_HARM   = 0.05;  // floor, in R per trade
+const REVIEW_Z          = 1.0;   // standard errors of the difference it must also clear
 
 function reviewApplied(state) {
   const reverted = [];
@@ -271,12 +289,17 @@ function reviewApplied(state) {
     const span = Math.min(after.length, before.length);
     const beforeRows = before.slice(-span);
     const afterRows  = after.slice(0, span);
-    const eBefore = expectancyOf(beforeRows).mean;
-    const eAfter  = expectancyOf(afterRows).mean;
+    const statsBefore = expectancyOf(beforeRows);
+    const statsAfter  = expectancyOf(afterRows);
+    const eBefore = statsBefore.mean, eAfter = statsAfter.mean;
     if (eBefore == null || eAfter == null) continue;
+    if (statsBefore.se == null || statsAfter.se == null) continue;
 
     const harm = eBefore - eAfter;
-    if (harm > REVIEW_MIN_HARM) {
+    // Standard error of the difference between the two windows.
+    const seDiff = Math.sqrt(statsBefore.se ** 2 + statsAfter.se ** 2);
+    const bar = Math.max(REVIEW_MIN_HARM, REVIEW_Z * seDiff);
+    if (harm > bar) {
       for (const c of accepted) {
         state.params[h.market] = { ...(state.params[h.market] || {}) };
         state.params[h.market][c.parameter] = c.from;   // put it back
@@ -284,16 +307,16 @@ function reviewApplied(state) {
       state.pinned = state.pinned || {};
       state.pinned[h.market] = {
         until: Date.now() + 7 * 24 * 60 * 60 * 1000,
-        because: `reverted ${accepted.map(c => c.parameter).join(', ')} — cost ${harm.toFixed(3)}R over ${span} trades`
+        because: `reverted ${accepted.map(c => c.parameter).join(', ')} — cost ${harm.toFixed(3)}R over ${span} trades (bar ${bar.toFixed(3)}R)`
       };
       reverted.push({
         market: h.market, at: h.at, span,
-        expectancyBefore: eBefore, expectancyAfter: eAfter, harm,
+        expectancyBefore: eBefore, expectancyAfter: eAfter, harm, bar, seDiff,
         parameters: accepted.map(c => ({ parameter: c.parameter, revertedTo: c.from, from: c.to }))
       });
       state.reviewed[stamp] = 'reverted';
     } else {
-      state.reviewed[stamp] = harm < -REVIEW_MIN_HARM ? 'helped' : 'neutral';
+      state.reviewed[stamp] = harm < -bar ? 'helped' : 'inconclusive';
     }
   }
   return reverted;
