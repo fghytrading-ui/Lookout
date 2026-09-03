@@ -276,10 +276,6 @@ app.listen(PORT, () => {
       // not from this process starting. A free-tier restart is not a new day.
       if (!force && learnedRecently(LEARN_EVERY)) return;
       const r = runLearning({ apply: true });
-      for (const rv of r.reverted || []) {
-        console.log(`  ↩ learning: ${rv.market} reverted ${rv.parameters.map(p => `${p.parameter} ${p.from} -> ${p.revertedTo}`).join(', ')}`
-          + ` (cost ${rv.harm.toFixed(3)}R over ${rv.span} trades)`);
-      }
       const changed = r.markets.filter(m => m.applied);
       if (changed.length) {
         for (const m of changed) {

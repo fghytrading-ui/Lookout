@@ -33,7 +33,6 @@
 import fs from 'fs';
 import path from 'path';
 import { getAllSignals } from './signalLog.js';
-import { expectancyOf } from './realisedR.js';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const STATE_FILE = path.join(DATA_DIR, 'learning-state.json');
@@ -225,174 +224,49 @@ export function analyseMarket(market) {
 }
 
 /** Analyse every market. `apply` writes the accepted changes. */
-// ── Did the last change actually help? ───────────────────────────────────
+// Outcome-based reverting was built here on 2026-09-03 and removed the same
+// day. Keeping the reasoning so it is not rebuilt.
 //
-// Learning moved parameters and never once looked back at whether its own
-// decisions worked. That is the half of a feedback loop that makes it a loop:
-// without it a run can only ever ratchet further in the direction it last
-// went, re-optimising on a record its own previous change shaped. The live
-// history shows exactly that drift — stocks maxStopPct 0.040 -> 0.035 ->
-// 0.0305 and crypto targetR 1.25 -> 1.15 -> 1.05, one direction, never back.
+// The idea was to judge each applied change once enough trades had run under
+// it — compare expectancy after against before, undo anything materially
+// worse. It cannot work at this data volume, and the numbers say so plainly.
+// Measured on the real record:
 //
-// So each applied change is now judged once enough trades have run under it.
-// Compare realised expectancy on trades signalled after the change against
-// the same window before it. If it is materially WORSE, the change is undone
-// and the parameter pinned so the next run cannot immediately redo it.
+//   Spread of a single trade                          1.17R
+//   se of a before/after difference, 60-trade windows 0.214R
+//   Run at 166 split points where NOTHING changed, it fired:
+//     45% of the time at 1.0 se       26% at 1.96 se      16% at 2.5 se
+//   Requiring a clean control market cut that to 9% at 1.96 se and 7% at 2.5,
+//   but the power to catch a REAL degradation then collapses:
+//     0.10R harm -> 2%    0.20R -> 6%    0.30R -> 13%    0.50R -> 43%
 //
-// Deliberately asymmetric: a change must clear MIN_EDGE with significance to
-// be made, but only has to be clearly worse to be undone. Reverting to a
-// known state is much cheaper than staying somewhere the evidence says is
-// losing money.
-// The bar a revert has to clear is set by the noise, not by a number that
-// sounds small. Measured on 288 stock trades the spread of a single trade is
-// about 1.17R, which puts the 95% band on a before/after difference at ±0.59R
-// over 30 trades and ±0.42R over 60. A flat "worse by 0.05R" threshold sits
-// twelve times below that floor: it would have fired about as often as a coin
-// and left the parameters oscillating — change, revert on noise, change back.
+// Either it reverts at random or it detects nothing. The parameters here move
+// expectancy by perhaps 0.05-0.15R, which sits entirely inside the blind spot.
+// That is a limit of having a few hundred trades against a 1.17R spread, not
+// an implementation that needed more care.
 //
-// So the threshold is derived from the data each time: the harm must exceed
-// REVIEW_Z standard errors of the difference, and a floor besides. That scales
-// itself with both sample size and how violent the market has been.
+// It was also redundant. analyseMarket re-derives the optimum from the FULL
+// record every run and compares it against the CURRENT value, and its step is
+// signed — so when accumulated evidence says the old setting was better, it
+// already walks back, using every trade on file rather than a 60-trade window,
+// and it re-simulates each trade against the alternative rather than comparing
+// two noisy periods. Self-correction was there all along; a second, weaker
+// mechanism voting against it could only add noise.
 //
-// REVIEW_Z is 1.0, not the 1.96 required to MAKE a change. Demanding proof to
-// undo would mean never undoing: at this spread, proving a 0.1R degradation
-// needs on the order of a thousand trades and the record holds a few hundred.
-// One standard error says "the evidence leans against this change" — which,
-// weighed against a known-good setting one step away, is enough. Making a
-// change still needs Z_CRIT; keeping one does not get that protection.
-const REVIEW_MIN_TRADES = 60;    // resolved trades under a change before judging it
-const REVIEW_MIN_HARM   = 0.05;  // floor, in R per trade
-const REVIEW_Z          = 1.0;   // standard errors of the difference it must also clear
-
-// How the OTHER markets moved across the same date, in R per trade. Returns
-// null when no other market has enough trades on both sides to say — in which
-// case the caller has no control and must judge on the absolute figure alone,
-// with a stricter bar.
-// A control is only a control if IT did not change. Crypto moved targetR twice
-// in the same days the stocks ceiling moved, and a market carrying its own
-// parameter change cannot stand in for "what the board did anyway".
-function controlSwing(market, at, allClosed, history = []) {
-  const WINDOW = 30 * 24 * 60 * 60 * 1000;
-  const contaminated = new Set(
-    (history || [])
-      .filter(e => (e.changes || []).some(c => c.accepted))
-      .filter(e => Math.abs(Date.parse(e.at) - at) < WINDOW)
-      .map(e => e.market)
-  );
-  const swings = [];
-  for (const m of Object.keys(BASELINE)) {
-    if (m === market || contaminated.has(m)) continue;
-    const rows = allClosed.filter(s => s.market === m);
-    const before = rows.filter(s => s.signaledAt < at);
-    const after  = rows.filter(s => s.signaledAt >= at);
-    if (before.length < 20 || after.length < 20) continue;
-    const eB = expectancyOf(before).mean, eA = expectancyOf(after).mean;
-    if (eB == null || eA == null) continue;
-    swings.push(eA - eB);
-  }
-  if (!swings.length) return null;
-  swings.sort((a, b) => a - b);
-  const mid = Math.floor(swings.length / 2);
-  return swings.length % 2 ? swings[mid] : (swings[mid - 1] + swings[mid]) / 2;
-}
-
-function reviewApplied(state) {
-  const reverted = [];
-  const history = state.history || [];
-  state.reviewed = state.reviewed || {};
-
-  for (let i = history.length - 1; i >= 0; i--) {
-    const h = history[i];
-    const stamp = `${h.at}|${h.market}`;
-    if (state.reviewed[stamp]) continue;
-    const accepted = (h.changes || []).filter(c => c.accepted);
-    if (!accepted.length) { state.reviewed[stamp] = 'no-change'; continue; }
-
-    const at = Date.parse(h.at);
-    if (!Number.isFinite(at)) { state.reviewed[stamp] = 'bad-timestamp'; continue; }
-
-    const closed = getAllSignals().filter(s =>
-      s.status === 'CLOSED' && Number.isFinite(s.signaledAt));
-    const mine   = closed.filter(s => s.market === h.market);
-    const after  = mine.filter(s => s.signaledAt >= at);
-    const before = mine.filter(s => s.signaledAt <  at);
-    if (after.length < REVIEW_MIN_TRADES || before.length < REVIEW_MIN_TRADES) continue;  // not ripe yet
-
-    // Same window each side so a change is not judged against a different era.
-    const span = Math.min(after.length, before.length);
-    const beforeRows = before.slice(-span);
-    const afterRows  = after.slice(0, span);
-    const statsBefore = expectancyOf(beforeRows);
-    const statsAfter  = expectancyOf(afterRows);
-    const eBefore = statsBefore.mean, eAfter = statsAfter.mean;
-    if (eBefore == null || eAfter == null) continue;
-    if (statsBefore.se == null || statsAfter.se == null) continue;
-
-    // Measure the change against the markets that did NOT change, over the
-    // same dates. Before-and-after alone cannot tell a bad setting from a bad
-    // fortnight, and on this record that is not hypothetical: across the same
-    // split, stocks went +0.200R -> -0.301R and crypto went +0.205R -> -0.271R,
-    // two markets on different settings falling together by almost exactly the
-    // same amount. A plain before/after test reads that as the stocks
-    // parameter costing 0.5R and reverts a setting that had nothing to do with
-    // it. What matters is how far this market moved RELATIVE to the rest.
-    const controlDelta = controlSwing(h.market, at, closed, history);
-    const rawDelta = eAfter - eBefore;                      // negative = got worse
-    const harm = controlDelta == null
-      ? -(rawDelta)                                         // no control: fall back
-      : (controlDelta - rawDelta);                          // excess decline vs the board
-
-    // Standard error of the difference between the two windows.
-    const seDiff = Math.sqrt(statsBefore.se ** 2 + statsAfter.se ** 2);
-    // Without a control the number is confounded, so demand the full
-    // significance bar rather than the lenient one.
-    const z = controlDelta == null ? Z_CRIT : REVIEW_Z;
-    const bar = Math.max(REVIEW_MIN_HARM, z * seDiff);
-    if (harm > bar) {
-      for (const c of accepted) {
-        state.params[h.market] = { ...(state.params[h.market] || {}) };
-        state.params[h.market][c.parameter] = c.from;   // put it back
-      }
-      state.pinned = state.pinned || {};
-      state.pinned[h.market] = {
-        until: Date.now() + 7 * 24 * 60 * 60 * 1000,
-        because: `reverted ${accepted.map(c => c.parameter).join(', ')} — cost ${harm.toFixed(3)}R over ${span} trades (bar ${bar.toFixed(3)}R)`
-      };
-      reverted.push({
-        market: h.market, at: h.at, span,
-        expectancyBefore: eBefore, expectancyAfter: eAfter, harm, bar, seDiff,
-        marketSwing: rawDelta, controlSwing: controlDelta,
-        parameters: accepted.map(c => ({ parameter: c.parameter, revertedTo: c.from, from: c.to }))
-      });
-      state.reviewed[stamp] = 'reverted';
-    } else {
-      state.reviewed[stamp] = harm < -bar ? 'helped' : 'inconclusive';
-    }
-  }
-  return reverted;
-}
+// What was a real fault, and is fixed: the daily pass re-ran on every restart
+// (see learnedRecently below), which is what actually let the parameters
+// ratchet one way.
 
 export function runLearning({ apply = false } = {}) {
   const markets = Object.keys(BASELINE);
   const results = markets.map(analyseMarket);
-  let reverted = [];
   if (apply) {
     const state = readState();
     state.params = state.params || {};
     state.history = state.history || [];
 
-    // Judge past decisions BEFORE making new ones, so a change that has just
-    // been undone cannot be re-applied in the same pass.
-    reverted = reviewApplied(state);
-
     for (const r of results) {
       if (!r.next) continue;
-      // A market whose last change was reverted is left alone for a week.
-      // Without this the next run re-derives the same change from the same
-      // record and puts it straight back, which is how a parameter ends up
-      // oscillating instead of settling.
-      const pin = state.pinned?.[r.market];
-      if (pin && Date.now() < pin.until) { r.pinned = pin.because; continue; }
       state.params[r.market] = { ...(state.params[r.market] || {}), ...r.next };
       state.history.push({
         at: new Date().toISOString(), market: r.market, sample: r.sample,
@@ -444,7 +318,6 @@ export function runLearning({ apply = false } = {}) {
   return {
     ranAt: new Date().toISOString(),
     applied: results.some(r => r.applied),
-    reverted,
     guardrails: { minSample: MIN_SAMPLE, maxDrift: MAX_DRIFT, step: STEP, minEdge: MIN_EDGE, zCritical: Z_CRIT },
     markets: results
   };
