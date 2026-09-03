@@ -18,6 +18,8 @@ import cryptoRouter from './routes/crypto.js';
 import performanceRouter from './routes/performance.js';
 import { startSignalMonitor } from './lib/signalMonitor.js';
 import { runSelfCheck } from './lib/selfCheck.js';
+import { recordRun, getCheckHistory, getFaultPatterns } from './lib/selfCheckHistory.js';
+import { runDailyReview, getJournal, reviewedToday } from './lib/dailyReview.js';
 import { ALPACA_ENABLED } from './lib/alpaca.js';
 import { COINGECKO_KEYED } from './lib/cryptoContext.js';
 import { runLearning, getLearningState, resetLearning, learnedRecently } from './lib/learning.js';
@@ -59,6 +61,24 @@ app.post('/api/system/learning/reset', (req, res) => {
   catch (err) { res.status(500).json({ error: 'Reset failed', details: err.message }); }
 });
 
+// The end-of-day review: what it produced, what moved, what it changed about
+// itself, what needs watching — and the journal of previous days.
+app.get('/api/system/review', (req, res) => {
+  try {
+    const r = runDailyReview();
+    res.json({ ...r, journal: getJournal(14).map(e => ({ date: e.date, week: e.week, produced: e.produced })) });
+  } catch (err) { res.status(500).json({ error: 'Review failed', details: err.message }); }
+});
+
+// What the check history says: which faults keep coming back, which are
+// persistent, which flap. A single verdict cannot show any of that.
+app.get('/api/system/faults', (req, res) => {
+  try {
+    const market = req.query.market || null;
+    res.json({ ...getFaultPatterns(market), history: getCheckHistory(market).checks });
+  } catch (err) { res.status(500).json({ error: 'Fault history failed', details: err.message }); }
+});
+
 // Self-check — invariants that would have caught the faults found in the
 // audit. Reports only; never changes scanner behaviour.
 app.get('/api/system/selfcheck', async (req, res) => {
@@ -76,7 +96,9 @@ app.get('/api/system/selfcheck', async (req, res) => {
       const r = await fetch(`http://localhost:${PORT}/api/system/sources`);
       sources = (await r.json()).sources;
     } catch { /* ditto */ }
-    res.json(runSelfCheck({ cards, sources, market, scanStats }));
+    const result = runSelfCheck({ cards, sources, market, scanStats });
+    recordRun(result, market);
+    res.json({ ...result, patterns: getFaultPatterns(market).patterns });
   } catch (err) {
     res.status(500).json({ error: 'Self-check failed', details: err.message });
   }
@@ -288,4 +310,49 @@ app.listen(PORT, () => {
   };
   setTimeout(learnPass, 60_000);          // no-ops unless a day has actually passed
   setInterval(() => learnPass({ force: true }), LEARN_EVERY);
+
+  // Check on a clock, not only when somebody opens the page.
+  //
+  // The self-check ran solely on page load, so the software's health was a
+  // function of whether anyone happened to be looking. A fault appearing
+  // overnight, or on a day nobody opened the dashboard, left no trace at all —
+  // and with nothing recorded there was no way to tell a one-off from
+  // something that had been broken for a week. Running it on a timer and
+  // recording the verdict is what makes the history worth having.
+  //
+  // Four-hourly across both markets: often enough to catch a fault the same
+  // day and see a daily rhythm, rare enough that the scan it triggers is not a
+  // meaningful load. Staggered so the two markets never scan at once.
+  const CHECK_EVERY = 4 * 60 * 60 * 1000;
+  const checkPass = async (market) => {
+    try {
+      const r = await fetch(`http://localhost:${PORT}/api/system/selfcheck?market=${market}`);
+      const d = await r.json();
+      if (d.status && d.status !== 'ok') {
+        console.log(`  ⚠ self-check ${market}: ${d.summary}`);
+      }
+      for (const p of d.patterns || []) {
+        console.log(`  ⚠ recurring fault [${market}] ${p.id}: ${p.detail}`);
+      }
+    } catch { /* diagnostic only */ }
+  };
+  // The daily review, once a calendar day. Idempotent by date rather than by
+  // elapsed time, so a free-tier restart cannot write a second entry — the
+  // same fault that had learning re-running on every boot.
+  const reviewPass = () => {
+    try {
+      if (reviewedToday()) return;
+      const { narration, entry } = runDailyReview();
+      const lines = [...narration.bad.map(t => `  ✕ ${t}`), ...narration.watch.map(t => `  ⚠ ${t}`)];
+      console.log(`  📋 Daily review ${entry.date}: ${narration.good.length} good, ${narration.bad.length} bad, ${narration.watch.length} to watch`);
+      for (const l of lines) console.log(l);
+    } catch { /* the review never breaks the server */ }
+  };
+  setTimeout(reviewPass, 8 * 60_000);
+  setInterval(reviewPass, 60 * 60_000);   // hourly poll; the date check gates it
+
+  setTimeout(() => checkPass('stocks'), 3 * 60_000);
+  setTimeout(() => checkPass('crypto'), 5 * 60_000);
+  setInterval(() => checkPass('stocks'), CHECK_EVERY);
+  setTimeout(() => setInterval(() => checkPass('crypto'), CHECK_EVERY), 30 * 60_000);
 });

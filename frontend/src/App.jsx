@@ -42,6 +42,7 @@ export default function App() {
   const [health, setHealth] = useState(null);
   const [learning, setLearning] = useState(null);
   const [goals, setGoals] = useState(null);
+  const [review, setReview] = useState(null);
   const [marketsOpen, setMarketsOpen] = useState(false);
   const headerRef = useRef(null);
   const marketsRef = useRef(null);
@@ -127,6 +128,11 @@ export default function App() {
     fetch('/api/system/goals')
       .then(r => r.json())
       .then(setGoals)
+      .catch(() => {});
+    // The end-of-day review: what it produced, what moved, what it changed.
+    fetch('/api/system/review')
+      .then(r => r.json())
+      .then(setReview)
       .catch(() => {});
     syncSignalBackup().catch(() => {});
   }, []);
@@ -253,11 +259,56 @@ export default function App() {
       </header>
 
       {/* Data-source panel — every feed and what it drives */}
+      {/* Yesterday against today, in four lines. Every number here existed
+          already and none of them were ever put side by side, so a slow slide
+          — volume drying up, expectancy sliding after a parameter moved — was
+          only visible to someone who remembered last week's figures. */}
+      {showSources && review?.narration && (
+        <div className="mx-4 mt-3 p-3 rounded border border-[#1a1a1a] bg-[#0a0a0a]">
+          <div className="text-[10px] uppercase tracking-widest text-[#666] font-mono mb-2">
+            Daily review — {review.entry?.date}
+          </div>
+          <div className="space-y-1">
+            {[['good', '\u2713', 'text-green-400'],
+              ['bad', '\u2715', 'text-red-400'],
+              ['changed', '\u2192', 'text-[#888]'],
+              ['watch', '\u26a0', 'text-amber-400']].map(([key, mark, cls]) =>
+              (review.narration[key] || []).map((line, i) => (
+                <div key={key + i} className="flex items-start gap-2 text-[11px] font-mono">
+                  <span className={cls}>{mark}</span>
+                  <span className="text-[#888] flex-1">{line}</span>
+                </div>
+              ))
+            )}
+            {!['good','bad','changed','watch'].some(k => review.narration[k]?.length) && (
+              <div className="text-[11px] font-mono text-[#555]">Nothing material today</div>
+            )}
+          </div>
+        </div>
+      )}
+
       {showSources && health && health.checks && (
         <div className="mx-4 mt-3 p-3 rounded border border-[#1a1a1a] bg-[#0a0a0a]">
           <div className="text-[10px] uppercase tracking-widest text-[#666] font-mono mb-2">
             Self-check — {health.summary}
           </div>
+          {/* What the history says, above the current verdict. A single run
+              cannot tell a one-off from something that has broken four times
+              since it was "fixed", and the second is the one worth acting on:
+              it means the last fix treated a symptom. Only recurrence and
+              persistence appear here — listing every blip would train you to
+              stop reading the panel. */}
+          {health.patterns?.length > 0 && (
+            <div className="mb-2 pb-2 border-b border-[#1a1a1a] space-y-1">
+              {health.patterns.map(p => (
+                <div key={p.id} className="flex items-start gap-2 text-[11px] font-mono">
+                  <span className="text-amber-400">↻</span>
+                  <span className="text-amber-400/90 w-44 flex-shrink-0">{p.severity}</span>
+                  <span className="text-[#888] flex-1">{p.id} — {p.detail}</span>
+                </div>
+              ))}
+            </div>
+          )}
           <div className="space-y-1.5">
             {health.checks.filter(c => c.status !== 'skip').map(c => (
               <div key={c.id} className="flex items-start gap-2 text-[11px] font-mono">
