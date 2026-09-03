@@ -46,6 +46,27 @@ function persist() {
   } catch { /* history is a diagnostic; never break the server over it */ }
 }
 
+/**
+ * When did a check for this market last run? Read off disk, not off a timer.
+ *
+ * The scheduled check fires shortly after boot, and Render's free tier
+ * restarts the service on every visit that follows an idle spell. Left
+ * ungated that meant a full scan a few minutes after every wake — the same
+ * fault that had learning re-running on every restart, and more costly here
+ * because the check drives a 150-symbol scan that competes for the same
+ * rate-limited quote budget the user's own page load is using.
+ */
+export function lastRunAt(market) {
+  load();
+  const mine = runs.filter(r => !market || r.market === market);
+  return mine.length ? mine[mine.length - 1].at : null;
+}
+
+export function checkedRecently(market, windowMs) {
+  const at = lastRunAt(market);
+  return at != null && (Date.now() - at) < windowMs;
+}
+
 /** Record one self-check result. Stores verdicts only, not the prose. */
 export function recordRun(result, market) {
   if (!result?.checks) return;

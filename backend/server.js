@@ -18,7 +18,7 @@ import cryptoRouter from './routes/crypto.js';
 import performanceRouter from './routes/performance.js';
 import { startSignalMonitor } from './lib/signalMonitor.js';
 import { runSelfCheck } from './lib/selfCheck.js';
-import { recordRun, getCheckHistory, getFaultPatterns } from './lib/selfCheckHistory.js';
+import { recordRun, getCheckHistory, getFaultPatterns, checkedRecently } from './lib/selfCheckHistory.js';
 import { runDailyReview, getJournal, reviewedToday } from './lib/dailyReview.js';
 import { assessHypotheses } from './lib/hypotheses.js';
 import { ALPACA_ENABLED } from './lib/alpaca.js';
@@ -331,8 +331,13 @@ app.listen(PORT, () => {
   // day and see a daily rhythm, rare enough that the scan it triggers is not a
   // meaningful load. Staggered so the two markets never scan at once.
   const CHECK_EVERY = 4 * 60 * 60 * 1000;
-  const checkPass = async (market) => {
+  const checkPass = async (market, { force = false } = {}) => {
     try {
+      // Gated off the recorded history rather than the process clock: a
+      // restart is not a new interval. Without this the free tier ran a
+      // 150-symbol scan minutes after every wake, competing for the same
+      // rate-limited quote budget as the page load that woke it.
+      if (!force && checkedRecently(market, CHECK_EVERY)) return;
       const r = await fetch(`http://localhost:${PORT}/api/system/selfcheck?market=${market}`);
       const d = await r.json();
       if (d.status && d.status !== 'ok') {
@@ -360,6 +365,6 @@ app.listen(PORT, () => {
 
   setTimeout(() => checkPass('stocks'), 3 * 60_000);
   setTimeout(() => checkPass('crypto'), 5 * 60_000);
-  setInterval(() => checkPass('stocks'), CHECK_EVERY);
-  setTimeout(() => setInterval(() => checkPass('crypto'), CHECK_EVERY), 30 * 60_000);
+  setInterval(() => checkPass('stocks', { force: true }), CHECK_EVERY);
+  setTimeout(() => setInterval(() => checkPass('crypto', { force: true }), CHECK_EVERY), 30 * 60_000);
 });

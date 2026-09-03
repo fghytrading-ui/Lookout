@@ -165,10 +165,19 @@ export function narrate(entry, previous) {
   }
 
   // Goals, stated once, without repeating the arithmetic above.
-  if (entry.goals?.status && entry.goals.status !== 'ok') {
-    bad.push(`Goals: ${entry.goals.headline}`);
-  } else if (entry.goals?.status === 'ok') {
+  //
+  // "Waiting" is not bad news. The goal tracker reports `waiting` while it
+  // accumulates trades under the settings currently in force, which is its
+  // normal state for weeks after any change — filing that under BAD put a red
+  // cross on the review every single day for a condition that means nothing is
+  // wrong, and a review that cries wolf daily stops being read.
+  const gs = entry.goals?.status;
+  if (gs === 'ok') {
     good.push(`Goals: ${entry.goals.headline}`);
+  } else if (gs === 'waiting') {
+    watch.push(`Goals: ${entry.goals.headline}`);
+  } else if (gs) {
+    bad.push(`Goals: ${entry.goals.headline}`);
   }
 
   // What the software changed about itself.
