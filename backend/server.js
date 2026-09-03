@@ -20,7 +20,7 @@ import { startSignalMonitor } from './lib/signalMonitor.js';
 import { runSelfCheck } from './lib/selfCheck.js';
 import { ALPACA_ENABLED } from './lib/alpaca.js';
 import { COINGECKO_KEYED } from './lib/cryptoContext.js';
-import { runLearning, getLearningState, resetLearning } from './lib/learning.js';
+import { runLearning, getLearningState, resetLearning, learnedRecently } from './lib/learning.js';
 import { assessGoals } from './lib/goals.js';
 import { isMarketOpen, getSession, getEntryTiming } from './utils/market.js';
 import { startAutoPersist } from './lib/persistentCache.js';
@@ -270,9 +270,16 @@ app.listen(PORT, () => {
   // parameter that can only shift once a day cannot be whipped around by one
   // unusual session.
   const LEARN_EVERY = 24 * 60 * 60 * 1000;
-  const learnPass = () => {
+  const learnPass = ({ force = false } = {}) => {
     try {
+      // Daily means daily, measured from the last pass that actually ran and
+      // not from this process starting. A free-tier restart is not a new day.
+      if (!force && learnedRecently(LEARN_EVERY)) return;
       const r = runLearning({ apply: true });
+      for (const rv of r.reverted || []) {
+        console.log(`  ↩ learning: ${rv.market} reverted ${rv.parameters.map(p => `${p.parameter} ${p.from} -> ${p.revertedTo}`).join(', ')}`
+          + ` (cost ${rv.harm.toFixed(3)}R over ${rv.span} trades)`);
+      }
       const changed = r.markets.filter(m => m.applied);
       if (changed.length) {
         for (const m of changed) {
@@ -283,6 +290,6 @@ app.listen(PORT, () => {
       }
     } catch { /* never let learning break the server */ }
   };
-  setTimeout(learnPass, 60_000);          // once shortly after boot
-  setInterval(learnPass, LEARN_EVERY);
+  setTimeout(learnPass, 60_000);          // no-ops unless a day has actually passed
+  setInterval(() => learnPass({ force: true }), LEARN_EVERY);
 });

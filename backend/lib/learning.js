@@ -33,6 +33,7 @@
 import fs from 'fs';
 import path from 'path';
 import { getAllSignals } from './signalLog.js';
+import { expectancyOf } from './realisedR.js';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const STATE_FILE = path.join(DATA_DIR, 'learning-state.json');
@@ -224,15 +225,101 @@ export function analyseMarket(market) {
 }
 
 /** Analyse every market. `apply` writes the accepted changes. */
+// ── Did the last change actually help? ───────────────────────────────────
+//
+// Learning moved parameters and never once looked back at whether its own
+// decisions worked. That is the half of a feedback loop that makes it a loop:
+// without it a run can only ever ratchet further in the direction it last
+// went, re-optimising on a record its own previous change shaped. The live
+// history shows exactly that drift — stocks maxStopPct 0.040 -> 0.035 ->
+// 0.0305 and crypto targetR 1.25 -> 1.15 -> 1.05, one direction, never back.
+//
+// So each applied change is now judged once enough trades have run under it.
+// Compare realised expectancy on trades signalled after the change against
+// the same window before it. If it is materially WORSE, the change is undone
+// and the parameter pinned so the next run cannot immediately redo it.
+//
+// Deliberately asymmetric: a change must clear MIN_EDGE with significance to
+// be made, but only has to be clearly worse to be undone. Reverting to a
+// known state is much cheaper than staying somewhere the evidence says is
+// losing money.
+const REVIEW_MIN_TRADES = 30;    // resolved trades under a change before judging it
+const REVIEW_MIN_HARM   = 0.05;  // R per trade it must be worse by to be undone
+
+function reviewApplied(state) {
+  const reverted = [];
+  const history = state.history || [];
+  state.reviewed = state.reviewed || {};
+
+  for (let i = history.length - 1; i >= 0; i--) {
+    const h = history[i];
+    const stamp = `${h.at}|${h.market}`;
+    if (state.reviewed[stamp]) continue;
+    const accepted = (h.changes || []).filter(c => c.accepted);
+    if (!accepted.length) { state.reviewed[stamp] = 'no-change'; continue; }
+
+    const at = Date.parse(h.at);
+    if (!Number.isFinite(at)) { state.reviewed[stamp] = 'bad-timestamp'; continue; }
+
+    const closed = getAllSignals().filter(s =>
+      s.status === 'CLOSED' && s.market === h.market && Number.isFinite(s.signaledAt));
+    const after  = closed.filter(s => s.signaledAt >= at);
+    const before = closed.filter(s => s.signaledAt <  at);
+    if (after.length < REVIEW_MIN_TRADES || before.length < REVIEW_MIN_TRADES) continue;  // not ripe yet
+
+    // Same window each side so a change is not judged against a different era.
+    const span = Math.min(after.length, before.length);
+    const beforeRows = before.slice(-span);
+    const afterRows  = after.slice(0, span);
+    const eBefore = expectancyOf(beforeRows).mean;
+    const eAfter  = expectancyOf(afterRows).mean;
+    if (eBefore == null || eAfter == null) continue;
+
+    const harm = eBefore - eAfter;
+    if (harm > REVIEW_MIN_HARM) {
+      for (const c of accepted) {
+        state.params[h.market] = { ...(state.params[h.market] || {}) };
+        state.params[h.market][c.parameter] = c.from;   // put it back
+      }
+      state.pinned = state.pinned || {};
+      state.pinned[h.market] = {
+        until: Date.now() + 7 * 24 * 60 * 60 * 1000,
+        because: `reverted ${accepted.map(c => c.parameter).join(', ')} — cost ${harm.toFixed(3)}R over ${span} trades`
+      };
+      reverted.push({
+        market: h.market, at: h.at, span,
+        expectancyBefore: eBefore, expectancyAfter: eAfter, harm,
+        parameters: accepted.map(c => ({ parameter: c.parameter, revertedTo: c.from, from: c.to }))
+      });
+      state.reviewed[stamp] = 'reverted';
+    } else {
+      state.reviewed[stamp] = harm < -REVIEW_MIN_HARM ? 'helped' : 'neutral';
+    }
+  }
+  return reverted;
+}
+
 export function runLearning({ apply = false } = {}) {
   const markets = Object.keys(BASELINE);
   const results = markets.map(analyseMarket);
+  let reverted = [];
   if (apply) {
     const state = readState();
     state.params = state.params || {};
     state.history = state.history || [];
+
+    // Judge past decisions BEFORE making new ones, so a change that has just
+    // been undone cannot be re-applied in the same pass.
+    reverted = reviewApplied(state);
+
     for (const r of results) {
       if (!r.next) continue;
+      // A market whose last change was reverted is left alone for a week.
+      // Without this the next run re-derives the same change from the same
+      // record and puts it straight back, which is how a parameter ends up
+      // oscillating instead of settling.
+      const pin = state.pinned?.[r.market];
+      if (pin && Date.now() < pin.until) { r.pinned = pin.because; continue; }
       state.params[r.market] = { ...(state.params[r.market] || {}), ...r.next };
       state.history.push({
         at: new Date().toISOString(), market: r.market, sample: r.sample,
@@ -242,6 +329,11 @@ export function runLearning({ apply = false } = {}) {
     }
     state.history = state.history.slice(-200);
     state.updatedAt = new Date().toISOString();
+    // Persisted so a restart cannot re-trigger a pass that is meant to be
+    // daily. Render's free tier spins the service down whenever it is idle,
+    // so "once shortly after boot" was firing on every visit: the live history
+    // has two stocks changes 96 minutes apart against a 24h design.
+    state.lastRunAt = state.updatedAt;
 
     // Trades signalled before a parameter moved were produced by different
     // settings, so the goal tracker must not pool them with what came after.
@@ -279,6 +371,7 @@ export function runLearning({ apply = false } = {}) {
   return {
     ranAt: new Date().toISOString(),
     applied: results.some(r => r.applied),
+    reverted,
     guardrails: { minSample: MIN_SAMPLE, maxDrift: MAX_DRIFT, step: STEP, minEdge: MIN_EDGE, zCritical: Z_CRIT },
     markets: results
   };
@@ -291,3 +384,17 @@ export function resetLearning() {
 }
 
 export function getLearningState() { return readState(); }
+
+/**
+ * Has a learning pass already run inside the window?
+ *
+ * The daily interval only holds for a process that stays up. Render's free
+ * tier spins the service down whenever it is idle and restarts it on the next
+ * visit, so the boot trigger was running on every visit and the "once a day"
+ * guarantee never existed in production — the live history carries two stocks
+ * changes 96 minutes apart. The answer has to come off disk, not off a timer.
+ */
+export function learnedRecently(windowMs = 24 * 60 * 60 * 1000) {
+  const at = Date.parse(readState().lastRunAt || '');
+  return Number.isFinite(at) && (Date.now() - at) < windowMs;
+}
