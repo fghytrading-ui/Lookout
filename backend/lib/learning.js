@@ -264,6 +264,38 @@ const REVIEW_MIN_TRADES = 60;    // resolved trades under a change before judgin
 const REVIEW_MIN_HARM   = 0.05;  // floor, in R per trade
 const REVIEW_Z          = 1.0;   // standard errors of the difference it must also clear
 
+// How the OTHER markets moved across the same date, in R per trade. Returns
+// null when no other market has enough trades on both sides to say — in which
+// case the caller has no control and must judge on the absolute figure alone,
+// with a stricter bar.
+// A control is only a control if IT did not change. Crypto moved targetR twice
+// in the same days the stocks ceiling moved, and a market carrying its own
+// parameter change cannot stand in for "what the board did anyway".
+function controlSwing(market, at, allClosed, history = []) {
+  const WINDOW = 30 * 24 * 60 * 60 * 1000;
+  const contaminated = new Set(
+    (history || [])
+      .filter(e => (e.changes || []).some(c => c.accepted))
+      .filter(e => Math.abs(Date.parse(e.at) - at) < WINDOW)
+      .map(e => e.market)
+  );
+  const swings = [];
+  for (const m of Object.keys(BASELINE)) {
+    if (m === market || contaminated.has(m)) continue;
+    const rows = allClosed.filter(s => s.market === m);
+    const before = rows.filter(s => s.signaledAt < at);
+    const after  = rows.filter(s => s.signaledAt >= at);
+    if (before.length < 20 || after.length < 20) continue;
+    const eB = expectancyOf(before).mean, eA = expectancyOf(after).mean;
+    if (eB == null || eA == null) continue;
+    swings.push(eA - eB);
+  }
+  if (!swings.length) return null;
+  swings.sort((a, b) => a - b);
+  const mid = Math.floor(swings.length / 2);
+  return swings.length % 2 ? swings[mid] : (swings[mid - 1] + swings[mid]) / 2;
+}
+
 function reviewApplied(state) {
   const reverted = [];
   const history = state.history || [];
@@ -280,9 +312,10 @@ function reviewApplied(state) {
     if (!Number.isFinite(at)) { state.reviewed[stamp] = 'bad-timestamp'; continue; }
 
     const closed = getAllSignals().filter(s =>
-      s.status === 'CLOSED' && s.market === h.market && Number.isFinite(s.signaledAt));
-    const after  = closed.filter(s => s.signaledAt >= at);
-    const before = closed.filter(s => s.signaledAt <  at);
+      s.status === 'CLOSED' && Number.isFinite(s.signaledAt));
+    const mine   = closed.filter(s => s.market === h.market);
+    const after  = mine.filter(s => s.signaledAt >= at);
+    const before = mine.filter(s => s.signaledAt <  at);
     if (after.length < REVIEW_MIN_TRADES || before.length < REVIEW_MIN_TRADES) continue;  // not ripe yet
 
     // Same window each side so a change is not judged against a different era.
@@ -295,10 +328,26 @@ function reviewApplied(state) {
     if (eBefore == null || eAfter == null) continue;
     if (statsBefore.se == null || statsAfter.se == null) continue;
 
-    const harm = eBefore - eAfter;
+    // Measure the change against the markets that did NOT change, over the
+    // same dates. Before-and-after alone cannot tell a bad setting from a bad
+    // fortnight, and on this record that is not hypothetical: across the same
+    // split, stocks went +0.200R -> -0.301R and crypto went +0.205R -> -0.271R,
+    // two markets on different settings falling together by almost exactly the
+    // same amount. A plain before/after test reads that as the stocks
+    // parameter costing 0.5R and reverts a setting that had nothing to do with
+    // it. What matters is how far this market moved RELATIVE to the rest.
+    const controlDelta = controlSwing(h.market, at, closed, history);
+    const rawDelta = eAfter - eBefore;                      // negative = got worse
+    const harm = controlDelta == null
+      ? -(rawDelta)                                         // no control: fall back
+      : (controlDelta - rawDelta);                          // excess decline vs the board
+
     // Standard error of the difference between the two windows.
     const seDiff = Math.sqrt(statsBefore.se ** 2 + statsAfter.se ** 2);
-    const bar = Math.max(REVIEW_MIN_HARM, REVIEW_Z * seDiff);
+    // Without a control the number is confounded, so demand the full
+    // significance bar rather than the lenient one.
+    const z = controlDelta == null ? Z_CRIT : REVIEW_Z;
+    const bar = Math.max(REVIEW_MIN_HARM, z * seDiff);
     if (harm > bar) {
       for (const c of accepted) {
         state.params[h.market] = { ...(state.params[h.market] || {}) };
@@ -312,6 +361,7 @@ function reviewApplied(state) {
       reverted.push({
         market: h.market, at: h.at, span,
         expectancyBefore: eBefore, expectancyAfter: eAfter, harm, bar, seDiff,
+        marketSwing: rawDelta, controlSwing: controlDelta,
         parameters: accepted.map(c => ({ parameter: c.parameter, revertedTo: c.from, from: c.to }))
       });
       state.reviewed[stamp] = 'reverted';
