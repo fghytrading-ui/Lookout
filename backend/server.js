@@ -20,6 +20,7 @@ import { startSignalMonitor } from './lib/signalMonitor.js';
 import { runSelfCheck } from './lib/selfCheck.js';
 import { recordRun, getCheckHistory, getFaultPatterns } from './lib/selfCheckHistory.js';
 import { runDailyReview, getJournal, reviewedToday } from './lib/dailyReview.js';
+import { assessHypotheses } from './lib/hypotheses.js';
 import { ALPACA_ENABLED } from './lib/alpaca.js';
 import { COINGECKO_KEYED } from './lib/cryptoContext.js';
 import { runLearning, getLearningState, resetLearning, learnedRecently } from './lib/learning.js';
@@ -68,6 +69,12 @@ app.get('/api/system/review', (req, res) => {
     const r = runDailyReview();
     res.json({ ...r, journal: getJournal(14).map(e => ({ date: e.date, week: e.week, produced: e.produced })) });
   } catch (err) { res.status(500).json({ error: 'Review failed', details: err.message }); }
+});
+
+// Candidate edges and how close each is to being settled. Reports only.
+app.get('/api/system/hypotheses', (req, res) => {
+  try { res.json(assessHypotheses()); }
+  catch (err) { res.status(500).json({ error: 'Hypothesis check failed', details: err.message }); }
 });
 
 // What the check history says: which faults keep coming back, which are

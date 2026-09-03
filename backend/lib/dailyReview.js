@@ -28,6 +28,7 @@ import { expectancyOf } from './realisedR.js';
 import { assessGoals } from './goals.js';
 import { getLearningState } from './learning.js';
 import { getFaultPatterns } from './selfCheckHistory.js';
+import { provenHypotheses } from './hypotheses.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, '..', 'data');
@@ -107,6 +108,12 @@ export function buildReview(now = Date.now()) {
   let faults = { patterns: [] };
   try { faults = getFaultPatterns(); } catch { /* ditto */ }
 
+  // Candidate edges that have finally reached the sample needed to settle
+  // them. Silent until then, which is the point — a lead is only worth
+  // reading on the day it becomes a decision.
+  let proven = [];
+  try { proven = provenHypotheses(); } catch { /* ditto */ }
+
   return {
     at: now,
     date: new Date(now).toISOString().slice(0, 10),
@@ -123,7 +130,8 @@ export function buildReview(now = Date.now()) {
       changes: (h.changes || []).filter(c => c.accepted)
         .map(c => ({ parameter: c.parameter, from: c.from, to: c.to, evidence: c.evidence }))
     })),
-    faults: faults.patterns || []
+    faults: faults.patterns || [],
+    proven
   };
 }
 
@@ -172,6 +180,13 @@ export function narrate(entry, previous) {
   if (!entry.changes.length && previous) {
     const sameParams = JSON.stringify(entry.params) === JSON.stringify(previous.params);
     if (sameParams) changed.push('Settings unchanged');
+  }
+
+  // A hypothesis reaching significance is the rarest and most valuable line
+  // this review can print, so it goes in on its own terms rather than being
+  // filed under "watch".
+  for (const p of entry.proven || []) {
+    good.push(`Settled: ${p.question} — ${p.verdict}`);
   }
 
   // Faults worth acting on — recurrence, not blips.
