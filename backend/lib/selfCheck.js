@@ -19,6 +19,7 @@
 import { getAllSignals } from './signalLog.js';
 import { assessGoals } from './goals.js';
 import { getLearnedParams } from './learning.js';
+import { MIN_RR } from '../utils/signals.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -147,12 +148,52 @@ function checkGeometry(cards) {
 // ── 6. Data sources actually answering ───────────────────────────────
 function checkSources(sources) {
   if (!sources?.length) return skip('sources', 'Data sources', 'Source status unavailable');
+  // Storage is judged by its own check below, which fails rather than warns.
+  sources = sources.filter(s => s.name !== 'Durable storage');
   const dead = sources.filter(s => !s.active);
   if (dead.length) {
     return warn('sources', 'Data sources', `${dead.length} inactive: ${dead.map(d => d.name).join(', ')}`,
       'A source that is down changes what the scanner can see, quietly');
   }
   return ok('sources', 'Data sources', `${sources.length} of ${sources.length} answering`);
+}
+
+// ── 6a. Learned targets the board can actually use ──────────────────
+// A learned target below the scanner's minimum reward:risk does not make the
+// cards tighter, it deletes them — every setup then fails the R:R gate and the
+// market goes silent with no error. That happened to crypto on 2026-10-02
+// (target walked to 0.88R against a 1.15 floor). Learning now refuses such a
+// target; this checks the stored value directly, so the cause is named before
+// the empty board is the only symptom.
+function checkLearnedTargets() {
+  const bad = [];
+  for (const m of ['stocks', 'crypto', 'commodities', 'forex']) {
+    const p = getLearnedParams(m);
+    if (Number.isFinite(p.targetR) && p.targetR < MIN_RR) bad.push(`${m} ${p.targetR}R`);
+  }
+  if (bad.length) {
+    return fail('targets', 'Learned targets usable',
+      `${bad.join(', ')} — below the ${MIN_RR} reward:risk floor, so every card in that market is rejected`,
+      'The next learning pass restores it; until then that board is empty');
+  }
+  return ok('targets', 'Learned targets usable', `every market's target clears the ${MIN_RR} floor`);
+}
+
+// ── 6b. What it learns is actually kept ──────────────────────────────
+// For the whole of September every check here passed while the live site lost
+// every trade it made: each check looked at the state inside one process, and
+// each process had a fresh copy of the seed. Nothing compared against
+// yesterday because yesterday was gone. So this asks the structural question
+// directly — will the record survive the next restart? — and fails, not
+// warns, because the cost is every result from now until somebody notices.
+function checkPersistence(sources) {
+  const row = sources?.find(s => s.name === 'Durable storage');
+  if (!row) return skip('persistence', 'Record survives restarts', 'Storage status unavailable');
+  if (!row.active) {
+    return fail('persistence', 'Record survives restarts', row.note,
+      'Trades, learning, reviews and fault history are lost on every restart until this is fixed');
+  }
+  return ok('persistence', 'Record survives restarts', row.note || 'durable store connected and saving');
 }
 
 // ── 7. Tracking still recording ──────────────────────────────────────
@@ -353,6 +394,8 @@ export function runSelfCheck({ cards = null, sources = null, market = null, scan
     checkGeometry(cards),
     checkForConstants(cards),
     checkSources(sources),
+    checkPersistence(sources),
+    checkLearnedTargets(),
     checkSignalVolume(signals),
     checkFillRate(signals),
     checkCalibrationLands(cards, market),

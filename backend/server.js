@@ -26,7 +26,9 @@ import { COINGECKO_KEYED } from './lib/cryptoContext.js';
 import { runLearning, getLearningState, resetLearning, learnedRecently } from './lib/learning.js';
 import { assessGoals } from './lib/goals.js';
 import { isMarketOpen, getSession, getEntryTiming } from './utils/market.js';
-import { startAutoPersist } from './lib/persistentCache.js';
+import { startAutoPersist, persistAll } from './lib/persistentCache.js';
+import { hydrate, startDurableSync, flushDurable, getDurableStatus } from './lib/durableStore.js';
+import { flushSignalLog } from './lib/signalLog.js';
 import { POLYGON_ENABLED } from './lib/marketData.js';
 import { FINNHUB_ENABLED, getFinnhubHealth } from './lib/finnhub.js';
 
@@ -171,7 +173,27 @@ app.get('/api/system/sources', async (req, res) => {
     })
   ]);
 
+  // Durable storage is listed with the data feeds because it is one: without it
+  // nothing the system learns survives the next restart. It was missing from
+  // this panel for the whole of September while live lost every trade it
+  // made, and nothing anywhere said so.
+  const durable = getDurableStatus();
+  const durableFailing = durable.lastErrorAt &&
+    (!durable.lastPushAt || durable.lastErrorAt > durable.lastPushAt);
+  const durableRow = !durable.onRender
+    ? { active: true, note: 'local disk — persists on this machine', noteLevel: 'info' }
+    : !durable.configured
+      ? { active: false, noteLevel: 'warn',
+          note: 'not set up — every restart wipes the trade record and what it learned' }
+      : !durable.hydrated
+        ? { active: false, noteLevel: 'warn',
+            note: `cannot reach the store${durable.lastError ? ` (${durable.lastError})` : ''} — saving paused so nothing is overwritten` }
+        : durableFailing
+          ? { active: false, noteLevel: 'warn', note: `last save failed (${durable.lastError})` }
+          : { active: true, note: null, noteLevel: 'info' };
+
   const sources = [
+    { name: 'Durable storage', drives: 'Keeps trades, learning and reviews across restarts', ...durableRow },
     // Added when Alpaca came in. A feed doing most of the heavy lifting and
     // absent from the panel is a feed nobody can tell has stopped — the key
     // lives in .env where it cannot be seen, so this line is the only place
@@ -286,12 +308,39 @@ if (fs.existsSync(FRONTEND_DIR)) {
   });
 }
 
+// Pull the durable record down BEFORE the server accepts a request or starts
+// a timer. Every module reads its state lazily from disk on first use, so as
+// long as the files are in place first, nothing else needs to know the disk
+// is not the source of truth. Without this, live ran a month on a wiped disk.
+await hydrate();
+
+// One shutdown path for every save. Best effort only: Render does not document
+// a shutdown signal for free services, so the minute-by-minute push is what
+// actually protects the record. Bounded so a slow network cannot hang exit.
+let shuttingDown = false;
+async function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  try { persistAll(); } catch { /* caches only */ }
+  try { flushSignalLog(); } catch { /* best effort */ }
+  try {
+    await Promise.race([
+      (async () => { await flushDurable(); await flushDurable(); })(),
+      new Promise(r => setTimeout(r, 8000))
+    ]);
+  } catch { /* best effort */ }
+  process.exit(0);
+}
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
+
 app.listen(PORT, () => {
   console.log(`\n  ███████████████████████████████████`);
   console.log(`  ██  PROJECT LOOK OUT  —  LIVE  ██`);
   console.log(`  ███████████████████████████████████`);
   console.log(`\n  Backend running on http://localhost:${PORT}\n`);
   startAutoPersist();
+  startDurableSync();
   startSignalMonitor();
 
   // Re-examine the tracked record daily and apply anything that clears the

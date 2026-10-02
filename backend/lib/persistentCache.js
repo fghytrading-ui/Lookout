@@ -46,7 +46,7 @@ let persistTimer = null;
 export function startAutoPersist(intervalMs = 30_000) {
   if (persistTimer) return;
   persistTimer = setInterval(persistAll, intervalMs);
-  // Persist on graceful shutdown
-  process.on('SIGINT',  () => { persistAll(); process.exit(0); });
-  process.on('SIGTERM', () => { persistAll(); process.exit(0); });
+  // Shutdown is handled once, in server.js. These handlers used to call
+  // process.exit(0) synchronously, which would cut off any other save still
+  // in progress — including the durable push that keeps the trade record.
 }

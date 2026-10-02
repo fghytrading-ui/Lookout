@@ -32,3 +32,11 @@ services:
       # market cap are missing from the crypto bar and the analyst's context.
       - key: COINGECKO_API_KEY
         sync: false   # User adds via Render dashboard (not in git)
+      # Durable storage. Render's free tier wipes the disk on every restart and
+      # spin-down, and for the whole of September the live site lost every
+      # trade, every learned setting and every daily review that way. Upstash
+      # Redis (free, durable to disk) keeps them; see backend/lib/durableStore.js.
+      - key: UPSTASH_REDIS_REST_URL
+        sync: false   # User adds via Render dashboard (not in git)
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false   # User adds via Render dashboard (not in git)
