@@ -32,9 +32,16 @@
 // reviewer — those are judgement, not arithmetic.
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { getAllSignals } from './signalLog.js';
+import { MIN_RR } from '../utils/signals.js';
 
-const DATA_DIR = path.join(process.cwd(), 'data');
+// Anchored to this file, not to wherever the process was started. It was
+// process.cwd(), so the state landed in backend/data when started the way
+// Render starts it (cd backend && node server.js) and in a stray data/ at the
+// repo root when started from there — two copies of the learning state that
+// silently disagreed, one of which the durable store would never see.
+const DATA_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data');
 const STATE_FILE = path.join(DATA_DIR, 'learning-state.json');
 
 const MIN_SAMPLE = 60;      // resolved trades before anything moves
@@ -64,8 +71,14 @@ const BASELINE = {
   // effect. The self-check caught it: set to 1.00, producing 1.55.
   stocks:      { targetR: 1.25, maxStopPct: 0.040 },
   crypto:      { targetR: 1.25, maxStopPct: 0.060 },
-  commodities: { targetR: 1.1, maxStopPct: 0.060 },
-  forex:       { targetR: 1.0, maxStopPct: 0.020 }
+  // Commodities and forex sat at 1.1 and 1.0, under the 1.15 reward:risk
+  // floor — the same fault fixed for stocks above: every card that did not get
+  // a trend bonus was rejected, so the floor, not the setting, chose the
+  // trades. Found 2026-10-02 by the learned-target self-check. 1.2 is the first
+  // card ratio that clears the floor. Both markets are off the board; this
+  // keeps them correct for the day they come back.
+  commodities: { targetR: 1.2, maxStopPct: 0.060 },
+  forex:       { targetR: 1.2, maxStopPct: 0.020 }
 };
 
 function readState() {
@@ -90,7 +103,11 @@ export function getLearnedParams(market) {
 // direction, in absolute price terms, so any target can be tested against it.
 function excursions(market) {
   return getAllSignals()
-    .filter(s => s.status === 'CLOSED' && s.market === market)
+    // Never-filled orders were never positions. Left in, each one entered the
+    // simulation as a 0R non-win: it diluted every target comparison toward
+    // zero and, in the ceiling test, counted as a loss against whatever band it
+    // sat in — 84 of them, inflating how bad a band looked.
+    .filter(s => s.status === 'CLOSED' && s.market === market && s.closeReason !== 'NEVER_FILLED')
     .map(s => {
       const { entry, sl, tp, mfePct, maePct } = s;
       if (!entry || !sl || !tp || mfePct == null || maePct == null) return null;
@@ -112,18 +129,31 @@ function excursions(market) {
     .filter(Boolean);
 }
 
-// Expectancy in R for a given target, under the real scale-out plan:
-// a third at 30% of TP1 with the stop then to breakeven, a third at TP1,
-// the runner at 1.2x TP1.
+// Expectancy in R for a given target, under the exit actually in use: the
+// whole position closes at the target (since 2026-08-31, c9d1e32).
+//
+// This simulated the OLD plan — a third at 30% of TP1 with the stop to
+// breakeven, a third at TP1, a runner at 1.2x — for a month after that plan
+// was retired, so learning was choosing targets for an exit nobody was taking.
+// It mattered: under thirds the stock target looked worth moving 1.25 -> 1.08
+// for +0.044R out-of-sample, and that figure was reported as a real gain.
+// Under the single exit the same walk-forward picks the same 1.08 but the gain
+// is +0.006 to +0.024R, under the floor — across 0.9 to 1.6 the stock curve is
+// flat to within 0.03R. The lever was never there. Crypto is the opposite: the
+// closer target helps MORE under single exit, +0.11 to +0.12R out-of-sample.
+//
+// Trades taken under thirds that were stopped at breakeven after banking the
+// first third have an MFE cut short by that stop; what they would have done
+// under single exit is unknowable, so they settle where they actually closed
+// unless their recorded run already reached the candidate target. That leans
+// slightly against far targets for those trades and is the honest limit of
+// what the record can say.
 function expectancy(rows, targetR) {
   if (!rows.length) return 0;
   let tot = 0;
   for (const r of rows) {
-    const tp0 = 0.30 * targetR * r.risk, tp1 = targetR * r.risk, tp2 = 1.2 * targetR * r.risk;
-    if      (r.mfe >= tp2)  tot += (0.3 * targetR) / 3 + targetR / 3 + (1.2 * targetR) / 3;
-    else if (r.mfe >= tp1)  tot += (0.3 * targetR) / 3 + targetR / 3;
-    else if (r.mfe >= tp0)  tot += (0.3 * targetR) / 3;
-    else if (r.mae >= r.risk) tot += -1.0;
+    if      (r.mfe >= targetR * r.risk) tot += targetR;
+    else if (r.mae >= r.risk)           tot += -1.0;
     else tot += r.settleR ?? 0;   // reached neither: settles where it closed
   }
   return tot / rows.length;
@@ -213,13 +243,36 @@ export function analyseMarket(market) {
   const rows = excursions(market);
   const out = { market, sample: rows.length, current, baseline: base, applied: false, findings: [] };
 
+  // A stored target outside the allowed range is a configuration fault, not an
+  // evidence question, so it is repaired whatever the sample size.
+  const loT = Math.max(base.targetR * (1 - MAX_DRIFT), MIN_RR + 0.01), hiT = base.targetR * (1 + MAX_DRIFT);
+  if (current.targetR < loT - 1e-9 || current.targetR > hiT + 1e-9) {
+    const next = +clamp(current.targetR, loT, hiT).toFixed(2);
+    out.findings.push({
+      parameter: 'targetR', from: current.targetR, to: next,
+      evidence: `outside the allowed range ${loT.toFixed(2)}–${hiT.toFixed(2)}R (the floor is the board's own `
+        + `minimum reward:risk) — restored to the nearest allowed value`,
+      accepted: true, repair: true
+    });
+    out.next = { targetR: next };
+    return out;
+  }
+
   if (rows.length < MIN_SAMPLE) {
     out.reason = `${rows.length} resolved trades — needs ${MIN_SAMPLE} before adjusting`;
     return out;
   }
 
   // ── target distance ────────────────────────────────────────────────
-  const lo = base.targetR * (1 - MAX_DRIFT), hi = base.targetR * (1 + MAX_DRIFT);
+  // Never below the board's own reward:risk floor. A target the scanner will
+  // reject is not a calibration, it is an empty market: crypto was walked to
+  // 0.88R on 103 trades and two test windows, below the 1.15 break-even floor,
+  // and every crypto card vanished. Thin evidence does not get to override a
+  // deliberate safety line — if the data ever shows a sub-1.15 target paying,
+  // that is a case for revisiting MIN_RR itself, openly, not for learning to
+  // route around it. A value already below the floor is lifted back on the
+  // next pass by the clamp.
+  const lo = Math.max(base.targetR * (1 - MAX_DRIFT), MIN_RR + 0.01), hi = base.targetR * (1 + MAX_DRIFT);
   let best = { targetR: current.targetR, exp: expectancy(rows, current.targetR) };
   for (let t = lo; t <= hi + 1e-9; t += 0.05) {
     const e = expectancy(rows, t);
@@ -268,41 +321,55 @@ export function analyseMarket(market) {
     });
   }
 
-  // ── volatility ceiling ─────────────────────────────────────────────
-  // Tested in 0.5% steps: is there a band above which trades stop paying,
-  // and is that conclusion significant rather than a thin unlucky bucket?
-  const ceilLo = base.maxStopPct * (1 - MAX_DRIFT), ceilHi = base.maxStopPct * (1 + MAX_DRIFT);
-  let bestCeil = { pct: current.maxStopPct, total: null };
-  for (let c = ceilLo; c <= ceilHi + 1e-9; c += 0.0025) {
-    const kept = rows.filter(r => r.stopPct <= c);
-    if (kept.length < MIN_SAMPLE * 0.5) continue;
-    const total = expectancy(kept, current.targetR) * kept.length;   // total R, not per-trade
-    if (bestCeil.total === null || total > bestCeil.total) bestCeil = { pct: +c.toFixed(4), total, n: kept.length };
-  }
-  const curKept = rows.filter(r => r.stopPct <= current.maxStopPct);
-  const curTotal = expectancy(curKept, current.targetR) * curKept.length;
-  const excluded = rows.filter(r => r.stopPct > bestCeil.pct);
-  const z = excluded.length >= 20 ? significance(excluded, current.targetR) : 0;
+  return finishCeiling();
 
-  if (bestCeil.pct !== current.maxStopPct && bestCeil.total > curTotal + 2 && Math.abs(z) > Z_CRIT) {
-    const step = clamp(bestCeil.pct - current.maxStopPct, -0.005, 0.005);
-    const next = +clamp(current.maxStopPct + step, ceilLo, ceilHi).toFixed(4);
-    out.findings.push({
-      parameter: 'maxStopPct', from: current.maxStopPct, to: next, optimum: bestCeil.pct,
-      evidence: `ceiling at ${(bestCeil.pct*100).toFixed(1)}% returns ${bestCeil.total.toFixed(1)}R total against ${curTotal.toFixed(1)}R now; the excluded band is z=${z.toFixed(2)}`,
-      accepted: true
-    });
-    out.next = { ...out.next, maxStopPct: next };
-  } else {
-    out.findings.push({
-      parameter: 'maxStopPct', from: current.maxStopPct, to: current.maxStopPct,
-      evidence: Math.abs(z) <= Z_CRIT && bestCeil.pct !== current.maxStopPct
-        ? `a ${(bestCeil.pct*100).toFixed(1)}% ceiling looks better but the excluded band is only z=${z.toFixed(2)} — not distinguishable from noise`
-        : `current ceiling holds up over ${rows.length} trades`,
-      accepted: false
-    });
+  // The ceiling half, as a function so the repair path above can run it too.
+  function finishCeiling() {
+    // ── volatility ceiling ─────────────────────────────────────────────
+    // Tested in 0.5% steps: is there a band above which trades stop paying,
+    // and is that conclusion significant rather than a thin unlucky bucket?
+    const ceilLo = base.maxStopPct * (1 - MAX_DRIFT), ceilHi = base.maxStopPct * (1 + MAX_DRIFT);
+    let bestCeil = { pct: current.maxStopPct, total: null };
+    for (let c = ceilLo; c <= ceilHi + 1e-9; c += 0.0025) {
+      const kept = rows.filter(r => r.stopPct <= c);
+      if (kept.length < MIN_SAMPLE * 0.5) continue;
+      const total = expectancy(kept, current.targetR) * kept.length;   // total R, not per-trade
+      if (bestCeil.total === null || total > bestCeil.total) bestCeil = { pct: +c.toFixed(4), total, n: kept.length };
+    }
+    const curKept = rows.filter(r => r.stopPct <= current.maxStopPct);
+    const curTotal = expectancy(curKept, current.targetR) * curKept.length;
+    const excluded = rows.filter(r => r.stopPct > bestCeil.pct);
+    const z = excluded.length >= 20 ? significance(excluded, current.targetR) : 0;
+
+    // One parameter at a time. The ceiling is scored at the CURRENT target, so
+    // moving both in the same pass judges the ceiling against a target that is
+    // about to change. Converging crypto from baseline did exactly that: the
+    // ceiling stepped 6% -> 5% while the target was still walking 1.25 -> 0.88,
+    // and at 0.88 neither 5% nor 6% has any evidence over the other — a setting
+    // kept for a reason that no longer applied. Let the target settle first.
+    const targetMoving = out.next?.targetR != null;
+    if (!targetMoving && bestCeil.pct !== current.maxStopPct && bestCeil.total > curTotal + 2 && Math.abs(z) > Z_CRIT) {
+      const step = clamp(bestCeil.pct - current.maxStopPct, -0.005, 0.005);
+      const next = +clamp(current.maxStopPct + step, ceilLo, ceilHi).toFixed(4);
+      out.findings.push({
+        parameter: 'maxStopPct', from: current.maxStopPct, to: next, optimum: bestCeil.pct,
+        evidence: `ceiling at ${(bestCeil.pct*100).toFixed(1)}% returns ${bestCeil.total.toFixed(1)}R total against ${curTotal.toFixed(1)}R now; the excluded band is z=${z.toFixed(2)}`,
+        accepted: true
+      });
+      out.next = { ...out.next, maxStopPct: next };
+    } else {
+      out.findings.push({
+        parameter: 'maxStopPct', from: current.maxStopPct, to: current.maxStopPct,
+        evidence: targetMoving && bestCeil.pct !== current.maxStopPct
+          ? `held while the target settles — the ceiling is judged against the target in force`
+          : Math.abs(z) <= Z_CRIT && bestCeil.pct !== current.maxStopPct
+          ? `a ${(bestCeil.pct*100).toFixed(1)}% ceiling looks better but the excluded band is only z=${z.toFixed(2)} — not distinguishable from noise`
+          : `current ceiling holds up over ${rows.length} trades`,
+        accepted: false
+      });
+    }
+    return out;
   }
-  return out;
 }
 
 /** Analyse every market. `apply` writes the accepted changes. */
