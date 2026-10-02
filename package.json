@@ -10,7 +10,9 @@
     "start": "cd backend && node server.js",
     "build": "cd frontend && npm install && npm run build && cd .. && rm -rf backend/public && cp -r frontend/dist backend/public",
     "postinstall": "npm install --prefix backend",
-    "snapshot": "node backend/scripts/snapshot-record.js"
+    "snapshot": "node backend/scripts/snapshot-record.js",
+    "test": "node backend/scripts/test-grader.js",
+    "regrade": "node backend/scripts/regrade-record.js"
   },
   "devDependencies": {
     "concurrently": "^8.2.2"

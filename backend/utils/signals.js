@@ -1,4 +1,11 @@
 import { volumeVsExpected } from './market.js';
+// The lowest reward:risk a card may carry: the break-even line at the hit rate
+// this geometry actually achieves (see the minRR note in generateTradeSetup).
+// Exported because the learning loop must never choose a target below it —
+// on 2026-10-02 it walked crypto to 0.88R on thin evidence, every crypto card
+// then fell under this floor, and the board went empty without an error.
+export const MIN_RR = 1.15;
+
 export function calculateRSI(prices, period = 14) {
   if (!prices || prices.length < period + 1) return null;
   let gains = 0, losses = 0;
@@ -572,17 +579,17 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
     // 1.15 carry none, and there is no version of the record that supports
     // taking them.
     sameDay: { slCapPct: 0.045, slMinPct: 0.022, slFloorATR: 0.9, slRangeMin: 0.9, slRangeMax: 1.8,
-               maxDaysTP1: 4,  maxDaysTP2: 8, minTP1ATR: 0.6, minTP2ATR: 0.8, minRR: 1.15,
+               maxDaysTP1: 4,  maxDaysTP2: 8, minTP1ATR: 0.6, minTP2ATR: 0.8, minRR: MIN_RR,
                maxStopPct: 0.040 },
     // Commodities keep the previous, profitable settings.
     commodities: { slCapPct: 0.045, slMinPct: 0.022, slFloorATR: 0.9, slRangeMin: 0.9, slRangeMax: 1.8,
-               maxDaysTP1: 6,  maxDaysTP2: 12, minTP1ATR: 0.6, minTP2ATR: 0.8, minRR: 1.15 },
+               maxDaysTP1: 6,  maxDaysTP2: 12, minTP1ATR: 0.6, minTP2ATR: 0.8, minRR: MIN_RR },
     // Same percentage guardrails as sameDay — slCapPct and slMinPct are shares
     // of price and so are timeframe-independent — but the ATR-denominated
     // fields are scaled for hourly bars. "days" here counts BARS: 39 hourly
     // bars is about six sessions, matching the daily ceiling it replaces.
     intradayStock: { slCapPct: 0.045, slMinPct: 0.022, slFloorATR: 2.9, slRangeMin: 2.9, slRangeMax: 5.5,
-               maxDaysTP1: 48, maxDaysTP2: 96, minTP1ATR: 2.4, minTP2ATR: 3.0, minRR: 1.15,
+               maxDaysTP1: 48, maxDaysTP2: 96, minTP1ATR: 2.4, minTP2ATR: 3.0, minRR: MIN_RR,
                maxStopPct: 0.040 },
     // Forex. slMinPct/slCapPct are shares of PRICE, so they cannot be reused
     // from sameDay: 2.2% of EURUSD is ~4.7 ATR, which would demand a ~4.4%
@@ -591,12 +598,12 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
     // a percentage (2.2% / 2.5% ATR); applied to FX's ~0.5% ATR that is ~0.45%.
     // The cap is scaled by the same ratio. ATR-denominated fields are unchanged.
     forex:   { slCapPct: 0.012, slMinPct: 0.0045, slFloorATR: 0.9, slRangeMin: 0.9, slRangeMax: 1.8,
-               maxDaysTP1: 6,  maxDaysTP2: 12, minTP1ATR: 0.6, minTP2ATR: 0.8, minRR: 1.15 },
+               maxDaysTP1: 6,  maxDaysTP2: 12, minTP1ATR: 0.6, minTP2ATR: 0.8, minRR: MIN_RR },
     // Crypto runs on 4-hour candles. "days" in this object = bars held.
     // ATR here is per-4h-bar (~1/sqrt(6) of daily ATR), so multipliers are larger.
     // Ceilings: TP1 within 16 bars (~64h), TP2 within 30 bars (~5d).
     crypto:  { slCapPct: 0.045, slFloorATR: 1.1, slRangeMin: 1.1, slRangeMax: 2.2,
-               maxDaysTP1: 16, maxDaysTP2: 30, minTP1ATR: 1.1, minTP2ATR: 1.4, minRR: 1.15 },
+               maxDaysTP1: 16, maxDaysTP2: 30, minTP1ATR: 1.1, minTP2ATR: 1.4, minRR: MIN_RR },
     swing:   { slCapPct: 0.04,  slFloorATR: 0.9, slRangeMin: 1.0, slRangeMax: 1.8,
                maxDaysTP1: 10, maxDaysTP2: 16, minTP1ATR: 1.2, minTP2ATR: 2.0, minRR: 1.3 }
   }[tradeStyle] || { slCapPct: 0.04, slFloorATR: 0.9, slRangeMin: 1.0, slRangeMax: 1.8,
@@ -964,8 +971,9 @@ export function generateTradeSetup(quote, historical, signalData, opts = {}) {
   // reading 1.3:1 paid about half that, because only a third of the position
   // ever reached the number on the card. Now the card and the payout agree.
   //
-  // Records written before this keep their tp0 and are still scored under the
-  // old plan, so the history stays comparable with itself.
+  // Records written before this are still scored under the plan they were
+  // graded on — read from their close date (exitPlanOf in realisedR.js), not
+  // from tp0, which was never stored on a record. New records carry exitPlan.
   const trendStrengthLabel = trendStrength >= 2.5 ? 'Very Strong'
                           : trendStrength >= 1.5 ? 'Strong'
                           : trendStrength >= 0.5 ? 'Moderate'

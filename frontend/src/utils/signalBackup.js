@@ -45,14 +45,17 @@ function writeLocal(signals) {
   }
 }
 
-// Merge two record arrays by id. CLOSED beats OPEN; otherwise newest lastSeenAt.
+// Merge two record arrays by id. A settled record beats an open one — CLOSED
+// over UNGRADED over OPEN, matching the server's merge — otherwise newest
+// lastSeenAt.
+const statusRank = (st) => st === 'CLOSED' ? 2 : st === 'UNGRADED' ? 1 : 0;
 function merge(a, b) {
   const map = new Map();
   for (const rec of [...a, ...b]) {
     if (!rec?.id) continue;
     const existing = map.get(rec.id);
     if (!existing) { map.set(rec.id, rec); continue; }
-    if (existing.status !== 'CLOSED' && rec.status === 'CLOSED') {
+    if (statusRank(rec.status) > statusRank(existing.status)) {
       map.set(rec.id, rec);
     } else if (existing.status === rec.status &&
                (rec.lastSeenAt || 0) > (existing.lastSeenAt || 0)) {

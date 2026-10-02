@@ -29,24 +29,77 @@ function toSpotSymbol(yahooTicker) {
   return SPOT_FALLBACK[binance] || binance;
 }
 
-// Fetch klines for one symbol. interval: 1m, 5m, 15m, 1h, 4h, 1d. limit max 1000.
+// Fetch klines for one symbol. interval: 1h, 4h, 1d. limit max 1000.
 // Returns candles in our standard shape: [{date, open, high, low, close, volume}]
-export async function fetchCryptoCandles(yahooTicker, { interval = '4h', limit = 120 } = {}) {
+//
+// `start` (ms) asks for bars FROM that moment rather than the latest ones. The
+// outcome monitor needs this: it grades a trade on the bars that followed the
+// signal, and asking for "the latest 200 hours" stopped covering a crypto trade
+// once it was eight days old. On a host that sleeps, grading a week late is the
+// normal case, and the trade was then scored on a week that had nothing to do
+// with it.
+export async function fetchCryptoCandles(yahooTicker, { interval = '4h', limit = 120, start = null } = {}) {
   const symbol = toSpotSymbol(yahooTicker);
-  const cacheKey = `${symbol}:${interval}:${limit}`;
+  const cacheKey = `${symbol}:${interval}:${limit}:${start ?? ''}`;
   const cached = cache.get(cacheKey);
   if (cached && Date.now() - cached.ts < TTL) return cached.data;
 
-  // Binance geo-blocks cloud hosts. On Render that meant no crypto candles at
-  // all, so the scanner silently dropped to Yahoo daily bars and lost the 4h
-  // resolution the whole crypto calibration is built on. Coinbase and Kraken
-  // serve the same OHLC and are reachable from US infrastructure.
+  const HOUR = 3600_000;
+  const stepMs = { '1h': HOUR, '4h': 4 * HOUR, '1d': 24 * HOUR }[interval];
+
+  // Binance geo-blocks US hosts, which is where Render runs. Coinbase serves
+  // the same OHLC from US infrastructure — but it has no 4-hour granularity
+  // (only 1m/5m/15m/1h/6h/1d). This used to map '4h' to Coinbase's 21600s,
+  // which is SIX hours: on the live site the crypto board, calibrated
+  // throughout on 4h bars, was quietly being built from 6h ones. Coinbase 4h is
+  // now assembled from its 1h bars on the same UTC boundaries Binance uses.
+  async function coinbaseRange(granSec, fromMs, toMs) {
+    const product = symbol.replace(/USDT$/, '-USD');
+    const out = [];
+    const span = 300 * granSec * 1000;            // Coinbase caps a request at 300 bars
+    for (let a = fromMs; a < toMs; a += span) {
+      const b = Math.min(toMs, a + span);
+      const { data } = await axios.get(
+        `https://api.exchange.coinbase.com/products/${product}/candles`,
+        { params: { granularity: granSec, start: new Date(a).toISOString(), end: new Date(b).toISOString() },
+          headers: HEADERS, timeout: 8000 });
+      if (Array.isArray(data)) out.push(...data);
+    }
+    // [time, low, high, open, close, volume], newest first, possibly overlapping
+    const seen = new Map();
+    for (const k of out) seen.set(k[0], {
+      date: new Date(k[0] * 1000).toISOString(),
+      low: k[1], high: k[2], open: k[3], close: k[4], volume: k[5]
+    });
+    return [...seen.values()].sort((x, y) => new Date(x.date) - new Date(y.date));
+  }
+
+  function toFourHour(hourly) {
+    const buckets = new Map();
+    for (const c of hourly) {
+      const t = new Date(c.date).getTime();
+      const b = Math.floor(t / (4 * HOUR)) * 4 * HOUR;
+      const cur = buckets.get(b);
+      if (!cur) buckets.set(b, { date: new Date(b).toISOString(), open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume, n: 1 });
+      else { cur.high = Math.max(cur.high, c.high); cur.low = Math.min(cur.low, c.low); cur.close = c.close; cur.volume += c.volume; cur.n++; }
+    }
+    // Keep the still-forming bar, as Binance does — the crypto calibration was
+    // built on Binance's series, which includes it. Drop only past buckets with
+    // missing hours, where a gap in Coinbase's data would understate the range.
+    const now = Date.now();
+    return [...buckets.values()]
+      .filter(b => b.n === 4 || new Date(b.date).getTime() + 4 * HOUR > now)
+      .map(({ n, ...bar }) => bar);
+  }
+
   const providers = [
     {
       name: 'binance',
       run: async () => {
+        const params = { symbol, interval, limit };
+        if (start != null) params.startTime = start;
         const { data } = await axios.get('https://api.binance.com/api/v3/klines', {
-          params: { symbol, interval, limit }, headers: HEADERS, timeout: 8000
+          params, headers: HEADERS, timeout: 8000
         });
         if (!Array.isArray(data) || !data.length) return null;
         return data.map(k => ({
@@ -60,27 +113,23 @@ export async function fetchCryptoCandles(yahooTicker, { interval = '4h', limit =
     {
       name: 'coinbase',
       run: async () => {
-        const gran = { '1h': 3600, '4h': 21600, '1d': 86400 }[interval];
-        const product = symbol.replace(/USDT$/, '-USD');
-        if (!gran) return null;
-        const { data } = await axios.get(
-          `https://api.exchange.coinbase.com/products/${product}/candles`,
-          { params: { granularity: gran }, headers: HEADERS, timeout: 8000 });
-        if (!Array.isArray(data) || !data.length) return null;
-        // Coinbase returns [time, low, high, open, close, volume], newest first.
-        return data
-          .map(k => ({
-            date: new Date(k[0] * 1000).toISOString(),
-            low: k[1], high: k[2], open: k[3], close: k[4], volume: k[5]
-          }))
-          .sort((a, b) => new Date(a.date) - new Date(b.date))
-          .slice(-limit);
+        if (!stepMs) return null;
+        const from = start != null ? start : Date.now() - (limit + 2) * stepMs;
+        const to = Math.min(Date.now(), from + (limit + 2) * stepMs);
+        let bars;
+        if (interval === '4h') bars = toFourHour(await coinbaseRange(3600, from, to));
+        else bars = await coinbaseRange(stepMs / 1000, from, to);
+        if (!bars.length) return null;
+        return start != null ? bars.slice(0, limit) : bars.slice(-limit);
       }
     }
   ];
 
+  // CRYPTO_SKIP_BINANCE=1 reproduces Render's path from a machine where
+  // Binance is reachable, so the fallback can be tested where it actually runs.
+  const order = process.env.CRYPTO_SKIP_BINANCE === '1' ? providers.filter(p => p.name !== 'binance') : providers;
   let lastErr = null;
-  for (const p of providers) {
+  for (const p of order) {
     try {
       const candles = await p.run();
       if (candles && candles.length) {

@@ -260,6 +260,13 @@ export function logSignal(card, extras = {}) {
     tp: card.tp,
     tp2: card.tp2,
     sl: card.sl,
+    // Stated, not inferred. Scoring used to work out the exit plan from tp0,
+    // which was never stored here, so every trade in the book read as single
+    // exit — including 410 taken under thirds — and the record looked like
+    // -0.086R when the trades as taken returned -0.196R. Store what the card
+    // actually offered so no scoring code ever has to guess again.
+    tp0: Number.isFinite(card.tp0) ? card.tp0 : null,
+    exitPlan: Number.isFinite(card.tp0) ? 'thirds' : 'single',
     atr: extras.atr,
     rrRatio: card.rrRatio,
     rrRatio2: card.rrRatio2,
@@ -537,12 +544,14 @@ export function flushSignalLog() { persist(); }
 
 export function getLogSize() { load(); return signals.length; }
 
+const statusRank = (st) => st === 'CLOSED' ? 2 : st === 'UNGRADED' ? 1 : 0;
+
 export function mergeSignals(incoming) {
   load();
   if (!Array.isArray(incoming)) return { added: 0, updated: 0, total: signals.length };
   let added = 0, updated = 0, rejected = 0, duplicates = 0;
 
-  for (const rec of incoming) {
+  for (let rec of incoming) {
     if (!isCoherent(rec)) { rejected++; continue; }
     // Same idea, different id. A client mirror written before a restart carries
     // its own record of a signal this store logged again afterwards; matching
@@ -550,14 +559,27 @@ export function mergeSignals(incoming) {
     // exactly as logSignal does.
     const existing = indexById.get(rec.id) || indexBySession.get(sessionKeyOf(rec));
     if (!existing) {
+      // A closed trade arriving without an exitPlan was graded by the grader as
+      // it stood before 2026-10-02 — the one that walked past horizons, settled
+      // expiries at the grading-day price and fetched the wrong window on a
+      // late wake. The server's own record was re-graded; a browser backup is
+      // not. Rather than admit its verdict, reopen it and let the current
+      // grader decide from the price history.
+      if (rec.status === 'CLOSED' && !rec.exitPlan) {
+        rec = { ...rec, status: 'OPEN', regradeFromMirror: true };
+        for (const k of ['closeReason', 'closePrice', 'closedAt', 'outcome', 'timeToCloseHrs',
+                         'mfe', 'mae', 'mfePct', 'maePct', 'scaledOut']) delete rec[k];
+      }
       signals.push(rec);
       indexById.set(rec.id, rec);
       indexBySession.set(sessionKeyOf(rec), rec);
       added++;
       continue;
     }
-    // Conflict: prefer the CLOSED record — a resolved outcome beats an open one
-    if (existing.status !== 'CLOSED' && rec.status === 'CLOSED') {
+    // Conflict: prefer the settled record. A graded outcome beats an ungraded
+    // verdict, and either beats a trade still marked open — otherwise a copy
+    // written before grading could reopen a trade the monitor already settled.
+    if (statusRank(rec.status) > statusRank(existing.status)) {
       const keptId = existing.id;
       Object.assign(existing, rec, { id: keptId });   // keep the id already indexed
       updated++;

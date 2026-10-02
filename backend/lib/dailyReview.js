@@ -94,7 +94,7 @@ export function buildReview(now = Date.now()) {
 
   const signals = getAllSignals();
   const signalledToday = signals.filter(s => s.signaledAt >= now - DAY).length;
-  const open = signals.filter(s => s.status !== 'CLOSED').length;
+  const open = signals.filter(s => s.status === 'OPEN').length;   // UNGRADED is not open
 
   let goals = null;
   try { goals = assessGoals(); } catch { /* reported as unavailable */ }

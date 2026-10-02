@@ -15,45 +15,51 @@ import { fetchFull } from './yahoo.js';
 
 const TICK_MS = 5 * 60 * 1000; // 5 min
 
-// Returns intraday/4h-ish candles from signaledAt to now, per market.
-async function fetchCandlesSince(signal) {
+// The bars a trade must be graded on: from the signal to the end of its
+// horizon. Returns null when the source cannot reach back that far, which is
+// different from [] (nothing printed yet) — null means grading now would be
+// a guess.
+//
+// This used to ask for "the latest N bars" — 200 hourly bars for crypto (eight
+// days) and one month of daily bars for stocks. That holds only while the
+// monitor runs continuously. Render's free tier sleeps, so a trade is often
+// graded days after its horizon ended, and once it was older than the window
+// it was scored on bars from a different week. A trade can only be judged on
+// the bars that followed it.
+const DAY = 24 * 60 * 60 * 1000;
+export async function fetchCandlesSince(signal) {
   try {
+    const end = Math.min(Date.now(), signal.expiresAt || Date.now());
     if (signal.market === 'crypto') {
-      const hoursElapsed = (Date.now() - signal.signaledAt) / (60 * 60 * 1000);
-      // Use 1h bars for fine MFE/MAE on crypto. Cap at 200 bars.
-      const limit = Math.min(200, Math.max(24, Math.ceil(hoursElapsed) + 4));
-      const candles = await fetchCryptoCandles(signal.ticker, { interval: '1h', limit });
+      // Bars that OPEN at or after the signal — the bar the signal was formed
+      // inside holds price action that had already happened.
+      const hours = Math.ceil((end - signal.signaledAt) / 3600_000) + 2;
+      const candles = await fetchCryptoCandles(signal.ticker,
+        { interval: '1h', limit: Math.min(1000, Math.max(4, hours)), start: signal.signaledAt });
       if (!candles) return [];
-      // Only bars that OPEN at or after the signal. The old filter allowed
-      // ts - 1h, which let in the bar the signal was formed inside — price
-      // action that had already happened when the signal was written.
-      const ts = signal.signaledAt;
-      return candles.filter(c => new Date(c.date).getTime() >= ts);
+      const after = candles.filter(c => new Date(c.date).getTime() >= signal.signaledAt);
+      if (after.length && new Date(after[0].date).getTime() - signal.signaledAt > 3 * 3600_000) return null;
+      return after;
     }
 
-    // Stocks / forex / commodities — daily candles from Yahoo.
+    // Stocks / forex / commodities — daily candles from Yahoo, over a range
+    // long enough to reach back to the signal.
     //
-    // This filter was `>= signaledAt - 24h`, and a daily bar is stamped at
-    // midnight. A signal written at 22:00 therefore matched its OWN day's bar
-    // — a bar covering the entire session that had already closed before the
-    // signal existed — and often the previous day's too. That day's low then
-    // took out a stop sitting a few percent below an entry set at the day's
-    // close, so the trade was recorded as stopped out roughly 22 hours BEFORE
-    // it was signalled.
-    //
-    // It affected 167 of 306 closed signals. Those recorded a 6.6% win rate
-    // against 50.8% for the ones scored on genuine forward bars, which is why
-    // the tracked record looked worse than random and made the entry logic
-    // appear to have negative edge.
-    //
-    // A daily bar cannot represent "the rest of the signal's day" because it
-    // includes the morning, so the first bar that can honestly be scored is
-    // the next session's. Compare on the market's own calendar date.
-    const { candles } = await fetchFull(signal.ticker, '1mo');
+    // A daily bar is stamped at midnight, so a signal written at 22:00 used to
+    // match its OWN day's bar — a session that had already closed before the
+    // signal existed — and the day's low took out stops that were never live.
+    // It affected 167 of 306 closed signals. The first bar that can honestly
+    // be scored is the next session's; compare on the market's own date.
+    const ageDays = (Date.now() - signal.signaledAt) / DAY;
+    const range = ageDays < 25 ? '1mo' : ageDays < 80 ? '3mo' : ageDays < 170 ? '6mo' : '1y';
+    const { candles } = await fetchFull(signal.ticker, range);
     if (!candles?.length) return [];
     const signalDay = new Date(signal.signaledAt)
       .toLocaleDateString('en-CA', { timeZone: 'America/New_York' });   // YYYY-MM-DD
-    return candles.filter(c => c.date > signalDay);
+    const after = candles.filter(c => c.date > signalDay);
+    // Weekend plus a holiday is the longest honest wait for the next session.
+    if (after.length && Date.parse(after[0].date) - Date.parse(signalDay) > 5 * DAY) return null;
+    return after;
   } catch {
     return [];
   }
@@ -61,24 +67,45 @@ async function fetchCandlesSince(signal) {
 
 // Walk candles and determine outcome.
 // Returns { reason, closePrice, mfe, mae, closedAt } or null if still open.
-export function determineOutcome(signal, candles) {
-  if (!candles || candles.length === 0) {
-    if (Date.now() > signal.expiresAt) {
-      return { reason: 'EXPIRED', closePrice: signal.entry, mfe: 0, mae: 0, closedAt: signal.expiresAt };
-    }
-    return null;
+// When a bar's trading actually began. A daily bar is dated by its session,
+// and a date read as midnight UTC is the evening BEFORE the session in New
+// York — so a stock trade expiring at 08:19 ET on a Monday had that Monday's
+// whole session counted against it, hours after it ended. CVX on 2026-06-01
+// was booked as stopped at breakeven by a session that opened after its
+// horizon. A daily bar starts at 09:30 New York time on its date.
+function barStartMs(c) {
+  const d = String(c.date);
+  if (d.length === 10) {
+    const noonUtc = new Date(d + 'T12:00:00Z');
+    const nyHour = Number(noonUtc.toLocaleString('en-US',
+      { timeZone: 'America/New_York', hour: '2-digit', hour12: false }));
+    return Date.parse(d + 'T09:30:00Z') + (12 - nyHour) * 3600_000;   // 13:30Z in EDT, 14:30Z in EST
   }
+  return new Date(d).getTime();
+}
+
+export function determineOutcome(signal, candles) {
+  // No bars seen: not a result. This used to close the trade as EXPIRED at its
+  // entry price — exactly 0R — whenever a fetch came back empty, which is a
+  // fabricated scratch; 13 of 74 expiries in the record were that. In a system
+  // running negative, invented zeros flatter it. Wait and retry instead; the
+  // monitor gives up honestly (UNGRADED, excluded) only when data never comes.
+  if (!candles || candles.length === 0) return null;
 
   const { direction, entry, tp, tp2, sl } = signal;
-  // Signals now close the whole position at TP1 and carry tp0 === null. Older
-  // records were written under the thirds plan and keep their tp0, so they go
-  // on being scored the way they were taken — the history stays comparable
-  // with itself rather than being retroactively rewritten.
+  // Everything graded now is graded single-exit: the whole position closes at
+  // TP1. This comment used to say older records "keep their tp0" and are graded
+  // as thirds — they never did, because logSignal never stored tp0, so every
+  // open trade has been graded single-exit since the change. That is the right
+  // behaviour (it is the plan in force), but the claim was false and it misled
+  // the scoring code into the same assumption. Scoring now reads the plan off
+  // the grading date instead — see exitPlanOf in realisedR.js.
   //
-  // For a single-exit signal tp0 is set beyond any reachable price, which
-  // makes the scale-out branches below unreachable without duplicating the
-  // walk. TP1 then closes the position outright.
-  const singleExit = signal.tp0 === null || signal.tp0 === undefined;
+  // tp0 is set beyond any reachable price, which makes the scale-out branches
+  // below unreachable without duplicating the walk. TP1 then closes the
+  // position outright. A record explicitly carrying a numeric tp0 would still
+  // scale, so the thirds path stays available should the plan ever return.
+  const singleExit = !Number.isFinite(signal.tp0);
   const tp0 = singleExit
     ? (direction === 'LONG' ? Infinity : -Infinity)
     : signal.tp0;
@@ -107,16 +134,31 @@ export function determineOutcome(signal, candles) {
   // reporting a system markedly better than the one that could be traded, and
   // the gap was concentrated in the trades that looked best.
   let filled = false;
+  let lastInHorizon = null;   // the last bar before the trade's time ran out
 
   for (const c of candles) {
+    // The trade ends at its horizon. Walking past it recorded stops and
+    // targets hit days after the trade had expired — 8 trades in the record,
+    // INJ-USD among them: expired 5 Aug, booked as stopped out on 10 Aug.
+    if (signal.expiresAt && barStartMs(c) >= signal.expiresAt) break;
+    lastInHorizon = c;
     const high = c.high;
     const low  = c.low;
 
     // A resting limit fills when price trades through it. Until then there is
     // no position, so nothing is measured — no excursion, no target, no stop.
+    // On the bar the order fills, only part of the bar happened afterwards.
+    // The entry is a limit away from the market, so a long fills on a dip —
+    // and that bar's high usually printed BEFORE the dip. Counting it credited
+    // targets reached before the trade existed and overstated how far trades
+    // ran, which is what learning picks targets from. What is provable after a
+    // long's fill: the low (price passed through the entry on its way down to
+    // it) and the close (the last trade of the bar). Mirrored for shorts.
+    let fillBar = false;
     if (!filled) {
       filled = direction === 'LONG' ? low <= entry : high >= entry;
       if (!filled) continue;
+      fillBar = true;
     }
     // Bar open/close direction tiebreaker: when TP AND SL are both touched
     // inside the same bar, the open→close direction tells us which came first.
@@ -124,22 +166,28 @@ export function determineOutcome(signal, candles) {
     // was hit before any late reversal to SL. Red bar → SL came first.
     const barBullish = c.close > c.open;
     if (direction === 'LONG') {
-      if (high > mfeRunning) mfeRunning = high;
+      const reachHigh = fillBar ? Math.max(entry, c.close) : high;   // provably after the fill
+      if (reachHigh > mfeRunning) mfeRunning = reachHigh;
       if (low < maeRunning)  maeRunning = low;
       // The stop in force DURING this bar. The breakeven promotion below only
       // applies from the next bar onward: within the bar where the scale
       // fills, that bar's low may have printed before the fill, and testing it
       // against the new breakeven stop closed winners as scratches.
       const slThisBar = effectiveSl;
-      if (!scaledOut && high >= tp0) { scaledOut = true; effectiveSl = entry; }
+      if (!scaledOut && reachHigh >= tp0) { scaledOut = true; effectiveSl = entry; }
       const slHit = low <= slThisBar;
-      const tp2Hit = high >= tp2;
-      const tp1Hit = high >= tp;
+      // A single exit closes everything at TP1; a bar that also reached TP2
+      // still exits at TP1. Only the thirds plan had a runner to carry on.
+      const tp2Hit = !singleExit && reachHigh >= tp2;
+      const tp1Hit = reachHigh >= tp;
       if (slHit || tp1Hit || tp2Hit) {
         // Both TP and SL touched in same bar — use open/close direction to
         // decide which came first (removes the previous SL-first bias).
         if (slHit && (tp1Hit || tp2Hit)) {
-          if (barBullish) {
+          // On the fill bar the stop is provably after the fill and the only
+          // provable target touch is the close, which comes later still — the
+          // stop was first. Elsewhere the bar's direction decides.
+          if (barBullish && !fillBar) {
             // Bar rallied first, so TP was reached before any reversal
             closeReason = tp2Hit ? 'TP2' : 'TP1';
             closePrice = tp2Hit ? tp2 : tp;
@@ -159,17 +207,21 @@ export function determineOutcome(signal, candles) {
         break;
       }
     } else { // SHORT
-      if (low < mfeRunning)  mfeRunning = low;
+      const reachLow = fillBar ? Math.min(entry, c.close) : low;      // provably after the fill
+      if (reachLow < mfeRunning)  mfeRunning = reachLow;
       if (high > maeRunning) maeRunning = high;
       const slThisBar = effectiveSl;
-      if (!scaledOut && low <= tp0) { scaledOut = true; effectiveSl = entry; }
+      if (!scaledOut && reachLow <= tp0) { scaledOut = true; effectiveSl = entry; }
       const slHit = high >= slThisBar;
-      const tp2Hit = low <= tp2;
-      const tp1Hit = low <= tp;
+      // A single exit closes everything at TP1; a bar that also reached TP2
+      // still exits at TP1. Only the thirds plan had a runner to carry on.
+      const tp2Hit = !singleExit && reachLow <= tp2;
+      const tp1Hit = reachLow <= tp;
       if (slHit || tp1Hit || tp2Hit) {
         if (slHit && (tp1Hit || tp2Hit)) {
-          // For shorts: bearish bar (red) rallied down first → TP first
-          if (!barBullish) {
+          // For shorts: bearish bar (red) rallied down first → TP first —
+          // except on the fill bar, where the stop is provably first.
+          if (!barBullish && !fillBar) {
             closeReason = tp2Hit ? 'TP2' : 'TP1';
             closePrice = tp2Hit ? tp2 : tp;
           } else {
@@ -217,9 +269,12 @@ export function determineOutcome(signal, candles) {
     return { reason: closeReason, closePrice, mfe: mfeAbs, mae: maeAbs, mfePct, maePct, closedAt, scaledOut };
   }
 
-  // No TP/SL hit — check expiration
+  // No TP/SL hit — check expiration. Settle at the last close inside the
+  // horizon: the latest bar fetched is TODAY's, and a trade graded a week late
+  // used to settle at a price from a week after it ended.
   if (Date.now() > signal.expiresAt) {
-    const lastClose = candles[candles.length - 1].close;
+    if (!lastInHorizon) return null;   // no bar inside its window yet
+    const lastClose = lastInHorizon.close;
     return {
       reason: 'EXPIRED',
       closePrice: lastClose,
@@ -234,7 +289,7 @@ export function determineOutcome(signal, candles) {
 // A trade that banked its first scale and then stopped at breakeven finished
 // GREEN, not red. Scoring those as losses is what made the tracked hit rate
 // look like 28% when 70% of trades actually went far enough to pay something.
-function classifyOutcome(reason, scaledOut) {
+export function classifyOutcome(reason, scaledOut) {
   // Distinct from every other outcome: there was no position, so this is
   // neither a win nor a loss and must not be averaged in with trades that
   // were actually taken.
@@ -243,6 +298,58 @@ function classifyOutcome(reason, scaledOut) {
   if (reason === 'SCALED_BE') return 'SCRATCH';   // partial profit banked, runner flat
   if (reason === 'SL') return 'LOSS';
   return scaledOut ? 'SCRATCH' : 'EXPIRED';
+}
+
+// How long after its horizon a trade may wait for price data before it is
+// given up on. A sleeping host or a flaky feed delays grading; it should not
+// decide it. Past this, guessing would be worse than leaving it out.
+const GIVE_UP_AFTER = 30 * DAY;
+const GIVE_UP_ATTEMPTS = 6;   // about half an hour of awake ticks, across any number of wakes
+
+// Grade one open signal. 'closed' when it resolved, 'ungraded' when its price
+// history can no longer be reached, null when it should simply wait.
+//
+// UNGRADED is a status of its own, neither OPEN nor CLOSED, so every
+// calculation that reads closed trades leaves it out without needing to know
+// it exists — an unknowable outcome is excluded, never scored as a zero.
+async function gradeOne(sig) {
+  const candles = await fetchCandlesSince(sig);
+  const outcome = candles === null ? null : determineOutcome(sig, candles);
+  if (!outcome) {
+    if (Date.now() > sig.expiresAt + GIVE_UP_AFTER) {
+      // One empty answer is not proof the data is gone — a rate-limited burst
+      // after a long sleep looks identical. Give up only after it has failed
+      // repeatedly, so a bad minute cannot write off real trades.
+      const attempts = (sig.gradeAttempts || 0) + 1;
+      if (attempts < GIVE_UP_ATTEMPTS) {
+        updateSignal(sig.id, { gradeAttempts: attempts });
+        return null;
+      }
+      updateSignal(sig.id, {
+        status: 'UNGRADED',
+        ungradedReason: candles === null
+          ? 'price history no longer reaches back to the signal'
+          : 'no price data for its window',
+        ungradedAt: Date.now()
+      });
+      return 'ungraded';
+    }
+    return null;
+  }
+  updateSignal(sig.id, {
+    status: 'CLOSED',
+    closeReason: outcome.reason,
+    closePrice: outcome.closePrice,
+    mfe: outcome.mfe,
+    mae: outcome.mae,
+    mfePct: outcome.mfePct ?? null,
+    maePct: outcome.maePct ?? null,
+    closedAt: outcome.closedAt,
+    timeToCloseHrs: parseFloat(((outcome.closedAt - sig.signaledAt) / (60 * 60 * 1000)).toFixed(1)),
+    outcome: classifyOutcome(outcome.reason, outcome.scaledOut),
+    scaledOut: !!outcome.scaledOut
+  });
+  return 'closed';
 }
 
 export async function monitorTick() {
@@ -255,23 +362,7 @@ export async function monitorTick() {
   for (let i = 0; i < open.length; i += concurrency) {
     const chunk = open.slice(i, i + concurrency);
     await Promise.allSettled(chunk.map(async (sig) => {
-      const candles = await fetchCandlesSince(sig);
-      const outcome = determineOutcome(sig, candles);
-      if (!outcome) return;
-      updateSignal(sig.id, {
-        status: 'CLOSED',
-        closeReason: outcome.reason,
-        closePrice: outcome.closePrice,
-        mfe: outcome.mfe,
-        mae: outcome.mae,
-        mfePct: outcome.mfePct ?? null,
-        maePct: outcome.maePct ?? null,
-        closedAt: outcome.closedAt,
-        timeToCloseHrs: parseFloat(((outcome.closedAt - sig.signaledAt) / (60 * 60 * 1000)).toFixed(1)),
-        outcome: classifyOutcome(outcome.reason, outcome.scaledOut),
-        scaledOut: !!outcome.scaledOut
-      });
-      closed++;
+      if ((await gradeOne(sig)) === 'closed') closed++;
     }));
   }
   if (closed > 0) console.log(`  ✓ Monitor: closed ${closed} of ${open.length} open signals`);
@@ -293,23 +384,7 @@ export async function catchUpOverdue() {
   for (let i = 0; i < overdue.length; i += concurrency) {
     const chunk = overdue.slice(i, i + concurrency);
     await Promise.allSettled(chunk.map(async (sig) => {
-      const candles = await fetchCandlesSince(sig);
-      const outcome = determineOutcome(sig, candles);
-      if (!outcome) return;
-      updateSignal(sig.id, {
-        status: 'CLOSED',
-        closeReason: outcome.reason,
-        closePrice: outcome.closePrice,
-        mfe: outcome.mfe,
-        mae: outcome.mae,
-        mfePct: outcome.mfePct ?? null,
-        maePct: outcome.maePct ?? null,
-        closedAt: outcome.closedAt,
-        timeToCloseHrs: parseFloat(((outcome.closedAt - sig.signaledAt) / (60 * 60 * 1000)).toFixed(1)),
-        outcome: classifyOutcome(outcome.reason, outcome.scaledOut),
-        scaledOut: !!outcome.scaledOut
-      });
-      closed++;
+      if ((await gradeOne(sig)) === 'closed') closed++;
     }));
   }
   console.log(`  ✓ Catch-up: resolved ${closed} of ${overdue.length} overdue signals`);

@@ -21,23 +21,56 @@
 // The scale plan is thirds: TP0 at 30% of the TP1 distance, then TP1, then a
 // runner at 1.2x TP1, with the stop moved to breakeven once TP0 fills.
 
+// The exit plan a trade was offered under, by when it was signalled:
+//
+//   before 2026-08-19 20:48 UTC   single — the whole position at TP1 (403d9dc^)
+//   until  2026-08-31 11:23 UTC   thirds — 1/3 at 30% of TP1, stop to entry,
+//                                  1/3 at TP1, runner at 1.2x (403d9dc)
+//   since                         single again (c9d1e32)
+export const THIRDS_FROM = Date.parse('2026-08-19T20:48:35Z');
+export const SINGLE_EXIT_FROM = Date.parse('2026-08-31T11:23:42Z');
+
+/**
+ * Which exit plan to score a trade under: the one on its card.
+ *
+ * This used to be read off `tp0` — present meant thirds — but logSignal never
+ * stored tp0 on any record, so every trade read as single exit, including the
+ * thirds-era ones: an AVAX TP1 at 1.6:1 was credited 1.60R when it paid 0.69R.
+ * Measured 2026-10-02, that alone moved the record from -0.196R to -0.086R.
+ *
+ * And the thirds-era grader computed its scale level itself for every open
+ * trade, then the whole record was re-graded under it — so trades from May,
+ * whose cards showed a single exit, were stored as if they had scaled out.
+ * scripts/regrade-record.js now grades every trade under its card's plan and
+ * writes `exitPlan` on each record. Inference below only covers records that
+ * have not been through it: a grade that clearly scaled is scored as thirds so
+ * score and grade agree; otherwise the plan is read from the signal date.
+ */
+export function exitPlanOf(s) {
+  if (s?.exitPlan === 'single' || s?.exitPlan === 'thirds') return s.exitPlan;
+  if (s?.scaledOut || s?.closeReason === 'SCALED_BE') return 'thirds';
+  const t = s?.signaledAt;
+  if (Number.isFinite(t) && t >= THIRDS_FROM && t < SINGLE_EXIT_FROM) return 'thirds';
+  return 'single';
+}
+
 /** Realised return in R, or null when the record cannot support the maths. */
 export function realisedR(s) {
   const rr = s?.rrRatio;
   if (!rr) return null;
   const rr2 = s.rrRatio2 || rr * 1.2;
 
-  // Signals taken under the single-exit plan carry no tp0: the whole position
-  // closes at TP1, so a win is the full reward:risk rather than a third of it.
-  // Older records keep their tp0 and their thirds arithmetic below, so the
-  // record is not rewritten under a plan those trades were never taken on.
-  const singleExit = s.tp0 === null || s.tp0 === undefined;
+  // Single exit: the whole position closes at TP1, so a win is the full
+  // reward:risk rather than a third of it.
+  const singleExit = exitPlanOf(s) === 'single';
   if (singleExit) {
     switch (s.closeReason) {
       case 'NEVER_FILLED': return null;
       case 'SL':           return -1.0;
       case 'TP1':          return rr;
-      case 'TP2':          return rr2;
+      // A single exit sells everything at TP1, so a bar that ran on past TP2
+      // still pays TP1. Recording it at rr2 over-credited 10 trades.
+      case 'TP2':          return rr;
       case 'SCALED_BE':    return 0;      // cannot occur, kept for safety
       case 'EXPIRED': {
         const { entry, sl, closePrice } = s;
