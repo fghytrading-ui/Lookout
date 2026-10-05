@@ -12,8 +12,25 @@
 import { getOpenSignals, updateSignal } from './signalLog.js';
 import { fetchCryptoCandles } from './cryptoCandles.js';
 import { fetchFull } from './yahoo.js';
+import { fetchIntradayCandles } from './intradayCandles.js';
 
 const TICK_MS = 5 * 60 * 1000; // 5 min
+
+// Hourly stock bars from the signal on. undefined when no hourly series is
+// available (fall back to daily), null when the series no longer reaches back
+// to the signal, [] when nothing has printed since it yet.
+async function stockHourlySince(signal) {
+  const ageDays = (Date.now() - signal.signaledAt) / DAY;
+  const range = ageDays < 80 ? '3mo' : ageDays < 170 ? '6mo' : ageDays < 350 ? '1y' : ageDays < 700 ? '2y' : null;
+  if (!range) return undefined;
+  const series = await fetchIntradayCandles(signal.ticker, { interval: '60m', range });
+  if (!series?.length) return undefined;
+  const after = series.filter(c => new Date(c.date).getTime() >= signal.signaledAt);
+  if (!after.length) return [];
+  // A weekend plus a holiday is the longest honest gap before the next bar.
+  if (new Date(after[0].date).getTime() - signal.signaledAt > 5 * DAY) return null;
+  return after;
+}
 
 // The bars a trade must be graded on: from the signal to the end of its
 // horizon. Returns null when the source cannot reach back that far, which is
@@ -42,8 +59,23 @@ export async function fetchCandlesSince(signal) {
       return after;
     }
 
-    // Stocks / forex / commodities — daily candles from Yahoo, over a range
-    // long enough to reach back to the signal.
+    // Stocks: hourly bars from the moment the card was shown. A card raised at
+    // 11:00 can be acted on at 11:00, and daily bars cannot see the rest of
+    // that session — the daily grader below has to skip the whole signal day
+    // because its bar includes the morning before the signal. Measured
+    // 2026-10-02 on 366 stock trades: graded from the next session they
+    // returned -0.144R, acted on when shown -0.074R; for cards raised during
+    // market hours -0.042R against +0.058R. The record was understating what
+    // the cards actually did. On the next session's bars the two graders
+    // agree on 166 of 168 trades, so this changes only what daily bars
+    // could not see.
+    if (signal.market === 'stocks') {
+      const hourly = await stockHourlySince(signal);
+      if (hourly !== undefined) return hourly;   // undefined: no hourly series, use daily
+    }
+
+    // Forex / commodities, and stocks without an hourly series — daily candles
+    // from Yahoo, over a range long enough to reach back to the signal.
     //
     // A daily bar is stamped at midnight, so a signal written at 22:00 used to
     // match its OWN day's bar — a session that had already closed before the
@@ -92,7 +124,22 @@ export function determineOutcome(signal, candles) {
   // monitor gives up honestly (UNGRADED, excluded) only when data never comes.
   if (!candles || candles.length === 0) return null;
 
-  const { direction, entry, tp, tp2, sl } = signal;
+  const { direction, tp, tp2, sl } = signal;
+  let entry = signal.entry;
+  // A market entry fills at the first price after the card — the open of the
+  // first bar — with the printed stop and target unchanged. If that price is
+  // already past a printed level the trade as drawn does not exist, so it is
+  // recorded as never taken rather than as an instant win or loss.
+  let fillPrice = null;
+  if (signal.entryType === 'market') {
+    const px = candles[0].open;
+    const L = direction === 'LONG';
+    if ((L && (px <= sl || px >= tp)) || (!L && (px >= sl || px <= tp))) {
+      return { reason: 'NEVER_FILLED', closePrice: px, mfe: 0, mae: 0, mfePct: 0, maePct: 0,
+               closedAt: new Date(candles[0].date).getTime(), scaledOut: false, fillPrice: null };
+    }
+    entry = px; fillPrice = px;
+  }
   // Everything graded now is graded single-exit: the whole position closes at
   // TP1. This comment used to say older records "keep their tp0" and are graded
   // as thirds — they never did, because logSignal never stored tp0, so every
@@ -135,6 +182,12 @@ export function determineOutcome(signal, candles) {
   // the gap was concentrated in the trades that looked best.
   let filled = false;
   let lastInHorizon = null;   // the last bar before the trade's time ran out
+  // Time stop, when the card carried one: if the trade has not gone
+  // minProgress of the way to its target afterHours after the fill, close it
+  // at that bar's close. Applied only to trades whose card stated it, so every
+  // trade is graded under the rules it was offered with.
+  const ts = signal.timeStop && Number.isFinite(signal.timeStop.afterHours) ? signal.timeStop : null;
+  let fillStart = null, bestProgress = 0;
 
   for (const c of candles) {
     // The trade ends at its horizon. Walking past it recorded stops and
@@ -159,6 +212,7 @@ export function determineOutcome(signal, candles) {
       filled = direction === 'LONG' ? low <= entry : high >= entry;
       if (!filled) continue;
       fillBar = true;
+      fillStart = barStartMs(c);
     }
     // Bar open/close direction tiebreaker: when TP AND SL are both touched
     // inside the same bar, the open→close direction tells us which came first.
@@ -168,6 +222,7 @@ export function determineOutcome(signal, candles) {
     if (direction === 'LONG') {
       const reachHigh = fillBar ? Math.max(entry, c.close) : high;   // provably after the fill
       if (reachHigh > mfeRunning) mfeRunning = reachHigh;
+      bestProgress = Math.max(bestProgress, reachHigh - entry);
       if (low < maeRunning)  maeRunning = low;
       // The stop in force DURING this bar. The breakeven promotion below only
       // applies from the next bar onward: within the bar where the scale
@@ -206,9 +261,15 @@ export function determineOutcome(signal, candles) {
         closedAt = new Date(c.date).getTime();
         break;
       }
+      if (ts && !fillBar && barStartMs(c) >= fillStart + ts.afterHours * 3600_000 &&
+          bestProgress < ts.minProgress * Math.abs(tp - entry)) {
+        closeReason = 'TIME_STOP'; closePrice = c.close; closedAt = new Date(c.date).getTime();
+        break;
+      }
     } else { // SHORT
       const reachLow = fillBar ? Math.min(entry, c.close) : low;      // provably after the fill
       if (reachLow < mfeRunning)  mfeRunning = reachLow;
+      bestProgress = Math.max(bestProgress, entry - reachLow);
       if (high > maeRunning) maeRunning = high;
       const slThisBar = effectiveSl;
       if (!scaledOut && reachLow <= tp0) { scaledOut = true; effectiveSl = entry; }
@@ -236,6 +297,11 @@ export function determineOutcome(signal, candles) {
           closeReason = 'TP1'; closePrice = tp;
         }
         closedAt = new Date(c.date).getTime();
+        break;
+      }
+      if (ts && !fillBar && barStartMs(c) >= fillStart + ts.afterHours * 3600_000 &&
+          bestProgress < ts.minProgress * Math.abs(tp - entry)) {
+        closeReason = 'TIME_STOP'; closePrice = c.close; closedAt = new Date(c.date).getTime();
         break;
       }
     }
@@ -266,7 +332,7 @@ export function determineOutcome(signal, candles) {
   }
 
   if (closeReason) {
-    return { reason: closeReason, closePrice, mfe: mfeAbs, mae: maeAbs, mfePct, maePct, closedAt, scaledOut };
+    return { reason: closeReason, closePrice, mfe: mfeAbs, mae: maeAbs, mfePct, maePct, closedAt, scaledOut, fillPrice };
   }
 
   // No TP/SL hit — check expiration. Settle at the last close inside the
@@ -280,7 +346,7 @@ export function determineOutcome(signal, candles) {
       closePrice: lastClose,
       mfe: mfeAbs, mae: maeAbs, mfePct, maePct,
       closedAt: signal.expiresAt,
-      scaledOut
+      scaledOut, fillPrice
     };
   }
   return null;
@@ -297,6 +363,7 @@ export function classifyOutcome(reason, scaledOut) {
   if (reason === 'TP1' || reason === 'TP2') return 'WIN';
   if (reason === 'SCALED_BE') return 'SCRATCH';   // partial profit banked, runner flat
   if (reason === 'SL') return 'LOSS';
+  if (reason === 'TIME_STOP') return 'TIME_STOP';   // closed early at the market: small win or small loss
   return scaledOut ? 'SCRATCH' : 'EXPIRED';
 }
 
@@ -347,7 +414,8 @@ async function gradeOne(sig) {
     closedAt: outcome.closedAt,
     timeToCloseHrs: parseFloat(((outcome.closedAt - sig.signaledAt) / (60 * 60 * 1000)).toFixed(1)),
     outcome: classifyOutcome(outcome.reason, outcome.scaledOut),
-    scaledOut: !!outcome.scaledOut
+    scaledOut: !!outcome.scaledOut,
+    ...(outcome.fillPrice != null ? { fillPrice: outcome.fillPrice } : {})
   });
   return 'closed';
 }

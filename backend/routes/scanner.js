@@ -13,7 +13,7 @@ import { assessSetupEvidence, assessSetupExpectancy } from '../lib/evidence.js';
 import { withLiveBar } from '../lib/liveBar.js';
 import { fetchIntradayBatch } from '../lib/intradayCandles.js';
 import { analyseCatalysts, catalystSignals } from '../lib/catalystEngine.js';
-import { fetchRecommendationTrend } from '../lib/finnhubData.js';
+import { fetchRecommendationTrend, fetchCompanySector } from '../lib/finnhubData.js';
 import { fetchRecentFilings } from '../lib/secFilings.js';
 import { getLearnedParams } from '../lib/learning.js';
 import { buildThesis } from '../lib/thesis.js';
@@ -280,9 +280,31 @@ function buildCard(ticker, raw, quote, setup, signalData, historical, market = '
   // ── Entry validity status ───────────────────────────────────────────
   // For LONG: zone is between entryLow and entryHigh; bad if price >> entryHigh
   // For SHORT: zone is between entryLow and entryHigh; bad if price << entryLow
+  // ── STOCKS ENTER AT MARKET ──────────────────────────────────────────
+  // The card used to place a limit: 0.6% under the price for strong longs
+  // (mirrored for shorts), and even the "near market" entries were set
+  // against the last price, so a pre-market card waited for the open to come
+  // back to it. Replayed on hourly bars from the moment each of 367 stock
+  // cards was shown, with the printed stop and target and size set at the
+  // fill: limit -0.068R per card, market +0.026R — +0.094R, z=2.79, positive
+  // in both halves and in every quarter of the record (+0.05 +0.12 +0.11
+  // +0.10). The limit got a slightly better price when it filled, but the 41
+  // it never filled were the ones that ran: 36 would have made money, median
+  // +1.36R. Waiting for the dip selects the trades that dip. Crypto tested the
+  // same way was not robust (halves disagree), so crypto keeps its limit.
+  const marketEntry = market === 'stocks';
   let entryStatus = 'IN_ZONE';
   let entryStatusText = 'Price is in the entry zone — ready to enter';
-  if (direction === 'LONG') {
+  if (marketEntry) {
+    // Only one thing makes a market entry wrong: price already past a printed
+    // level, where the trade as drawn no longer exists.
+    const past = direction === 'LONG' ? (price <= sl ? 'stop' : price >= tp ? 'target' : null)
+                                      : (price >= sl ? 'stop' : price <= tp ? 'target' : null);
+    entryStatus = past ? 'MISSED' : 'IN_ZONE';
+    entryStatusText = past
+      ? `Price is already beyond the ${past} — this trade is off`
+      : 'Enter at market — keep the printed stop and target';
+  } else if (direction === 'LONG') {
     if (price > entryHigh * 1.015) {
       entryStatus = 'MISSED';
       entryStatusText = `Price drifted ${((price - entryHigh) / entryHigh * 100).toFixed(1)}% above zone — wait for pullback`;
@@ -354,9 +376,23 @@ function buildCard(ticker, raw, quote, setup, signalData, historical, market = '
               ? `Short-term — about ${expectedDays} session${expectedDays === 1 ? '' : 's'}`
             : (tradeStyle === 'sameDay' || tradeStyle === 'commodities') ? 'Short-term — 1 to 2 sessions'
             : TIME_SPANS[tsKey].label,
+    // Crypto time stop. Replayed on every crypto trade's own hourly bars, a rule
+    // chosen only on older trades and scored on newer ones it never saw cut
+    // losses in 4 of 4 splits, median +0.109R a trade, and three of four splits
+    // independently picked this one: if the trade has not gone a fifth of the
+    // way to its target ten hours after the fill, close it. Crypto losers fail
+    // straight away — this exits them before the stop does. It also cuts some
+    // eventual winners (SOL 2.68R -> 0.27R once); across 104 trades 26 were
+    // helped and 14 hurt. Tested on stocks too: no gain there, so not applied.
+    timeStop: tradeStyle === 'crypto' ? { afterHours: 10, minProgress: 0.2 } : null,
+    entryType: marketEntry ? 'market' : 'limit',
+    refPrice: price,            // the price when the card was shown — what a market entry starts from
     exitWindow: tradeStyle === 'crypto' ? 'Within the next 1–3 active sessions — 24/7 market'
               : (expectedDays2 != null)
-                ? `Scale at target 1 within ~${expectedDays} session${expectedDays === 1 ? '' : 's'}; runner up to ~${expectedDays2}`
+                // One exit: the whole position at the target. This still read
+                // "scale at target 1 ... runner up to" a month after scaling out
+                // was retired, telling the trader to do what the plan no longer is.
+                ? `Close the whole position at the target — usually within ~${expectedDays} session${expectedDays === 1 ? '' : 's'}`
               : (tradeStyle === 'sameDay' || tradeStyle === 'commodities') ? 'Typically next session; hard exit after 2 sessions'
               : getExitWindow(tsKey),
     // Intraday entry/exit windows — derived from the live ET session clock
@@ -764,7 +800,7 @@ router.get('/scan', async (req, res) => {
           card.expectedHours = hSetup.expectedHours; card.expectedHours2 = hSetup.expectedHours2;
           card.confirmation = hSetup.confirmation;
           card.timeSpan = `Short-term — about ${hSetup.expectedDays} session${hSetup.expectedDays === 1 ? '' : 's'}`;
-          card.exitWindow = `Scale at target 1 within ~${hSetup.expectedDays} session${hSetup.expectedDays === 1 ? '' : 's'}; runner up to ~${hSetup.expectedDays2}`;
+          card.exitWindow = `Close the whole position at the target — usually within ~${hSetup.expectedDays} session${hSetup.expectedDays === 1 ? '' : 's'}`;
           card.timingSource = 'hourly';
           // Deliberately NOT swapping _signalData/_historical. The reviewer's
           // thresholds — five-bar extended move, today's range against ATR,
@@ -804,7 +840,7 @@ router.get('/scan', async (req, res) => {
       try {
         // The three lookups are independent — run them together rather than
         // chained, which was tripling each card's latency.
-        const [enrichRes, extRes, earnRes, recRes, secRes] = await Promise.allSettled([
+        const [enrichRes, extRes, earnRes, recRes, secRes, sectorRes] = await Promise.allSettled([
           isCrypto
             ? enrichCryptoTicker(CRYPTO_NAMES[card.ticker] || card.ticker.replace('-USD', ''))
             : enrichTicker(card.ticker),
@@ -817,9 +853,12 @@ router.get('/scan', async (req, res) => {
           // RGTI filed an executive change while every headline held for it was
           // an opinion piece or an options-chain listing. Dilution and delisting
           // notices in particular have no other route into the system.
-          isCrypto ? Promise.resolve(null) : fetchRecentFilings(card.ticker)
+          isCrypto ? Promise.resolve(null) : fetchRecentFilings(card.ticker),
+          // Sector for the concentration limit, when the hand map has none.
+          (!isCrypto && (!card.sector || card.sector === 'N/A')) ? fetchCompanySector(card.ticker) : Promise.resolve(null)
         ]);
 
+        if (sectorRes.status === 'fulfilled' && sectorRes.value) card.sector = sectorRes.value;
         const enrichment = enrichRes.status === 'fulfilled' ? enrichRes.value : null;
         card.news      = enrichment?.news || [];
         card.sentiment = enrichment?.sentiment || null;
@@ -1073,6 +1112,17 @@ router.get('/scan', async (req, res) => {
       }
 
       // ── ONE SESSION OLD BEFORE IT IS ACTIONABLE ──────────────────
+      // RE-MEASURED 2026-10-05 on the corrected record, and the reasoning below
+      // no longer holds as stated. Graded hourly from the moment each card was
+      // shown: for ideas that persist, entering on day two instead of day one
+      // costs -0.228R (z=-1.96); but the wait also skips one-off ideas, which
+      // averaged -0.187R. Net per trade it is a wash (stocks -0.046R without,
+      // -0.058R with) — it mainly trades less. Kept because nothing better is
+      // available without knowing on day one which ideas will persist (that
+      // would be look-ahead). Watched by the 'one-session-wait' hypothesis now
+      // that cards record firstSession.
+      //
+      // Original reasoning, measured before the grading fixes of 2026-10-02:
       // The session straight after a signal is where the money goes. Same 288
       // stock signals, entry timing the only variable: next open -0.116R,
       // one session later +0.136R, paired difference +0.252R at z=3.74, and
@@ -1162,6 +1212,12 @@ router.get('/scan', async (req, res) => {
     //  • minSamples 10 → 8 so more setups get auto-adjusted
     //  • New "block" tier: <25% win rate over n≥15 hard-caps confidence + tags
     //    the card so it can never reach ENTER NOW
+    // Which bucket each card sits in when it is logged — so the record can say
+    // what the system actually told the trader to do, not only that a card
+    // existed. Without it every card was measured alike, including the ones
+    // the board said not to take and the ones it hid a moment later.
+    const bucketOf = new Map();
+    for (const k of ['enterNow', 'waitForBounce', 'carryForward']) for (const c of trades[k]) bucketOf.set(c, k);
     for (const card of [...trades.enterNow, ...trades.waitForBounce, ...trades.carryForward]) {
       if (card.review?.verdict === 'REJECT') continue;
       const setupKey = card.setupType?.label || null;
@@ -1257,7 +1313,15 @@ router.get('/scan', async (req, res) => {
       }
       // Pass the market context too — the features block records what the
       // system saw, and regime/VIX are part of that.
-      try { logSignal(card, { market, marketRegime, vix, atr: card.atr }); } catch {}
+      try {
+        logSignal(card, { market, marketRegime, vix, atr: card.atr,
+          bucket: bucketOf.get(card) || null,
+          shown: card.setupBlocked !== true,            // blocked cards are dropped from the board below
+          // Asked directly, not read off needsOneSession: that flag is only set
+          // on cards the ENTER NOW filter examined, so every card in the other
+          // columns read as "seen before" whether it was or not.
+          firstSession: !seenInEarlierSession(card.ticker, card.direction, market) });
+      } catch {}
     }
 
     // ── DROP SETUPS THE TRACKED RECORD PROVES ARE LOSERS ───────────────

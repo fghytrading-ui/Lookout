@@ -56,9 +56,18 @@ export function exitPlanOf(s) {
 
 /** Realised return in R, or null when the record cannot support the maths. */
 export function realisedR(s) {
-  const rr = s?.rrRatio;
+  // A market entry is scored from the price it actually filled at, with the
+  // printed stop and target, sized on the risk taken at that fill — the way
+  // the card tells you to trade it.
+  if (s?.entryType === 'market' && Number.isFinite(s.fillPrice)) s = { ...s, entry: s.fillPrice };
+  // The exact distances when the record has them. rrRatio is the card's
+  // display figure, rounded to one decimal, and paying wins at the rounded
+  // figure was off by up to 0.05R a trade (0.012R on average, 2026-10-02).
+  const risk = (Number.isFinite(s?.entry) && Number.isFinite(s?.sl)) ? Math.abs(s.entry - s.sl) : 0;
+  const exact = (to) => (risk > 0 && Number.isFinite(to)) ? Math.abs(to - s.entry) / risk : null;
+  const rr = exact(s?.tp) ?? s?.rrRatio;
   if (!rr) return null;
-  const rr2 = s.rrRatio2 || rr * 1.2;
+  const rr2 = exact(s?.tp2) ?? s.rrRatio2 ?? rr * 1.2;
 
   // Single exit: the whole position closes at TP1, so a win is the full
   // reward:risk rather than a third of it.
@@ -72,7 +81,8 @@ export function realisedR(s) {
       // still pays TP1. Recording it at rr2 over-credited 10 trades.
       case 'TP2':          return rr;
       case 'SCALED_BE':    return 0;      // cannot occur, kept for safety
-      case 'EXPIRED': {
+      case 'EXPIRED':
+      case 'TIME_STOP': {   // closed at the market — at the horizon, or early by the card's time stop
         const { entry, sl, closePrice } = s;
         if (![entry, sl, closePrice].every(v => Number.isFinite(v))) return null;
         const risk = Math.abs(entry - sl);

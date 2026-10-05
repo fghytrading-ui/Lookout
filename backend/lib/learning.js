@@ -109,7 +109,9 @@ function excursions(market) {
     // sat in — 84 of them, inflating how bad a band looked.
     .filter(s => s.status === 'CLOSED' && s.market === market && s.closeReason !== 'NEVER_FILLED')
     .map(s => {
-      const { entry, sl, tp, mfePct, maePct } = s;
+      const { sl, tp, mfePct, maePct } = s;
+      // A market entry's excursions are measured from where it filled.
+      const entry = (s.entryType === 'market' && Number.isFinite(s.fillPrice)) ? s.fillPrice : s.entry;
       if (!entry || !sl || !tp || mfePct == null || maePct == null) return null;
       const risk = Math.abs(entry - sl), tpd = Math.abs(tp - entry);
       if (risk <= 0 || tpd <= 0) return null;

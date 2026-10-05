@@ -58,6 +58,32 @@ r=M.determineOutcome(cvx,bars);
 t('daily: a session opening after expiry is excluded', r?.reason==='EXPIRED'&&r.closePrice===180.88, `${r?.reason} @ ${r?.closePrice}`);
 r=M.determineOutcome({...cvx,expiresAt:Date.parse('2026-06-01T20:30:00Z')},bars);
 t('daily: a session opening before expiry counts', r?.reason==='SCALED_BE', r?.reason);
+console.log('TIME STOP (crypto cards since 2026-10-05)');
+const TS={...L,timeStop:{afterHours:10,minProgress:0.2}};
+// fills at hour 1, drifts sideways under 20% of the way for 10+ hours
+r=M.determineOutcome(TS,[b(1,100.4,100.6,99.8,100.2),...Array.from({length:12},(_,i)=>b(2+i,100.2,100.6,99.9,100.3))]);
+t('not working after 10h -> closed at market', r?.reason==='TIME_STOP' && r.closePrice===100.3, `${r?.reason} @ ${r?.closePrice}`);
+r=M.determineOutcome(TS,[b(1,100.4,100.6,99.8,100.2),b(3,100.2,101.5,100.1,101.2),...Array.from({length:12},(_,i)=>b(4+i,101.2,101.4,100.9,101.1))]);
+t('went 30% of the way early -> time stop does not fire', r?.reason!=='TIME_STOP', r?.reason);
+r=M.determineOutcome(L,[b(1,100.4,100.6,99.8,100.2),...Array.from({length:12},(_,i)=>b(2+i,100.2,100.6,99.9,100.3))]);
+t('no time stop on the card -> none applied', r?.reason!=='TIME_STOP', r?.reason);
+r=M.determineOutcome(TS,[b(1,100.4,100.6,99.8,100.2),b(5,100.2,100.4,94,94.5)]);
+t('stop inside the 10h still a stop', r?.reason==='SL');
+t('TIME_STOP scored at its close', Math.abs(R.realisedR({...TS,signaledAt:Date.parse('2026-10-06T00:00:00Z'),exitPlan:'single',closeReason:'TIME_STOP',closePrice:100.3})-0.06)<1e-9);
+console.log('MARKET ENTRY (stock cards since 2026-10-05)');
+const MK={...L,entryType:'market',entry:100,sl:97,tp:104,expiresAt:t0+48*H};
+// Card says 100; first price after it is 101 — filled there, printed levels kept.
+r=M.determineOutcome(MK,[b(1,101,101.5,100.5,101.2),b(3,101.2,104.5,101,104.2)]);
+t('fills at the first price after the card', r?.fillPrice===101 && r?.reason==='TP1', `${r?.reason} fill ${r?.fillPrice}`);
+t('scored from the fill, printed levels: (104-101)/(101-97)',
+  Math.abs(R.realisedR({...MK,signaledAt:Date.parse('2026-10-06T00:00:00Z'),exitPlan:'single',closeReason:'TP1',fillPrice:101})-0.75)<1e-9);
+r=M.determineOutcome(MK,[b(1,96.5,98,96,97.5)]);
+t('opens past the printed stop -> not taken', r?.reason==='NEVER_FILLED', r?.reason);
+r=M.determineOutcome(MK,[b(1,104.5,105,104.2,104.8)]);
+t('opens past the printed target -> not taken', r?.reason==='NEVER_FILLED', r?.reason);
+r=M.determineOutcome(MK,[b(1,100,100.5,96.5,97.2)]);
+t('stop on the fill bar is a stop', r?.reason==='SL');
+t('limit cards are untouched by this', M.determineOutcome(L,[b(1,102,103,101,102.5),b(30,103,104,102,103)])?.reason==='NEVER_FILLED');
 console.log('SCORING');
 const card=(iso,cr,extra={})=>({signaledAt:Date.parse(iso),rrRatio:1.3,rrRatio2:1.56,closeReason:cr,...extra});
 t('May card (single): TP1 pays 1.30R', Math.abs(R.realisedR(card('2026-05-26T22:00:00Z','TP1'))-1.3)<1e-9);
@@ -67,5 +93,7 @@ t('single-exit TP2 record pays TP1', R.realisedR(card('2026-09-10T22:00:00Z','TP
 t('explicit exitPlan always wins', R.exitPlanOf(card('2026-05-26T22:00:00Z','TP1',{exitPlan:'thirds'}))==='thirds');
 t('a grade that scaled is scored as thirds', R.exitPlanOf(card('2026-05-26T22:00:00Z','SCALED_BE'))==='thirds');
 t('never filled is not a trade', R.realisedR(card('2026-09-10T22:00:00Z','NEVER_FILLED'))===null);
+t('wins pay the exact distance, not the rounded ratio',
+  Math.abs(R.realisedR({signaledAt:Date.parse('2026-09-10T22:00:00Z'),exitPlan:'single',closeReason:'TP1',rrRatio:1.6,entry:100,sl:97.5,tp:104.05})-1.62)<1e-9);
 console.log(`\n  ${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);

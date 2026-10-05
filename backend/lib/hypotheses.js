@@ -66,6 +66,24 @@ const HYPOTHESES = [
     note: 'Shorts have run behind longs since the record began without ever reaching significance.'
   },
   {
+    id: 'enter-now',
+    question: 'Do ENTER NOW recommendations beat the cards it did not recommend?',
+    market: null,
+    segment: (s) => typeof s.everEnterNow !== 'boolean' ? null : (s.everEnterNow ? 'enter-now' : 'not-recommended'),
+    note: 'The point of the board. Only measurable from 2026-10-05, when cards began recording what '
+        + 'the board told the trader. Reconstructed on older trades the ENTER NOW quality bar scored '
+        + '-0.000R against -0.134R for the rest (z=0.80) — promising, unproven.'
+  },
+  {
+    id: 'one-session-wait',
+    question: 'Does holding a setup until its second session pay?',
+    market: null,
+    segment: (s) => typeof s.firstSession !== 'boolean' ? null : (s.firstSession ? 'first-sighting' : 'seen-before'),
+    note: 'Live rule since 2026-08-28 on a +0.252R finding measured before the grading was fixed. '
+        + 'Re-measured 2026-10-05 on the corrected record it is a wash per trade (stocks -0.046R without '
+        + 'against -0.058R with) — it mostly trades less. Kept, and watched here.'
+  },
+  {
     id: 'reviewer',
     question: 'Does the reviewer verdict predict anything?',
     market: null,

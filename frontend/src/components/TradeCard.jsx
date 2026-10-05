@@ -3,15 +3,19 @@ import Sparkline from './Sparkline.jsx';
 import ShareMenu from './ShareMenu.jsx';
 import { formatTradeText } from '../utils/share.js';
 
+// The scanner's own rating of the setup, used to choose ENTER NOW. It was
+// labelled "PROB", but measured on 429 trades (2026-10-02) HIGH-rated cards
+// ended in profit 36% of the time and MEDIUM 39% — it is a rating, not a
+// probability, and the label should not imply otherwise.
 function ProbabilityBadge({ probability, confirming }) {
   const isHigh = probability === 'HIGH';
   return (
-    <span className={`text-[10px] font-bold px-2 py-0.5 rounded border font-mono tracking-wider ${
+    <span title="The scanner's internal setup rating — not a chance of winning" className={`text-[10px] font-bold px-2 py-0.5 rounded border font-mono tracking-wider ${
       isHigh
         ? 'bg-green-500/15 border-green-500/40 text-green-300'
         : 'bg-amber-500/15 border-amber-500/40 text-amber-300'
     }`}>
-      {probability} PROB · {confirming} signals
+      {probability} RATING · {confirming} signals
     </span>
   );
 }
@@ -121,11 +125,16 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
   if (!trade) return null;
 
   // Position sizing: how many shares for `riskPct%` of `accountSize`?
+  // A market-entry card is sized from the live price, because that is where
+  // you get in — sizing from the old limit would risk more or less than you
+  // set whenever the price has moved since the card was drawn.
+  const marketEntry = trade.entryType === 'market';
+  const sizeFrom = marketEntry && Number.isFinite(trade.price) ? trade.price : trade.entry;
   const dollarRisk = accountSize * (riskPct / 100);
-  const perShareRisk = Math.abs(trade.entry - trade.sl);
+  const perShareRisk = Math.abs(sizeFrom - trade.sl);
   const recShares = perShareRisk > 0 ? Math.floor(dollarRisk / perShareRisk) : 0;
-  const positionCost = recShares * trade.entry;
-  const dollarReward = recShares * Math.abs(trade.tp - trade.entry);
+  const positionCost = recShares * sizeFrom;
+  const dollarReward = recShares * Math.abs(trade.tp - sizeFrom);
 
   const isLong  = trade.direction === 'LONG';
   const isShort = trade.direction === 'SHORT';
@@ -206,10 +215,10 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
                   ? 'bg-green-500/15 border-green-500/40 text-green-300'
                   : 'bg-amber-500/15 border-amber-500/40 text-amber-300'
               }`}>{trade.probability}</span>
-              <span className={`text-[11px] font-mono font-bold ${
+              <span title="Setup score out of 100 — ranks setups; it is not a chance of winning" className={`text-[11px] font-mono font-bold ${
                 trade.confidence >= 80 ? 'text-green-400'
                 : trade.confidence >= 65 ? 'text-amber-400' : 'text-orange-400'
-              }`}>{trade.confidence}%</span>
+              }`}>{trade.confidence}<span className="text-[8px] text-[#555]">/100</span></span>
               <span className={`text-[11px] font-mono font-bold ${rrColor}`}>{trade.rrRatio}:1</span>
             </div>
             <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -335,11 +344,18 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
         {trade.confidence != null && (
           <div className="mb-3">
             <div className="flex items-center justify-between mb-1">
+              {/* This read "Setup Confidence 90% · Very High". Measured on 429
+                  trades, cards scored 90+ ended in profit 28% of the time and
+                  every band from 0 to 99 sat between 28% and 46% — the score
+                  ranks setups but says nothing about the odds. So it is shown
+                  as what it is, next to what this setup has actually done. */}
               <span className="text-[9px] uppercase tracking-widest text-[#444] font-mono">
-                {trade.tradeStyle === 'sameDay' ? 'Setup Confidence (1–2 session horizon)' : 'Confidence Score'}
+                Setup score — not a chance of winning
               </span>
               <span className="text-[9px] text-[#555] font-mono">
-                {trade.confidence >= 80 ? 'Very High' : trade.confidence >= 65 ? 'High' : trade.confidence >= 50 ? 'Moderate' : 'Low'}
+                {trade.setupEvidence?.greenRate != null && trade.setupEvidence?.sampleSize
+                  ? `Track record: ${Math.round(trade.setupEvidence.greenRate * 100)}% ended in profit (${trade.setupEvidence.sampleSize} trades)`
+                  : 'No track record for this setup yet'}
               </span>
             </div>
             <ConfidenceBar value={trade.confidence} />
@@ -386,9 +402,14 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
 
         {/* Levels grid */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
-          <LevelBox label="Entry" value={trade.entry} rangeLow={trade.entryLow} rangeHigh={trade.entryHigh} colorClass="bg-green-500/8 border-green-500/20" />
-          <LevelBox label="TP1 — Safe" value={trade.tp}  pct={trade.tpPct}  colorClass="bg-blue-500/8 border-blue-500/20" />
-          {trade.tp2 != null && (
+          {marketEntry
+            ? <LevelBox label="Enter at market" value={trade.price ?? trade.entry} colorClass="bg-green-500/8 border-green-500/20" />
+            : <LevelBox label="Entry" value={trade.entry} rangeLow={trade.entryLow} rangeHigh={trade.entryHigh} colorClass="bg-green-500/8 border-green-500/20" />}
+          <LevelBox label={trade.tp0 ? 'TP1 — Safe' : 'Target'} value={trade.tp}  pct={trade.tpPct}  colorClass="bg-blue-500/8 border-blue-500/20" />
+          {/* A second target only exists under the old scale-out plan. With
+              one exit, showing "TP2 — Extended" beside the target invited
+              holding past it. */}
+          {trade.tp2 != null && trade.tp0 && (
             <LevelBox label="TP2 — Extended" value={trade.tp2} pct={trade.tp2Pct} colorClass="bg-cyan-500/8 border-cyan-500/30" />
           )}
           <LevelBox label="Stop Loss" value={trade.sl} pct={trade.slPct} colorClass="bg-red-500/8 border-red-500/20" />
@@ -634,6 +655,12 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
                 <div className="text-[9px] text-[#666] mt-0.5">−{trade.slPct}%</div>
               </div>
             </div>
+            {trade.timeStop && (
+              <div className="mt-2 text-[10px] font-mono text-amber-300/90 border border-amber-500/25 bg-amber-500/5 rounded px-2 py-1.5 leading-snug">
+                ⏱ Time stop: if it hasn't moved {Math.round(trade.timeStop.minProgress * 100)}% of the way to the target
+                {' '}{trade.timeStop.afterHours} hours after you're filled, close it at market — don't wait for the stop.
+              </div>
+            )}
             <div className="text-[9px] text-[#555] font-mono mt-2">
               No partial exits and no move to breakeven — measured, both cost money.
             </div>

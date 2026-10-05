@@ -125,6 +125,27 @@ export function assessGoals() {
         : `No measurable edge either way: ${whole.mean.toFixed(3)}R over ${whole.n} trades, interval spans zero. Not proven to make or lose money.`
   } : null;
 
+  // ── WHAT IT RECOMMENDED ─────────────────────────────────────────────
+  // The verdict above covers every card, including the ones the board said
+  // not to take. The goal is that its RECOMMENDATIONS make money, so trades it
+  // marked ENTER NOW are judged on their own. Only records written since
+  // 2026-10-05 carry `everEnterNow`; until enough of those resolve this says
+  // so rather than guessing.
+  const tracked = entered.filter(s => typeof s.everEnterNow === 'boolean');
+  const recStats = expectancyOf(tracked.filter(s => s.everEnterNow));
+  const restStats = expectancyOf(tracked.filter(s => !s.everEnterNow));
+  const recommended = {
+    n: recStats.n, rest: restStats.n,
+    expectancy: recStats.mean != null ? parseFloat(recStats.mean.toFixed(3)) : null,
+    restExpectancy: restStats.mean != null ? parseFloat(restStats.mean.toFixed(3)) : null,
+    verdict: recStats.n < 30 || recStats.upper == null ? 'GATHERING'
+           : recStats.upper < 0 ? 'NEGATIVE' : recStats.lower > 0 ? 'POSITIVE' : 'UNPROVEN',
+    headline: recStats.n < 30
+      ? `ENTER NOW recommendations: ${recStats.n} of 30 resolved trades needed to judge them on their own`
+      : `ENTER NOW recommendations: ${recStats.mean >= 0 ? '+' : ''}${recStats.mean.toFixed(3)}R per trade over ${recStats.n}`
+        + (restStats.n >= 30 ? ` (everything else ${restStats.mean >= 0 ? '+' : ''}${restStats.mean.toFixed(3)}R)` : '')
+  };
+
   const goals = [];
   const enough = cur && cur.n >= MIN_JUDGE;
 
@@ -184,6 +205,7 @@ export function assessGoals() {
     goals, trend,
     current: cur, previous: prev, pendingCurrent,
     edge,
+    recommended,
     calibrationEpoch: new Date(epoch).toISOString().slice(0, 10),
     assessedAt: new Date().toISOString()
   };

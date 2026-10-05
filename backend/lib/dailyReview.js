@@ -124,6 +124,7 @@ export function buildReview(now = Date.now()) {
     byMarket: week.byMarket,
     goals: goals ? { status: goals.status, headline: goals.headline,
                      expectancy: goals.current?.expectancy ?? null, n: goals.current?.n ?? null } : null,
+    recommended: goals?.recommended || null,
     params: learn.params || {},
     changes: changedToday.map(h => ({
       market: h.market,
@@ -178,6 +179,14 @@ export function narrate(entry, previous) {
     watch.push(`Goals: ${entry.goals.headline}`);
   } else if (gs) {
     bad.push(`Goals: ${entry.goals.headline}`);
+  }
+
+  // What it told the trader to take, judged on its own — the actual goal.
+  const rec = entry.recommended;
+  if (rec && rec.verdict && rec.verdict !== 'GATHERING') {
+    (rec.verdict === 'POSITIVE' ? good : rec.verdict === 'NEGATIVE' ? bad : watch).push(rec.headline);
+  } else if (rec) {
+    watch.push(rec.headline);
   }
 
   // What the software changed about itself.

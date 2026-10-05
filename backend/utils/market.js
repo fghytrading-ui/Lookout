@@ -53,18 +53,28 @@ function ukTimeFor930AMET(nyDay) {
 }
 
 // Returns smart entry instructions in UK time
-export function getEntryTiming() {
+// `entry` says how the board's cards are entered. Stock cards enter at market
+// (2026-10-05: a limit waiting for the dip missed the trades that ran — see
+// buildCard); commodity ETFs still use a limit.
+export function getEntryTiming({ entry = 'market' } = {}) {
+  const how = entry === 'market'
+    ? { now: 'enter at market — no need to wait for the entry price',
+        soon: 'enter at market on the open',
+        later: 'enter at market on the open' }
+    : { now: 'place limit order at entry price',
+        soon: 'set limit order now',
+        later: 'place limit order for the open' };
   const session = getSession();
   const et = getNYTime();
   const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
   if (session === 'MARKET_OPEN') {
-    return { label: 'ENTER NOW', detail: 'Market is OPEN — place limit order at entry price', urgency: 'now' };
+    return { label: 'ENTER NOW', detail: `Market is OPEN — ${how.now}`, urgency: 'now' };
   }
 
   if (session === 'PRE_MARKET') {
     const ukTime = ukTimeFor930AMET(et);
-    return { label: `ENTER AT ${ukTime} UK`, detail: `Markets open at ${ukTime} UK time — set limit order now`, urgency: 'soon' };
+    return { label: `ENTER AT ${ukTime} UK`, detail: `Markets open at ${ukTime} UK time — ${how.soon}`, urgency: 'soon' };
   }
 
   // For AFTER_HOURS, CLOSED, WEEKEND — find next market open
@@ -85,7 +95,7 @@ export function getEntryTiming() {
 
   return {
     label: `ENTER ${dayLabel} ${ukTime} UK`,
-    detail: `Market closed — place limit order for ${ukTime} UK open`,
+    detail: `Market closed — ${how.later} (${ukTime} UK)`,
     urgency: 'wait'
   };
 }
@@ -372,7 +382,7 @@ export function getFuturesEntryTiming(et = getNYTime()) {
 export function getCommodityEntryTiming(ticker, et = getNYTime()) {
   return String(ticker || '').endsWith('=F')
     ? getFuturesEntryTiming(et)
-    : getEntryTiming();
+    : getEntryTiming({ entry: 'limit' });
 }
 
 

@@ -242,6 +242,14 @@ export function logSignal(card, extras = {}) {
   if (existing) {
     // Update lastSeenAt so we know it's still firing
     existing.lastSeenAt = now;
+    // A card can move into ENTER NOW later in its session (price reaching the
+    // zone, a confirmation arriving). What matters for judging the system is
+    // whether it EVER told the trader to enter.
+    if (extras.bucket === 'enterNow' && !existing.everEnterNow) {
+      existing.everEnterNow = true;
+      existing.enterNowAt = now;
+    }
+    if (extras.shown === true) existing.shown = true;
     dirty = true;
     return existing;
   }
@@ -267,6 +275,21 @@ export function logSignal(card, extras = {}) {
     // actually offered so no scoring code ever has to guess again.
     tp0: Number.isFinite(card.tp0) ? card.tp0 : null,
     exitPlan: Number.isFinite(card.tp0) ? 'thirds' : 'single',
+    // The card's time stop, if it had one — graded under exactly what it said.
+    timeStop: card.timeStop || null,
+    // How the card said to enter. 'market': at the first price after the card,
+    // printed stop and target kept; the grader records the fill it got.
+    entryType: card.entryType || 'limit',
+    refPrice: Number.isFinite(card.refPrice) ? card.refPrice : null,
+    // What the board told the trader. Until 2026-10-05 every card was logged
+    // alike, so "is it making money" was measured on cards the system said
+    // NOT to take — and on some it hid a moment later. These make the
+    // question that matters answerable: do its recommendations make money?
+    bucket: extras.bucket ?? null,               // where it sat when first logged
+    everEnterNow: extras.bucket === 'enterNow',  // told to enter at any point this session
+    enterNowAt: extras.bucket === 'enterNow' ? now : null,
+    shown: extras.shown ?? null,                 // false: dropped from the board as a proven loser
+    firstSession: extras.firstSession ?? null,   // first sighting of the idea — the one-session wait held it
     atr: extras.atr,
     rrRatio: card.rrRatio,
     rrRatio2: card.rrRatio2,

@@ -61,7 +61,10 @@ export function evaluateRiskGuard(positions, accountSize, candidateTicker, candi
 
   // 3. Sector concentration
   if (candidateSector && candidateSector !== 'N/A') {
-    const sameSectorCount = positions.filter(p => sectorMap[p.ticker] === candidateSector).length;
+    // A position's own recorded sector first: the board map only knows tickers
+    // that are on the board right now, so positions taken earlier and since
+    // gone from it were never counted.
+    const sameSectorCount = positions.filter(p => (p.sector && p.sector !== 'N/A' ? p.sector : sectorMap[p.ticker]) === candidateSector).length;
     if (sameSectorCount >= settings.maxSectorConcentration) {
       issues.push({
         severity: 'block',

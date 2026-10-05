@@ -43,6 +43,17 @@ function getEffectivePrice(live) {
 
 function computeLiveEntryStatus(trade, livePrice) {
   if (livePrice == null) return null;
+  // Market-entry cards: the only thing that rules the trade out is price
+  // already past a printed level. "Wait for pullback" is exactly what lost the
+  // runaway winners — see buildCard in the scanner.
+  if (trade.entryType === 'market') {
+    const L = trade.direction === 'LONG';
+    const past = L ? (livePrice <= trade.sl ? 'stop' : livePrice >= trade.tp ? 'target' : null)
+                   : (livePrice >= trade.sl ? 'stop' : livePrice <= trade.tp ? 'target' : null);
+    return past
+      ? { status: 'MISSED', text: `Price is already beyond the ${past} — this trade is off` }
+      : { status: 'IN_ZONE', text: 'Enter at market — keep the printed stop and target' };
+  }
   const { entryLow, entryHigh, direction } = trade;
   if (entryLow == null || entryHigh == null) return null;
 
