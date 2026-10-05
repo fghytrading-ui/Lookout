@@ -1,0 +1,37 @@
+# Scheduled scans for the live site.
+#
+# Render's free tier sleeps after 15 idle minutes, and the scanner only runs
+# when something asks it to — so the tracked record only grew while someone
+# had the page open. Every rule the system learns, and every check on whether
+# its ENTER NOW recommendations make money, waits on that record. These runs
+# wake the service and scan on a timetable instead.
+#
+# Budget: about 190 of the workspace's 750 free Render hours a month (stocks
+# every 30 min through the US session on weekdays; crypto every 4 hours). Free
+# for a public repository. GitHub pauses scheduled workflows after 60 days with
+# no commits to the repo; any push resumes them.
+name: Scheduled scans
+
+on:
+  schedule:
+    - cron: '*/30 13-21 * * 1-5'   # US session, covering both EST and EDT (UTC)
+    - cron: '15 */4 * * *'         # crypto, around the clock
+  workflow_dispatch: {}
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Wake the service
+        run: |
+          for i in 1 2 3 4 5 6; do
+            curl -fsS --max-time 60 https://lookout-jae6.onrender.com/api/health && break
+            sleep 20
+          done
+      - name: Scan stocks
+        if: github.event.schedule != '15 */4 * * *'
+        run: curl -fsS --max-time 240 -o /dev/null -w "stocks scan HTTP %{http_code} in %{time_total}s\n" "https://lookout-jae6.onrender.com/api/scanner/scan?market=stocks"
+      - name: Scan crypto
+        if: github.event.schedule != '*/30 13-21 * * 1-5'
+        run: curl -fsS --max-time 240 -o /dev/null -w "crypto scan HTTP %{http_code} in %{time_total}s\n" "https://lookout-jae6.onrender.com/api/scanner/scan?market=crypto"
