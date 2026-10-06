@@ -247,7 +247,9 @@ const SECTOR_MAP = {
   XOM:'Energy', CVX:'Energy', OXY:'Energy', HAL:'Energy',
   LLY:'Healthcare', UNH:'Healthcare', MRNA:'Healthcare', PFE:'Healthcare', ABBV:'Healthcare',
   WMT:'Cons. Staples', COST:'Cons. Staples', NKE:'Cons. Discretionary', SBUX:'Cons. Discretionary',
-  SPY:'ETF', QQQ:'ETF', IWM:'ETF',
+  SPY:'ETF', QQQ:'ETF', IWM:'ETF', DIA:'ETF', SQQQ:'ETF', SOXS:'ETF',
+  // Sector ETFs count with their sector: long XLE and long XOM is one bet on oil.
+  XLF:'Financials', XLE:'Energy', XLK:'Technology', XLV:'Healthcare', XLI:'Industrials', XBI:'Healthcare',
   MSTR:'Technology', COIN:'Financials', RKLB:'Industrials', PLTR:'Technology', HOOD:'Financials',
   GLD:'ETF / Commodities', SLV:'ETF / Commodities', USO:'ETF / Energy', GDX:'ETF / Mining'
 };

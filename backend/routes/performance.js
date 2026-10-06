@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { getAggregateStats, getOpenSignals, getAllSignals, getLogSize, mergeSignals } from '../lib/signalLog.js';
 import { monitorTick } from '../lib/signalMonitor.js';
+import { getDurableStatus } from '../lib/durableStore.js';
 
 const router = Router();
 
@@ -65,8 +66,17 @@ router.get('/size', (req, res) => {
 
 // POST /api/performance/restore — client pushes its localStorage mirror back
 // after the server's disk was wiped. Merged by id; CLOSED records win.
+//
+// Only while durable storage is off. The site and its code are public, so this
+// door lets anyone add finished trades to the record the learning loop tunes
+// itself on. It was the only defence against the disk wipes; once the record
+// lives in durable storage the server is the source of truth and the door shuts.
 router.post('/restore', (req, res) => {
   try {
+    const durable = getDurableStatus();
+    if (durable.enabled && durable.hydrated) {
+      return res.json({ added: 0, updated: 0, total: getLogSize(), skipped: 'durable storage holds the record' });
+    }
     const incoming = Array.isArray(req.body) ? req.body : req.body?.signals;
     if (!Array.isArray(incoming)) {
       return res.status(400).json({ error: 'Expected an array of signal records' });

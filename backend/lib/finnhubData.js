@@ -71,19 +71,31 @@ export async function fetchFinnhubCompanyNews(ticker, { days = 4, limit = 25 } =
 // Finnhub industries grouped into broad sectors, so related names count
 // together for the concentration limit — a semiconductor maker and a software
 // house move together far more than two names that merely share a word.
+// Named exactly as the scanner's hand map names them: the risk guard counts a
+// sector by string, so 'Health Care' here and 'Healthcare' there were two
+// sectors and the 3-per-sector limit never saw them together.
 const SECTOR_OF_INDUSTRY = {
-  Semiconductors: 'Technology', Technology: 'Technology', 'Communications': 'Communication Services',
-  Media: 'Communication Services', 'Telecommunication': 'Communication Services',
+  Semiconductors: 'Technology', Technology: 'Technology', 'Communications': 'Comm. Services',
+  Media: 'Comm. Services', 'Telecommunication': 'Comm. Services',
   Banking: 'Financials', 'Financial Services': 'Financials', Insurance: 'Financials',
-  Pharmaceuticals: 'Health Care', Biotechnology: 'Health Care', 'Health Care': 'Health Care',
-  'Life Sciences Tools & Services': 'Health Care', 'Oil & Gas': 'Energy', Energy: 'Energy',
-  Utilities: 'Utilities', 'Real Estate': 'Real Estate', Retail: 'Consumer', 'Consumer products': 'Consumer',
-  Hotels: 'Consumer', 'Hotels, Restaurants & Leisure': 'Consumer', Automobiles: 'Consumer', 'Auto Components': 'Consumer',
-  'Food Products': 'Consumer Staples', Beverages: 'Consumer Staples', Tobacco: 'Consumer Staples',
+  Pharmaceuticals: 'Healthcare', Biotechnology: 'Healthcare', 'Health Care': 'Healthcare',
+  'Life Sciences Tools & Services': 'Healthcare', 'Oil & Gas': 'Energy', Energy: 'Energy',
+  Utilities: 'Utilities', 'Real Estate': 'Real Estate', Retail: 'Cons. Discretionary', 'Consumer products': 'Cons. Discretionary',
+  Hotels: 'Cons. Discretionary', 'Hotels, Restaurants & Leisure': 'Cons. Discretionary', Automobiles: 'Cons. Discretionary', 'Auto Components': 'Cons. Discretionary',
+  'Food Products': 'Cons. Staples', Beverages: 'Cons. Staples', Tobacco: 'Cons. Staples',
   Machinery: 'Industrials', 'Aerospace & Defense': 'Industrials', Airlines: 'Industrials', Logistics: 'Industrials',
   'Industrial Conglomerates': 'Industrials', Construction: 'Industrials', 'Electrical Equipment': 'Industrials',
-  Chemicals: 'Materials', Metals: 'Materials', 'Metals & Mining': 'Materials', Mining: 'Materials', Packaging: 'Materials'
+  'Road & Rail': 'Industrials', Marine: 'Industrials', 'Transportation Infrastructure': 'Industrials', Building: 'Industrials',
+  'Commercial Services & Supplies': 'Industrials', 'Professional Services': 'Industrials', 'Trading Companies & Distributors': 'Industrials',
+  'Textiles, Apparel & Luxury Goods': 'Cons. Discretionary', 'Leisure Products': 'Cons. Discretionary',
+  'Diversified Consumer Services': 'Cons. Discretionary', Distributors: 'Cons. Discretionary',
+  Chemicals: 'Materials', Metals: 'Materials', 'Metals & Mining': 'Materials', Mining: 'Materials', Packaging: 'Materials',
+  'Paper & Forest': 'Materials'
 };
+// Values cached under the old names (30-day cache) are renamed on read.
+const RENAMED = { 'Communication Services': 'Comm. Services', 'Health Care': 'Healthcare',
+  'Consumer': 'Cons. Discretionary', 'Consumer Staples': 'Cons. Staples' };
+const canonical = (s) => RENAMED[s] || s;
 
 /**
  * The company's sector, for the risk guard's concentration limit. The scanner
@@ -97,11 +109,11 @@ export async function fetchCompanySector(ticker) {
   if (!FINNHUB_DATA_ENABLED) return null;
   const key = `profile:${ticker}`;
   const hit = cacheGet(key, TTL.profile);
-  if (hit !== null) return hit || null;
+  if (hit !== null) return canonical(hit) || null;
   try {
     const { data } = await axios.get(`${BASE}/stock/profile2`, { params: { symbol: ticker, token: API_KEY }, timeout: 8000 });
     const industry = data?.finnhubIndustry || '';
-    const sector = industry ? (SECTOR_OF_INDUSTRY[industry] || industry) : '';
+    const sector = industry ? canonical(SECTOR_OF_INDUSTRY[industry] || industry) : '';
     cacheSet(key, sector);            // '' remembers "no profile" (ETFs) without asking again
     return sector || null;
   } catch {
