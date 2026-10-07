@@ -226,7 +226,9 @@ export default function App() {
                     <span className="text-sm leading-none mt-0.5">{m.icon}</span>
                     <span className="min-w-0">
                       <span className="block text-[11px] font-mono font-bold tracking-wider">{m.label.toUpperCase()}</span>
-                      <span className="block text-[9px] text-[#555] font-mono leading-tight mt-0.5">{m.hint}</span>
+                      <span className="block text-[9px] text-[#555] font-mono leading-tight mt-0.5">
+                        {goals?.paused?.some(p => p.market === m.id) ? 'Paused — losing record, still tracked' : m.hint}
+                      </span>
                     </span>
                     {view === m.id && <span className="ml-auto text-cyan-400 text-[10px]">✓</span>}
                   </button>

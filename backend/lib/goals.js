@@ -24,6 +24,7 @@
 import { getAllSignals } from './signalLog.js';
 import { getLearningState } from './learning.js';
 import { realisedR, expectancyOf } from './realisedR.js';
+import { pausedMarkets } from './marketPause.js';
 
 // When the calibration materially changed. Trades before this were produced by
 // different settings and cannot judge the current ones.
@@ -131,7 +132,9 @@ export function assessGoals() {
   // marked ENTER NOW are judged on their own. Only records written since
   // 2026-10-05 carry `everEnterNow`; until enough of those resolve this says
   // so rather than guessing.
-  const tracked = entered.filter(s => typeof s.everEnterNow === 'boolean');
+  // Only what was on the board: a paused market's cards are logged so it can
+  // earn its way back, but nobody was told to take them.
+  const tracked = entered.filter(s => typeof s.everEnterNow === 'boolean' && s.shown !== false);
   const recStats = expectancyOf(tracked.filter(s => s.everEnterNow));
   const restStats = expectancyOf(tracked.filter(s => !s.everEnterNow));
   const recommended = {
@@ -206,6 +209,7 @@ export function assessGoals() {
     current: cur, previous: prev, pendingCurrent,
     edge,
     recommended,
+    paused: pausedMarkets(),
     calibrationEpoch: new Date(epoch).toISOString().slice(0, 10),
     assessedAt: new Date().toISOString()
   };

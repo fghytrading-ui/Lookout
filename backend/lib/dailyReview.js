@@ -125,6 +125,7 @@ export function buildReview(now = Date.now()) {
     goals: goals ? { status: goals.status, headline: goals.headline,
                      expectancy: goals.current?.expectancy ?? null, n: goals.current?.n ?? null } : null,
     recommended: goals?.recommended || null,
+    paused: goals?.paused || [],
     params: learn.params || {},
     changes: changedToday.map(h => ({
       market: h.market,
@@ -188,6 +189,9 @@ export function narrate(entry, previous) {
   } else if (rec) {
     watch.push(rec.headline);
   }
+
+  // Markets held off the board, and how far each is from earning its place back.
+  for (const p of entry.paused || []) watch.push(`${p.reason} ${p.progress}`);
 
   // What the software changed about itself.
   for (const c of entry.changes) {

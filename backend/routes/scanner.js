@@ -16,6 +16,7 @@ import { analyseCatalysts, catalystSignals } from '../lib/catalystEngine.js';
 import { fetchRecommendationTrend, fetchCompanySector } from '../lib/finnhubData.js';
 import { fetchRecentFilings } from '../lib/secFilings.js';
 import { getLearnedParams } from '../lib/learning.js';
+import { marketPause } from '../lib/marketPause.js';
 import { buildThesis } from '../lib/thesis.js';
 import { getUpcomingMacro, buildEventTimeline } from '../lib/upcomingEvents.js';
 import { getMarketUniverse } from '../lib/marketUniverse.js';
@@ -448,6 +449,8 @@ function sortTrades(arr) {
 router.get('/scan', async (req, res) => {
   try {
     const market = (req.query.market || 'stocks').toLowerCase();
+    // Off the board until its own record earns it back (lib/marketPause.js).
+    const paused = marketPause(market);
     const watchlist = market === 'forex' ? FOREX_WATCHLIST
                     : market === 'commodities' ? COMMODITIES_WATCHLIST
                     : market === 'crypto' ? CRYPTO_WATCHLIST
@@ -1318,7 +1321,8 @@ router.get('/scan', async (req, res) => {
       try {
         logSignal(card, { market, marketRegime, vix, atr: card.atr,
           bucket: bucketOf.get(card) || null,
-          shown: card.setupBlocked !== true,            // blocked cards are dropped from the board below
+          // Blocked cards, and every card of a paused market, are dropped from the board below.
+          shown: card.setupBlocked !== true && !paused,
           // Asked directly, not read off needsOneSession: that flag is only set
           // on cards the ENTER NOW filter examined, so every card in the other
           // columns read as "seen before" whether it was or not.
@@ -1380,6 +1384,13 @@ router.get('/scan', async (req, res) => {
       enterNowEmptyReason = enterNowEmptyReason ? `${enterNowEmptyReason} ${note}` : note;
     }
 
+    // A paused market is still scanned and logged above, so its record keeps
+    // growing and it can earn its way back; it is just not offered.
+    if (paused) {
+      for (const key of ['enterNow', 'waitForBounce', 'carryForward']) trades[key] = [];
+      enterNowEmptyReason = `${paused.reason} ${paused.progress}`;
+    }
+
     // Mark the single best trade across all categories as TOP PICK
     // Only consider PASS verdict trades for TOP PICK (no caution flags)
     const allCards = [...trades.enterNow, ...trades.waitForBounce, ...trades.carryForward];
@@ -1406,6 +1417,7 @@ router.get('/scan', async (req, res) => {
       entryTiming,
       enterNowEmptyReason,
       droppedForRecord: droppedSummary,
+      paused,
       macroBlackout,
       // How current the board actually is, so freshness is visible rather than
       // assumed. The displayed price refreshes on its own every ten seconds,
