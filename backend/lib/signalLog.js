@@ -90,9 +90,29 @@ function isCoherent(rec) {
 // CIs straddle zero — but the calibration is fitted to this record, and it was
 // being fitted to double counts.
 function sessionKeyOf(rec) {
-  const tz = rec.market === 'crypto' ? 'UTC' : 'America/New_York';
-  const day = new Date(rec.signaledAt).toLocaleDateString('en-CA', { timeZone: tz });
-  return `${rec.ticker}|${rec.direction}|${day}`;
+  return `${rec.ticker}|${rec.direction}|${sessionOf(rec.signaledAt, rec.market)}`;
+}
+
+// The session a signal can first be traded in — which, for a stock, is not the
+// calendar day it was raised. A card raised after the 16:00 close, or at the
+// weekend, can first be acted on at the next open: the same session as the
+// pre-market scan that raises it again. Keyed by calendar day those were two
+// records of one trade, same entry, same stop, same fill. Measured 2026-10-07:
+// 54 of 384 stock records (14%) were such a second copy, so their wins and
+// losses were counted twice, and the one-session wait treated an evening
+// sighting followed by a pre-market one as a setup that had survived a session.
+// Crypto trades round the clock and keeps the UTC day; across that boundary
+// only 3 of 121 ideas repeated within 12 hours.
+export function sessionOf(ms, market) {
+  if (market === 'crypto') return new Date(ms).toLocaleDateString('en-CA', { timeZone: 'UTC' });
+  const day = new Date(ms).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  if (market !== 'stocks') return day;
+  const hour = parseInt(new Date(ms).toLocaleString('en-US',
+    { timeZone: 'America/New_York', hour12: false, hour: '2-digit' }), 10) % 24;
+  const d = new Date(`${day}T12:00:00Z`);
+  if (hour >= 16) d.setUTCDate(d.getUTCDate() + 1);
+  while (d.getUTCDay() === 0 || d.getUTCDay() === 6) d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
 }
 
 // Which of two records for the same idea to keep: a resolved outcome beats an
@@ -209,12 +229,13 @@ function genId() {
   return `${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 }
 
-// Log a new signal. De-dupes: if there's already an OPEN signal for the
-// same ticker+direction within the last 24h, returns existing instead.
+// Log a new signal. De-dupes: if the same ticker+direction was already logged
+// for this trading session (sessionOf), returns that record instead.
 export function logSignal(card, extras = {}) {
   load();
   const now = Date.now();
-  const dedupeWindowMs = 24 * 60 * 60 * 1000;
+  // Wide enough to reach from a Friday-evening card to Monday's session.
+  const dedupeWindowMs = 4 * 24 * 60 * 60 * 1000;
 
   // One record per idea per session, whatever became of it.
   //
@@ -230,14 +251,13 @@ export function logSignal(card, extras = {}) {
   // on 22 Aug, after which the duplicates nearly stopped. But the dedupe
   // itself was the fragile part: whether an idea is new has nothing to do with
   // whether the previous one is still running.
-  const sessionOf = (ms) => new Date(ms).toLocaleDateString('en-CA',
-    { timeZone: (extras.market || card.market) === 'crypto' ? 'UTC' : 'America/New_York' });
-  const thisSession = sessionOf(now);
+  const market = extras.market || card.market;
+  const thisSession = sessionOf(now, market);
   const existing = signals.find(s =>
     s.ticker === card.ticker &&
     s.direction === card.direction &&
     now - s.signaledAt < dedupeWindowMs &&
-    sessionOf(s.signaledAt) === thisSession
+    sessionOf(s.signaledAt, market) === thisSession
   );
   if (existing) {
     // Update lastSeenAt so we know it's still firing
@@ -646,8 +666,7 @@ export function mergeSignals(incoming) {
  */
 export function seenInEarlierSession(ticker, direction, market) {
   load();
-  const dayOf = (ms) => new Date(ms).toLocaleDateString('en-CA',
-    { timeZone: market === 'crypto' ? 'UTC' : 'America/New_York' });
+  const dayOf = (ms) => sessionOf(ms, market);
   const today = dayOf(Date.now());
   // Only look back a few days: a setup from a fortnight ago is a different idea.
   const floor = Date.now() - 6 * 24 * 60 * 60 * 1000;
