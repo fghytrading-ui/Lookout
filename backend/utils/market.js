@@ -100,8 +100,11 @@ export function getEntryTiming({ entry = 'market' } = {}) {
   if (entry === 'market') {
     // Cards raised now enter near the END of the next session, not its open.
     const close = isEarlyClose(next) ? ukTimeForET(next, 12, 30) : ukTimeForET(next, 15, 30);
+    const bell  = isEarlyClose(next) ? ukTimeForET(next, 13, 0)  : ukTimeForET(next, 16, 0);
     return {
-      label: `ENTER ${dayLabel} ${close.replace(/ UK$/, '')} UK`,
+      // A window, not a single time: "ENTER TOMORROW 8:30PM UK" read like a
+      // missed deadline when the board was looked at in the evening.
+      label: `ENTER ${dayLabel} ${close.replace(/ UK$/, '')}–${bell.replace(/ UK$/, '')} UK`,
       detail: `Market closed — cards raised now enter in the last 30 minutes of the next session (from ${close}), not at the open. That first session usually pulls back.`,
       urgency: 'wait'
     };
