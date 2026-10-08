@@ -84,6 +84,26 @@ t('opens past the printed target -> not taken', r?.reason==='NEVER_FILLED', r?.r
 r=M.determineOutcome(MK,[b(1,100,100.5,96.5,97.2)]);
 t('stop on the fill bar is a stop', r?.reason==='SL');
 t('limit cards are untouched by this', M.determineOutcome(L,[b(1,102,103,101,102.5),b(30,103,104,102,103)])?.reason==='NEVER_FILLED');
+console.log('NEXT-CLOSE ENTRY (stock cards raised after the close, from 2026-10-08)');
+// Raised Monday evening; Tuesday's session is the wait, entry at its close.
+const ev=Date.parse('2026-10-05T21:00:00Z');
+const NC={market:'stocks',direction:'LONG',entryType:'sessionClose',entry:100,sl:97,tp:104,signaledAt:ev,expiresAt:ev+96*H};
+const hb=(iso,o,hi,lo,c)=>({date:iso,open:o,high:hi,low:lo,close:c});
+const tue=[hb('2026-10-06T13:30:00Z',100,100.5,98.5,99),hb('2026-10-06T19:30:00Z',99,99.5,98,98.4)];
+r=M.determineOutcome(NC,[...tue,hb('2026-10-07T13:30:00Z',98.6,101,98.5,100.8),hb('2026-10-07T15:30:00Z',100.8,104.3,100.5,104)]);
+t('fills at the close of the first session', r?.fillPrice===98.4 && r?.reason==='TP1', `${r?.reason} fill ${r?.fillPrice}`);
+t('scored from that fill: (104-98.4)/(98.4-97)',
+  Math.abs(R.realisedR({...NC,exitPlan:'single',closeReason:'TP1',fillPrice:98.4})-(5.6/1.4))<1e-9);
+r=M.determineOutcome(NC,[hb('2026-10-06T13:30:00Z',100,100.5,96.8,97.5),hb('2026-10-07T13:30:00Z',97.5,104.5,97.4,104)]);
+t('stop touched in the waiting session -> never taken', r?.reason==='NEVER_FILLED', r?.reason);
+r=M.determineOutcome(NC,[hb('2026-10-06T13:30:00Z',100,104.2,99.8,103)]);
+t('target touched in the waiting session -> never taken', r?.reason==='NEVER_FILLED', r?.reason);
+r=M.determineOutcome({...NC,expiresAt:Date.now()+96*H},[hb(new Date(Date.now()-H).toISOString(),100,100.5,99,99.5)]);
+t('waiting session not over yet -> still open', r===null);
+r=M.determineOutcome(NC,[...tue,hb('2026-10-07T13:30:00Z',100.5,101,100.2,100.8),hb('2026-10-07T14:30:00Z',100.8,101,96.5,97)]);
+t('a gap away from the fill is still a held position', r?.reason==='SL', `${r?.reason} fill ${r?.fillPrice}`);
+r=M.determineOutcome(NC,[d('2026-10-06',100,100.5,98.5,98.4),d('2026-10-07',98.6,104.3,98.5,104)]);
+t('daily bars: same rule', r?.fillPrice===98.4 && r?.reason==='TP1', `${r?.reason} fill ${r?.fillPrice}`);
 console.log('SCORING');
 const card=(iso,cr,extra={})=>({signaledAt:Date.parse(iso),rrRatio:1.3,rrRatio2:1.56,closeReason:cr,...extra});
 t('May card (single): TP1 pays 1.30R', Math.abs(R.realisedR(card('2026-05-26T22:00:00Z','TP1'))-1.3)<1e-9);

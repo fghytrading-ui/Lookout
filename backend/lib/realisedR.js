@@ -56,10 +56,10 @@ export function exitPlanOf(s) {
 
 /** Realised return in R, or null when the record cannot support the maths. */
 export function realisedR(s) {
-  // A market entry is scored from the price it actually filled at, with the
-  // printed stop and target, sized on the risk taken at that fill — the way
-  // the card tells you to trade it.
-  if (s?.entryType === 'market' && Number.isFinite(s.fillPrice)) s = { ...s, entry: s.fillPrice };
+  // A market or next-close entry is scored from the price it actually filled
+  // at, with the printed stop and target, sized on the risk taken at that
+  // fill — the way the card tells you to trade it.
+  if (s?.entryType && s.entryType !== 'limit' && Number.isFinite(s.fillPrice)) s = { ...s, entry: s.fillPrice };
   // The exact distances when the record has them. rrRatio is the card's
   // display figure, rounded to one decimal, and paying wins at the rounded
   // figure was off by up to 0.05R a trade (0.012R on average, 2026-10-02).

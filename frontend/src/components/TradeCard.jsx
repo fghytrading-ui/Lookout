@@ -128,7 +128,7 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
   // A market-entry card is sized from the live price, because that is where
   // you get in — sizing from the old limit would risk more or less than you
   // set whenever the price has moved since the card was drawn.
-  const marketEntry = trade.entryType === 'market';
+  const marketEntry = trade.entryType === 'market' || trade.entryType === 'sessionClose';
   const sizeFrom = marketEntry && Number.isFinite(trade.price) ? trade.price : trade.entry;
   const dollarRisk = accountSize * (riskPct / 100);
   const perShareRisk = Math.abs(sizeFrom - trade.sl);
@@ -372,6 +372,7 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
             {trade.entryStatus === 'MISSED' && '✗ '}
             {trade.entryStatus === 'BELOW_ZONE' && '✓ '}
             {trade.entryStatus === 'ABOVE_ZONE' && '⚠ '}
+            {trade.entryStatus === 'WAIT_CLOSE' && '⏳ '}
             {trade.entryStatusText}
           </div>
         )}
@@ -403,7 +404,7 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
         {/* Levels grid */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
           {marketEntry
-            ? <LevelBox label="Enter at market" value={trade.price ?? trade.entry} colorClass="bg-green-500/8 border-green-500/20" />
+            ? <LevelBox label={trade.entryType === 'sessionClose' ? 'Enter near the close' : 'Enter at market'} value={trade.price ?? trade.entry} colorClass="bg-green-500/8 border-green-500/20" />
             : <LevelBox label="Entry" value={trade.entry} rangeLow={trade.entryLow} rangeHigh={trade.entryHigh} colorClass="bg-green-500/8 border-green-500/20" />}
           <LevelBox label={trade.tp0 ? 'TP1 — Safe' : 'Target'} value={trade.tp}  pct={trade.tpPct}  colorClass="bg-blue-500/8 border-blue-500/20" />
           {/* A second target only exists under the old scale-out plan. With
@@ -1039,7 +1040,7 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
         </div>
 
         {/* TAKE THIS TRADE button — only shows if not MISSED */}
-        {trade.entryStatus !== 'MISSED' && recShares > 0 && onTakeTrade && (
+        {trade.entryStatus !== 'MISSED' && trade.entryStatus !== 'WAIT_CLOSE' && recShares > 0 && onTakeTrade && (
           <button
             onClick={() => onTakeTrade({
               ticker: trade.ticker,

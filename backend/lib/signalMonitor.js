@@ -97,6 +97,16 @@ export async function fetchCandlesSince(signal) {
   }
 }
 
+// Has this bar's session closed? A daily bar once its 16:00 close has passed;
+// an hourly bar only if it is the session's last (15:30-16:00) and finished.
+function sessionComplete(c) {
+  const start = barStartMs(c);
+  if (String(c.date).length === 10) return Date.now() >= start + 6.5 * 3600_000;
+  const [h, m] = new Date(start).toLocaleTimeString('en-GB',
+    { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false }).split(':').map(Number);
+  return (h % 24) * 60 + m >= 15 * 60 + 30 && Date.now() >= start + 30 * 60_000;
+}
+
 // Walk candles and determine outcome.
 // Returns { reason, closePrice, mfe, mae, closedAt } or null if still open.
 // When a bar's trading actually began. A daily bar is dated by its session,
@@ -131,6 +141,7 @@ export function determineOutcome(signal, candles) {
   // already past a printed level the trade as drawn does not exist, so it is
   // recorded as never taken rather than as an instant win or loss.
   let fillPrice = null;
+  let preFilled = false;      // the position exists before the first bar walked
   if (signal.entryType === 'market') {
     const px = candles[0].open;
     const L = direction === 'LONG';
@@ -139,6 +150,45 @@ export function determineOutcome(signal, candles) {
                closedAt: new Date(candles[0].date).getTime(), scaledOut: false, fillPrice: null };
     }
     entry = px; fillPrice = px;
+  }
+  // A card raised after the close fills at the END of the next session, not
+  // its open: that first session gives back. Measured 2026-10-08 on 133
+  // evening stock cards, the session after the card moved 0.90% against it
+  // (z=-3.86; -0.80% averaged per evening over 15 evenings), and the one
+  // after that ran +0.83% its way. Entered at that session's close instead of
+  // its open, same stop, target and expiry: +0.262R per card (z=3.31),
+  // positive in all four quarters and on 14 of 19 evenings. Cards raised
+  // pre-market or during the session show no giveback and keep the market
+  // entry. If the first session touches the stop or the target the card said
+  // to stand aside, so the trade never existed.
+  if (signal.entryType === 'sessionClose') {
+    const dayOf = (c) => String(c.date).length === 10 ? String(c.date)
+      : new Date(c.date).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+    const first = dayOf(candles[0]);
+    const session = candles.filter(c => dayOf(c) === first);
+    const rest = candles.slice(session.length);
+    const L = direction === 'LONG';
+    for (const c of session) {
+      if ((L && (c.low <= sl || c.high >= tp)) || (!L && (c.high >= sl || c.low <= tp))) {
+        return { reason: 'NEVER_FILLED', closePrice: c.close, mfe: 0, mae: 0, mfePct: 0, maePct: 0,
+                 closedAt: new Date(c.date).getTime(), scaledOut: false, fillPrice: null };
+      }
+    }
+    // Wait for the session to finish before filling at its close.
+    const last = session[session.length - 1];
+    if (!rest.length && !sessionComplete(last)) return null;
+    const px = last.close;
+    entry = px; fillPrice = px; preFilled = true;
+    if (!rest.length) {
+      // Filled, and nothing after the fill yet. If the trade's time has run
+      // out regardless, it ends where it was entered.
+      if (Date.now() > signal.expiresAt) {
+        return { reason: 'EXPIRED', closePrice: px, mfe: 0, mae: 0, mfePct: 0, maePct: 0,
+                 closedAt: signal.expiresAt, scaledOut: false, fillPrice: px };
+      }
+      return null;
+    }
+    candles = rest;
   }
   // Everything graded now is graded single-exit: the whole position closes at
   // TP1. This comment used to say older records "keep their tp0" and are graded
@@ -180,14 +230,14 @@ export function determineOutcome(signal, candles) {
   // measured expectancy from -0.077R to -0.229R: the performance page has been
   // reporting a system markedly better than the one that could be traded, and
   // the gap was concentrated in the trades that looked best.
-  let filled = false;
+  let filled = preFilled;
   let lastInHorizon = null;   // the last bar before the trade's time ran out
   // Time stop, when the card carried one: if the trade has not gone
   // minProgress of the way to its target afterHours after the fill, close it
   // at that bar's close. Applied only to trades whose card stated it, so every
   // trade is graded under the rules it was offered with.
   const ts = signal.timeStop && Number.isFinite(signal.timeStop.afterHours) ? signal.timeStop : null;
-  let fillStart = null, bestProgress = 0;
+  let fillStart = preFilled ? barStartMs(candles[0]) : null, bestProgress = 0;
 
   for (const c of candles) {
     // The trade ends at its horizon. Walking past it recorded stops and

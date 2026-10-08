@@ -41,18 +41,37 @@ function getEffectivePrice(live) {
   return null;
 }
 
+// 15:30-16:00 New York time on a weekday. Half days are left to the server's
+// own status, which knows the exchange calendar.
+function inLastHalfHourET(now = new Date()) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false
+  }).formatToParts(now).map(x => [x.type, x.value]));
+  if (p.weekday === 'Sat' || p.weekday === 'Sun') return false;
+  const mins = (Number(p.hour) % 24) * 60 + Number(p.minute);
+  return mins >= 15 * 60 + 30 && mins < 16 * 60;
+}
+
 function computeLiveEntryStatus(trade, livePrice) {
   if (livePrice == null) return null;
   // Market-entry cards: the only thing that rules the trade out is price
   // already past a printed level. "Wait for pullback" is exactly what lost the
   // runaway winners — see buildCard in the scanner.
-  if (trade.entryType === 'market') {
+  if (trade.entryType === 'market' || trade.entryType === 'sessionClose') {
     const L = trade.direction === 'LONG';
     const past = L ? (livePrice <= trade.sl ? 'stop' : livePrice >= trade.tp ? 'target' : null)
                    : (livePrice >= trade.sl ? 'stop' : livePrice <= trade.tp ? 'target' : null);
-    return past
-      ? { status: 'MISSED', text: `Price is already beyond the ${past} — this trade is off` }
-      : { status: 'IN_ZONE', text: 'Enter at market — keep the printed stop and target' };
+    if (past) return { status: 'MISSED', text: `Price is already beyond the ${past} — this trade is off` };
+    if (trade.entryType === 'sessionClose') {
+      // Raised after the close: the first session gives back, so it is entered
+      // in that session's last half hour. The server knows if the day already
+      // traded through a level; the live price alone cannot see that.
+      if (trade.touchedToday) return { status: 'MISSED', text: trade.entryStatusText };
+      return inLastHalfHourET()
+        ? { status: 'IN_ZONE', text: 'Last half hour — enter at market now, keep the printed stop and target' }
+        : { status: 'WAIT_CLOSE', text: 'Raised after the close — enter in the last 30 minutes of the session, not at the open. Skip it if the stop or target trades first.' };
+    }
+    return { status: 'IN_ZONE', text: 'Enter at market — keep the printed stop and target' };
   }
   const { entryLow, entryHigh, direction } = trade;
   if (entryLow == null || entryHigh == null) return null;

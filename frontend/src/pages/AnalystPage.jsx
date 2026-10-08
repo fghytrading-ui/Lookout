@@ -605,11 +605,12 @@ export default function AnalystPage() {
                   <div className="font-mono font-bold text-green-400 text-sm tabular-nums">${data.setup.entryLow?.toFixed(2)}–${data.setup.entryHigh?.toFixed(2)}</div>
                 </div>
                 <div>
-                  <div className="text-[9px] uppercase tracking-widest text-[#444] font-mono">TP1 — Safe</div>
+                  <div className="text-[9px] uppercase tracking-widest text-[#444] font-mono">{data.setup.tp0 != null ? 'TP1 — Safe' : 'Target'}</div>
                   <div className="font-mono font-bold text-blue-400 text-sm tabular-nums">${data.setup.tp?.toFixed(2)}</div>
                   <div className="text-[9px] text-blue-500/60 font-mono">R:R {data.setup.rrRatio}:1</div>
                 </div>
-                {data.setup.tp2 != null && (
+                {/* One exit at the target: a second target only exists under the thirds plan. */}
+                {data.setup.tp2 != null && data.setup.tp0 != null && (
                   <div>
                     <div className="text-[9px] uppercase tracking-widest text-[#444] font-mono">TP2 — Extended</div>
                     <div className="font-mono font-bold text-cyan-400 text-sm tabular-nums">${data.setup.tp2?.toFixed(2)}</div>
@@ -641,7 +642,8 @@ export default function AnalystPage() {
                   <span className="text-[10px] text-[#666]">→ {data.setup.trendStrengthLabel === 'Very Strong' || data.setup.trendStrengthLabel === 'Strong' ? 'TPs scaled wider (let it run)' : 'TPs scaled tighter (cautious)'}</span>
                 </div>
               )}
-              {data.setup.tp2 != null && (
+              {/* Only under the retired thirds plan, which is the only one with a tp0. */}
+              {data.setup.tp0 != null && (
                 <div className="text-[11px] text-[#888] font-mono mb-3 italic">
                   💡 Scale out in thirds: bank a third at the first target and move the stop to breakeven, a third at <span className="text-blue-400">TP1</span>, and let the runner go to <span className="text-cyan-400">TP2</span>.
                 </div>

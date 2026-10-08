@@ -69,12 +69,18 @@ export function getEntryTiming({ entry = 'market' } = {}) {
   const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
   if (session === 'MARKET_OPEN') {
-    return { label: 'ENTER NOW', detail: `Market is OPEN — ${how.now}`, urgency: 'now' };
+    const detail = entry === 'market' && !inLastHalfHour(et)
+      ? `Market is OPEN — ${how.now}. Cards raised after last night's close wait for the last 30 minutes (each card says which)`
+      : `Market is OPEN — ${how.now}`;
+    return { label: 'ENTER NOW', detail, urgency: 'now' };
   }
 
   if (session === 'PRE_MARKET') {
     const ukTime = ukTimeFor930AMET(et);
-    return { label: `ENTER AT ${ukTime} UK`, detail: `Markets open at ${ukTime} UK time — ${how.soon}`, urgency: 'soon' };
+    const detail = entry === 'market'
+      ? `Markets open at ${ukTime} UK time — cards raised this morning enter at market on the open; cards from last night wait for the last 30 minutes (each card says which)`
+      : `Markets open at ${ukTime} UK time — ${how.soon}`;
+    return { label: `ENTER AT ${ukTime} UK`, detail, urgency: 'soon' };
   }
 
   // For AFTER_HOURS, CLOSED, WEEKEND — find next market open
@@ -91,6 +97,15 @@ export function getEntryTiming({ entry = 'market' } = {}) {
 
   const isTomorrow = next.toDateString() === new Date(et.getTime() + 86400000).toDateString();
   const dayLabel = isTomorrow ? 'TOMORROW' : `${dayNames[next.getDay()]} ${next.getDate()}`;
+  if (entry === 'market') {
+    // Cards raised now enter near the END of the next session, not its open.
+    const close = isEarlyClose(next) ? ukTimeForET(next, 12, 30) : ukTimeForET(next, 15, 30);
+    return {
+      label: `ENTER ${dayLabel} ${close.replace(/ UK$/, '')} UK`,
+      detail: `Market closed — cards raised now enter in the last 30 minutes of the next session (from ${close}), not at the open. That first session usually pulls back.`,
+      urgency: 'wait'
+    };
+  }
   const ukTime = ukTimeFor930AMET(next);
 
   return {
@@ -98,6 +113,25 @@ export function getEntryTiming({ entry = 'market' } = {}) {
     detail: `Market closed — ${how.later} (${ukTime} UK)`,
     urgency: 'wait'
   };
+}
+
+// ── STOCK CARDS RAISED AFTER THE CLOSE ──────────────────────────────────
+// Their first session gives back: measured 2026-10-08 on 133 evening stock
+// cards, that session moved 0.90% against them (z=-3.86) and the next ran
+// +0.83% their way. Entered in the last half hour of that first session
+// instead of at its open: +0.267R per card on the grader, positive in every
+// quarter. Cards raised pre-market or in session show no giveback and enter
+// at market. Graded as entryType 'sessionClose' in signalMonitor.js.
+export function raisedAfterClose(et = getNYTime()) {
+  const s = getSession();
+  return s === 'AFTER_HOURS' || s === 'WEEKEND' || s === 'HOLIDAY' || (s === 'CLOSED' && et.getHours() >= 16);
+}
+
+/** Inside the last half hour of the regular session (12:30 on a half day). */
+export function inLastHalfHour(et = getNYTime()) {
+  if (getSession() !== 'MARKET_OPEN') return false;
+  const mins = et.getHours() * 60 + et.getMinutes();
+  return mins >= (isEarlyClose(et) ? 12 * 60 + 30 : 15 * 60 + 30);
 }
 
 export function getSession() {
@@ -161,7 +195,7 @@ function nextRelevantEvent(macroEvents = [], earnings = null) {
 
 export function buildIntradayTiming({
   tradeStyle, macroEvents = [], earnings = null,
-  expectedDays = null, expectedDays2 = null
+  expectedDays = null, expectedDays2 = null, closeEntry = false
 } = {}) {
   if (tradeStyle !== 'sameDay' && tradeStyle !== 'commodities' && tradeStyle !== 'crypto') return null;
 
@@ -190,14 +224,12 @@ export function buildIntradayTiming({
   // strings ("End of next session", "1-2 sessions") sitting beside a headline
   // that said "about 4 sessions" — the same card gave three different answers.
   const sess = (n) => `${n} session${n === 1 ? '' : 's'}`;
-  const exitBy = expectedDays2 != null
-    ? `Scale at target 1 by ~${sess(expectedDays)}; close the runner by ~${sess(expectedDays2)}`
-    : expectedDays != null
-      ? `Close by ~${sess(expectedDays)}${expectedDays > 1 ? ' (holds overnight)' : ''}`
-      : 'End of next session (may hold overnight)';
-  const totalSpan = expectedDays != null
-    ? (expectedDays2 != null ? `${expectedDays}–${expectedDays2} sessions` : sess(expectedDays))
-    : '1–2 sessions';
+  // One exit: the whole position at the target. This still said "scale at
+  // target 1 ... close the runner" weeks after scaling out was retired.
+  const exitBy = expectedDays != null
+    ? `Close at the target — usually by ~${sess(expectedDays)}${expectedDays > 1 ? ' (holds overnight)' : ''}`
+    : 'End of next session (may hold overnight)';
+  const totalSpan = expectedDays != null ? sess(expectedDays) : '1–2 sessions';
 
   if (tradeStyle === 'crypto') {
     return {
@@ -208,6 +240,25 @@ export function buildIntradayTiming({
       bestEntryWindow:  `${ukTimeForET(et, 9, 30)} – ${ukTimeForET(et, 13, 0)} (NY open + ETF inflows + CME volume)`,
       avoidWindow:      `after ${ukTimeForET(et, 16, 0)} and all weekend (US-close drainage, Asia thin, weekend wicks)`,
       eventNote: ev ? `${ev.name} ${ev.when} — expect a volatility spike; enter after it prints` : null
+    };
+  }
+
+  // Raised after the close: the window is the last half hour of the next
+  // session (see raisedAfterClose), and the open is what to avoid.
+  if (closeEntry) {
+    const half = isEarlyClose(et) && marketLive;
+    return {
+      entryFrom:       `${dayPrefix}${ukTimeForET(et, half ? 12 : 15, 30)}`,
+      entryUntil:      ukTimeForET(et, half ? 13 : 16, 0),
+      mustExitBy:      exitBy,
+      totalSession:    totalSpan,
+      bestEntryWindow: 'the last 30 minutes — after the pullback that usually follows an evening signal',
+      avoidWindow:     'the open and the morning — that session usually gives back first',
+      eventNote: ev
+        ? (ev.kind === 'earnings'
+            ? `Earnings ${ev.when} — enter before it, or wait until the reaction settles`
+            : `${ev.name} ${ev.when} — hold off until the print, then enter on the reaction`)
+        : null
     };
   }
 

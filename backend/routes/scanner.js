@@ -8,7 +8,7 @@ import { reviewTrade } from '../utils/reviewer.js';
 import { getCryptoContext, tickerToBinanceSymbol, getCryptoEntryTiming } from '../lib/cryptoContext.js';
 import { fetchCryptoCandlesBatch, computeSessionVWAP } from '../lib/cryptoCandles.js';
 import { getInventoryReleases, evaluateInventoryRisk } from '../lib/inventoryReleases.js';
-import { logSignal, getSetupTypeStats, seenInEarlierSession } from '../lib/signalLog.js';
+import { logSignal, getSetupTypeStats, seenInEarlierSession, sessionRecord } from '../lib/signalLog.js';
 import { assessSetupEvidence, assessSetupExpectancy } from '../lib/evidence.js';
 import { withLiveBar } from '../lib/liveBar.js';
 import { fetchIntradayBatch } from '../lib/intradayCandles.js';
@@ -26,7 +26,8 @@ import {
   TIME_SPANS, getTimespanKey, getExitWindow, generateAnalystNotes
 } from '../utils/signals.js';
 import { getEntryTiming, buildIntradayTiming, volumeVsExpected, getForexEntryTiming,
-         getFuturesEntryTiming, getCommodityEntryTiming } from '../utils/market.js';
+         getFuturesEntryTiming, getCommodityEntryTiming, getSession, raisedAfterClose,
+         inLastHalfHour } from '../utils/market.js';
 
 // Determine broad market regime from SPY's trend
 // Market regime on the horizon this software actually trades.
@@ -272,6 +273,34 @@ function adaptQuote(raw) {
   };
 }
 
+// Where a stock card stands right now. Market entries are off only once price
+// is past a printed level. A card raised after the close (closeEntry) also
+// waits for the last half hour of its session, and is off if that session
+// has already traded through a level — the grader records that as never taken.
+// Called again after hourly refinement moves the levels.
+function stockEntryStatus({ direction, price, sl, tp, closeEntry, dayHigh, dayLow }) {
+  const L = direction === 'LONG';
+  const past = L ? (price <= sl ? 'stop' : price >= tp ? 'target' : null)
+                 : (price >= sl ? 'stop' : price <= tp ? 'target' : null);
+  const touched = closeEntry && getSession() === 'MARKET_OPEN' && Number.isFinite(dayHigh) && Number.isFinite(dayLow)
+    ? (L ? (dayLow <= sl ? 'stop' : dayHigh >= tp ? 'target' : null)
+         : (dayHigh >= sl ? 'stop' : dayLow <= tp ? 'target' : null))
+    : null;
+  if (past || touched) {
+    return { entryStatus: 'MISSED', touchedToday: !past && !!touched,
+             entryStatusText: past ? `Price is already beyond the ${past} — this trade is off`
+                                   : `The ${touched} already traded today — this trade is off` };
+  }
+  if (closeEntry && !inLastHalfHour()) {
+    return { entryStatus: 'WAIT_CLOSE', touchedToday: false,
+             entryStatusText: 'Raised after the close — enter in the last 30 minutes of the session, not at the open. '
+                            + 'Skip it if the stop or target trades first.' };
+  }
+  return { entryStatus: 'IN_ZONE', touchedToday: false,
+           entryStatusText: closeEntry ? 'Last half hour — enter at market now, keep the printed stop and target'
+                                       : 'Enter at market — keep the printed stop and target' };
+}
+
 function buildCard(ticker, raw, quote, setup, signalData, historical, market = 'stocks', opts = {}) {
   const price = raw.price;
   const { direction, entry, entryLow, entryHigh, tp, tp0, rrRatio0, scalePlan, tp2, sl, rrRatio, rrRatio2, probability, confirming, confidence, expectedDays, expectedDays2, expectedHours, expectedHours2, trendStrength, trendStrengthLabel, confirmation, tradeStyle } = setup;
@@ -296,17 +325,18 @@ function buildCard(ticker, raw, quote, setup, signalData, historical, market = '
   // +1.36R. Waiting for the dip selects the trades that dip. Crypto tested the
   // same way was not robust (halves disagree), so crypto keeps its limit.
   const marketEntry = market === 'stocks';
+  // Raised after the close (or carried from a card that was): enter in the
+  // last half hour of the next session instead — see raisedAfterClose().
+  const closeEntry = marketEntry && (raisedAfterClose()
+    || sessionRecord(ticker, direction, market)?.entryType === 'sessionClose');
   let entryStatus = 'IN_ZONE';
   let entryStatusText = 'Price is in the entry zone — ready to enter';
+  let touchedToday = false;
   if (marketEntry) {
-    // Only one thing makes a market entry wrong: price already past a printed
-    // level, where the trade as drawn no longer exists.
-    const past = direction === 'LONG' ? (price <= sl ? 'stop' : price >= tp ? 'target' : null)
-                                      : (price >= sl ? 'stop' : price <= tp ? 'target' : null);
-    entryStatus = past ? 'MISSED' : 'IN_ZONE';
-    entryStatusText = past
-      ? `Price is already beyond the ${past} — this trade is off`
-      : 'Enter at market — keep the printed stop and target';
+    ({ entryStatus, entryStatusText, touchedToday } = stockEntryStatus({
+      direction, price, sl, tp, closeEntry,
+      dayHigh: quote?.dayHigh ?? raw.dayHigh, dayLow: quote?.dayLow ?? raw.dayLow
+    }));
   } else if (direction === 'LONG') {
     if (price > entryHigh * 1.015) {
       entryStatus = 'MISSED';
@@ -388,7 +418,8 @@ function buildCard(ticker, raw, quote, setup, signalData, historical, market = '
     // eventual winners (SOL 2.68R -> 0.27R once); across 104 trades 26 were
     // helped and 14 hurt. Tested on stocks too: no gain there, so not applied.
     timeStop: tradeStyle === 'crypto' ? { afterHours: 10, minProgress: 0.2 } : null,
-    entryType: marketEntry ? 'market' : 'limit',
+    entryType: closeEntry ? 'sessionClose' : marketEntry ? 'market' : 'limit',
+    touchedToday,
     refPrice: price,            // the price when the card was shown — what a market entry starts from
     exitWindow: tradeStyle === 'crypto' ? 'Within the next 1–3 active sessions — 24/7 market'
               : (expectedDays2 != null)
@@ -407,7 +438,8 @@ function buildCard(ticker, raw, quote, setup, signalData, historical, market = '
       earnings:    opts.earnings,
       // Hold length comes from the setup's own estimate so the timing block
       // cannot contradict the headline above it.
-      expectedDays, expectedDays2
+      expectedDays, expectedDays2,
+      closeEntry
     }),
     rrRatio, rrRatio2,
     volRatio, expectedDays, expectedDays2,
@@ -562,7 +594,6 @@ router.get('/scan', async (req, res) => {
     // and this costs one extra request per ticker.
     const extMap = {};
     if (!isCrypto) {
-      const { getSession } = await import('../utils/market.js');
       const sess = getSession();
       if (sess === 'PRE_MARKET' || sess === 'AFTER_HOURS') {
         const chunk = 6;
@@ -706,7 +737,13 @@ router.get('/scan', async (req, res) => {
       const chg  = raw.changePercent || 0;
       const hasGap = setup.warnings.some(w => w.text?.includes('Gap-up'));
 
-      if (hasGap || (chg < -4 && setup.direction === 'SHORT')) {
+      // Stocks: every card is an ENTER NOW candidate, and the gate below
+      // decides on timing alone (see the note there). Replayed under the
+      // current entry rules, the move-size and probability split that used
+      // to pick candidates predicted nothing (z=1.08 and -0.38).
+      if (market === 'stocks') {
+        trades.enterNow.push(card);
+      } else if (hasGap || (chg < -4 && setup.direction === 'SHORT')) {
         trades.waitForBounce.push(card);
       } else if (Math.abs(chg) > 2 && setup.probability === 'HIGH') {
         trades.enterNow.push(card);
@@ -807,6 +844,12 @@ router.get('/scan', async (req, res) => {
           card.timeSpan = `Short-term — about ${hSetup.expectedDays} session${hSetup.expectedDays === 1 ? '' : 's'}`;
           card.exitWindow = `Close the whole position at the target — usually within ~${hSetup.expectedDays} session${hSetup.expectedDays === 1 ? '' : 's'}`;
           card.timingSource = 'hourly';
+          if (card.entryType === 'market' || card.entryType === 'sessionClose') {
+            Object.assign(card, stockEntryStatus({
+              direction: card.direction, price: card.price, sl: card.sl, tp: card.tp,
+              closeEntry: card.entryType === 'sessionClose', dayHigh: quote.dayHigh, dayLow: quote.dayLow
+            }));
+          }
           // Deliberately NOT swapping _signalData/_historical. The reviewer's
           // thresholds — five-bar extended move, today's range against ATR,
           // volatility limits — are all calibrated against daily bars. Handing
@@ -924,7 +967,8 @@ router.get('/scan', async (req, res) => {
         // that it can account for them.
         const refreshed = buildIntradayTiming({
           tradeStyle: card.tradeStyle, macroEvents: upcomingMacro, earnings: card.earnings,
-          expectedDays: card.expectedDays, expectedDays2: card.expectedDays2
+          expectedDays: card.expectedDays, expectedDays2: card.expectedDays2,
+          closeEntry: card.entryType === 'sessionClose'
         });
         if (refreshed) card.intradayTiming = refreshed;
 
@@ -1074,6 +1118,28 @@ router.get('/scan', async (req, res) => {
     const demoted = [];
     trades.enterNow = trades.enterNow.filter(card => {
       const rr = card.rrRatio || 0;
+      // ── STOCKS: ENTER NOW MEANS "TAKE IT NOW" ─────────────────────
+      // Every stock card on the board says "enter at market" and is graded as
+      // entered, but this gate admitted almost none of them: zero ENTER NOW
+      // cards from 2026-10-05 to 10-08, while the trader took the cards under
+      // CARRY FORWARD anyway. Its quality bar does not pick better trades.
+      // Replayed on 325 stock cards under the current entry rules, the
+      // difference between yes and no was: probability HIGH z=-0.38, reviewer
+      // PASS z=-0.19, HIGH/MEDIUM with PASS z=-0.19, confidence 80+ z=-0.80,
+      // R:R 1.5+ z=-1.13, a 2%+ move that day z=+1.08 — none is distinguishable
+      // from chance, and regime and confirmation were already tested the same
+      // way (none of 14 card features predicts the outcome). So for stocks it
+      // decides on timing: a card is off once past a level, and a card raised
+      // after the close waits for the last half hour while its session runs
+      // (outside market hours it stays here, under the header naming that time).
+      if (market === 'stocks') {
+        const missed = card.entryStatus === 'MISSED';
+        const waiting = card.entryStatus === 'WAIT_CLOSE' && getSession() === 'MARKET_OPEN';
+        if (missed || waiting) { card.waitsForClose = waiting; demoted.push(card); return false; }
+        if (macroBlackout) { demoted.push(card); return false; }
+        if (card.expectedDays > MAX_HOLD_SESSIONS) { card.tooSlow = true; demoted.push(card); return false; }
+        return true;
+      }
       // Crypto: 24/7 means daily candles are arbitrary cuts — confirmation candle isn't a hard gate
       const hasConfirmation = isCrypto ? true : card.confirmation?.confirmed === true;
       // Choppy market: only the gold-standard setups (HIGH+PASS+confirmation+R:R≥2.0)
@@ -1142,7 +1208,16 @@ router.get('/scan', async (req, res) => {
       // which moves it from significantly negative to not distinguishable from
       // flat. Crypto remains the weakest board — no configuration tested on it
       // is positive — but the exemption was costing money.
-      if (!seenInEarlierSession(card.ticker, card.direction, market)) {
+      //
+      // SUPERSEDED FOR STOCKS 2026-10-08. Split by when the card was raised,
+      // the giveback is all in cards raised after the close: their next
+      // session moved 0.90% against them (z=-3.86) while cards raised
+      // pre-market (+0.04%) or in session (+0.18%) showed none, and waiting
+      // a session gained nothing for those (-0.006R in session, halves
+      // disagree). So a stock card waits only if it was raised after the
+      // close, and only until the last half hour of the next session.
+      // The stock wait is applied at the top of this filter, in every regime.
+      if (market !== 'stocks' && !seenInEarlierSession(card.ticker, card.direction, market)) {
         card.needsOneSession = true;
         demoted.push(card);
         return false;
@@ -1167,6 +1242,9 @@ router.get('/scan', async (req, res) => {
       for (const c of demoted) {
         if (c.tooSlow) tally[`expected to take longer than ${MAX_HOLD_SESSIONS} sessions`] = (tally[`expected to take longer than ${MAX_HOLD_SESSIONS} sessions`] || 0) + 1;
         else if (c.needsOneSession) tally['first session — actionable from the next one'] = (tally['first session — actionable from the next one'] || 0) + 1;
+        else if (c.waitsForClose) tally['raised after the close — enter in the last 30 minutes'] = (tally['raised after the close — enter in the last 30 minutes'] || 0) + 1;
+        else if (c.entryStatus === 'MISSED') tally['already past a level'] = (tally['already past a level'] || 0) + 1;
+        else if (market === 'stocks' && macroBlackout) tally['held for a major economic release'] = (tally['held for a major economic release'] || 0) + 1;
         else if (c.negativeExpectancy) tally['negative expectancy'] = (tally['negative expectancy'] || 0) + 1;
         else if (c.setupBlocked) tally['setup type blocked on poor track record'] = (tally['setup type blocked on poor track record'] || 0) + 1;
         else if (c.thesis?.tradeable === false) tally['no clear driver behind the setup'] = (tally['no clear driver behind the setup'] || 0) + 1;
@@ -1188,8 +1266,12 @@ router.get('/scan', async (req, res) => {
         + `— the reward against the stop did not clear the minimum on any of them.`;
     }
 
-    trades.enterNow = sortTrades(trades.enterNow).slice(0, 6);  // 6 best max — quality not quantity
-    trades.carryForward = [...trades.carryForward, ...demoted]
+    // 6 at most. Anything ranked below that moves to CARRY FORWARD rather than
+    // vanishing — it was being dropped before it was logged, so the record
+    // never saw it.
+    const rankedEnter = sortTrades(trades.enterNow);
+    trades.enterNow = rankedEnter.slice(0, 6);
+    trades.carryForward = [...trades.carryForward, ...demoted, ...rankedEnter.slice(6)]
       .sort((a, b) => (b.confidence || 0) - (a.confidence || 0))
       .slice(0, 8);
 
@@ -1320,6 +1402,7 @@ router.get('/scan', async (req, res) => {
       // system saw, and regime/VIX are part of that.
       try {
         logSignal(card, { market, marketRegime, vix, atr: card.atr,
+          choppiness: choppiness?.regime ?? null,
           bucket: bucketOf.get(card) || null,
           // Blocked cards, and every card of a paused market, are dropped from the board below.
           shown: card.setupBlocked !== true && !paused,

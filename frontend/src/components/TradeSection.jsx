@@ -20,7 +20,7 @@ const SECTION_CONFIG = {
   carry: {
     icon: '↗',
     label: 'CARRY FORWARD',
-    sub: 'Developing setups — monitor and enter on confirmation',
+    sub: 'Not to enter right now — each card says why, and when',
     accent: 'text-blue-400',
     border: 'border-blue-500/20',
     bg: 'bg-blue-500/5'

@@ -124,7 +124,7 @@ export async function captureTradeShareImage(trade, entryTiming, filename) {
     </div>
 
     <!-- Levels: Entry / TP1 / TP2 / SL -->
-    <div style="display:grid; grid-template-columns:1fr 1fr ${trade.tp2 != null ? '1fr ' : ''}1fr; gap:10px; margin-bottom:16px;">
+    <div style="display:grid; grid-template-columns:1fr 1fr ${trade.tp2 != null && trade.tp0 != null ? '1fr ' : ''}1fr; gap:10px; margin-bottom:16px;">
       <div style="background:${C.greenBg}; border:2px solid ${C.greenBd}; border-radius:10px; padding:14px;">
         <div style="font-family:${F.sans}; font-size:10px; color:${C.green}; letter-spacing:2px; margin-bottom:6px; font-weight:700;">ENTRY ZONE</div>
         <div style="font-family:${F.mono}; font-size:15px; font-weight:700; color:${C.green}; line-height:1.3;">
@@ -134,11 +134,11 @@ export async function captureTradeShareImage(trade, entryTiming, filename) {
         </div>
       </div>
       <div style="background:${C.blueBg}; border:2px solid ${C.blueBd}; border-radius:10px; padding:14px;">
-        <div style="font-family:${F.sans}; font-size:10px; color:${C.blue}; letter-spacing:2px; margin-bottom:6px; font-weight:700;">TP1 — SAFE</div>
+        <div style="font-family:${F.sans}; font-size:10px; color:${C.blue}; letter-spacing:2px; margin-bottom:6px; font-weight:700;">${trade.tp0 != null ? 'TP1 — SAFE' : 'TARGET'}</div>
         <div style="font-family:${F.mono}; font-size:20px; font-weight:700; color:${C.blue}; line-height:1;">$${trade.tp?.toFixed(2) ?? '—'}</div>
         ${trade.tpPct != null ? `<div style="font-family:${F.mono}; font-size:12px; color:${C.blue}; margin-top:4px; font-weight:600;">+${trade.tpPct}% · R:R ${trade.rrRatio}:1</div>` : ''}
       </div>
-      ${trade.tp2 != null ? `
+      ${trade.tp2 != null && trade.tp0 != null ? `
       <div style="background:${C.cyanBg}; border:2px solid ${C.cyanBd}; border-radius:10px; padding:14px;">
         <div style="font-family:${F.sans}; font-size:10px; color:${C.cyan}; letter-spacing:2px; margin-bottom:6px; font-weight:700;">TP2 — EXTENDED</div>
         <div style="font-family:${F.mono}; font-size:20px; font-weight:700; color:${C.cyan}; line-height:1;">$${trade.tp2?.toFixed(2)}</div>
@@ -151,7 +151,7 @@ export async function captureTradeShareImage(trade, entryTiming, filename) {
       </div>
     </div>
 
-    ${trade.tp2 != null ? `
+    ${trade.tp0 != null ? `
     <div style="font-size:11px; color:${C.textDim}; font-style:italic; margin-bottom:14px; padding:8px 12px; background:${C.page}; border-radius:6px;">
       💡 Scale out in thirds: a third at the first target (stop then moves to breakeven) · a third at TP1 · let the runner reach TP2
     </div>` : ''}

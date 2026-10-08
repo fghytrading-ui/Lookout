@@ -339,6 +339,9 @@ export function logSignal(card, extras = {}) {
       trendStrength:  card.trendStrength ?? null,
       confirming:     card.confirming ?? null,
       marketRegime:   extras.marketRegime ?? null,
+      // Recorded so the board's "choppy — consider sitting on hands" banner can
+      // be tested against outcomes; until 2026-10-08 nothing kept it.
+      choppiness:     extras.choppiness ?? null,
       vix:            extras.vix ?? null,
       // catalyst / news
       primaryCatalyst: card.primaryCatalyst?.label || card.primaryCatalyst || null,
@@ -645,6 +648,12 @@ export function mergeSignals(incoming) {
     console.log(`  ⚠ Restore rejected ${rejected} incoherent, ${duplicates} duplicate record(s)`);
   }
   return { added, updated, rejected, duplicates, total: signals.length };
+}
+
+/** The record already logged for this idea in the current session, if any. */
+export function sessionRecord(ticker, direction, market, at = Date.now()) {
+  load();
+  return indexBySession.get(sessionKeyOf({ ticker, direction, market, signaledAt: at })) || null;
 }
 
 /**

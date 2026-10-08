@@ -84,6 +84,15 @@ const HYPOTHESES = [
         + 'against -0.058R with) — it mostly trades less. Kept, and watched here.'
   },
   {
+    id: 'close-entry',
+    question: 'Do stock cards raised after the close, entered near the next close, keep pace with the rest?',
+    market: 'stocks',
+    segment: (s) => s.entryType === 'sessionClose' ? 'after-close card' : s.entryType === 'market' ? 'market entry' : null,
+    note: 'Live from 2026-10-08. Replayed on 134 evening cards through the grader, waiting for the last '
+        + 'half hour of the next session instead of the open gained +0.267R per card (z=3.41), positive in '
+        + 'every quarter. This checks it holds on trades it was not fitted to.'
+  },
+  {
     id: 'reviewer',
     question: 'Does the reviewer verdict predict anything?',
     market: null,
