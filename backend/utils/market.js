@@ -137,6 +137,83 @@ export function inLastHalfHour(et = getNYTime()) {
   return mins >= (isEarlyClose(et) ? 12 * 60 + 30 : 15 * 60 + 30);
 }
 
+// ── THE EXCHANGE CLOCK, AS INSTANTS ─────────────────────────────────────
+// Every stock card carries the exact window in which to enter it, and the
+// board shows when the market next opens or closes. Both are computed here as
+// absolute times from the exchange calendar (weekends, holidays, half days),
+// so the page can count down and switch a card to ENTER NOW on its own,
+// rather than four differently-worded hints on one card disagreeing.
+
+function nyParts(ms) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false
+  }).formatToParts(new Date(ms)).map(x => [x.type, x.value]));
+  return { y: +p.year, m: +p.month - 1, d: +p.day, h: (+p.hour) % 24, min: +p.minute };
+}
+
+/** The instant of a New York wall-clock time. */
+export function nyInstant(y, m, d, h, min = 0) {
+  const est = Date.UTC(y, m, d, h + 5, min);
+  return nyParts(est).h === h ? est : Date.UTC(y, m, d, h + 4, min);
+}
+
+function isTradingDate(y, m, d) {
+  const local = new Date(y, m, d, 12);         // the holiday helpers read local fields
+  const wd = local.getDay();
+  return wd !== 0 && wd !== 6 && !isMarketHoliday(local);
+}
+
+/** Open and close of the regular session on a New York date. */
+export function sessionOn(y, m, d) {
+  const halfDay = isEarlyClose(new Date(y, m, d, 12));
+  return { open: nyInstant(y, m, d, 9, 30), close: nyInstant(y, m, d, halfDay ? 13 : 16, 0), halfDay };
+}
+
+/** The first session that has not closed yet: today's until the bell, then the next trading day's. */
+export function nextClosingSession(now = Date.now()) {
+  const p = nyParts(now);
+  for (let i = 0; i < 12; i++) {
+    const dt = new Date(Date.UTC(p.y, p.m, p.d + i, 12));
+    const y = dt.getUTCFullYear(), m = dt.getUTCMonth(), d = dt.getUTCDate();
+    if (!isTradingDate(y, m, d)) continue;
+    const s = sessionOn(y, m, d);
+    if (s.close > now) return s;
+  }
+  return null;
+}
+
+const iso = (t) => new Date(t).toISOString();
+
+/**
+ * When a stock card should be entered, as absolute times.
+ *   'lastHalfHour'  raised after the close: the last 30 minutes of the next session
+ *   'open'          raised before the open: from the open
+ *   'now'           raised in session: now, until the close
+ * Each is graded exactly so (signalMonitor.js: sessionClose / market entry).
+ */
+export function stockEntryWindow({ closeEntry, now = Date.now() }) {
+  const s = nextClosingSession(now);
+  if (!s) return null;
+  if (closeEntry) {
+    return { kind: 'lastHalfHour', opensAt: iso(s.close - 30 * 60_000), closesAt: iso(s.close), halfDay: s.halfDay };
+  }
+  if (now >= s.open) return { kind: 'now', opensAt: iso(now), closesAt: iso(s.close), halfDay: s.halfDay };
+  return { kind: 'open', opensAt: iso(s.open), closesAt: iso(s.close), halfDay: s.halfDay };
+}
+
+/** The board's clock: is the US market open, and when does it next open or close. */
+export function marketClock(now = Date.now()) {
+  const s = nextClosingSession(now);
+  const isOpen = !!s && now >= s.open;
+  return {
+    isOpen,
+    opensAt: s && !isOpen ? iso(s.open) : null,
+    closesAt: s ? iso(s.close) : null,
+    halfDay: s?.halfDay || false
+  };
+}
+
 export function getSession() {
   const et = getNYTime();
   const day = et.getDay();
@@ -265,13 +342,19 @@ export function buildIntradayTiming({
     };
   }
 
+  // A stock card raised before or during the session is entered at market,
+  // any time up to the close. This used to say "stop opening late" at 2pm ET
+  // and "avoid the final two hours", which the record does not support:
+  // signals raised in the morning and the afternoon returned the same (0.016R
+  // apart, z=0.12), and cards entered when shown were graded that way.
+  const half = isEarlyClose(et);
   return {
-    entryFrom:       `${dayPrefix}${ukTimeForET(et, 9, 30)}`,      // US open
-    entryUntil:      ukTimeForET(et, 14, 0),                       // stop opening late
+    entryFrom:       marketLive ? 'now' : `${dayPrefix}${ukTimeForET(et, 9, 30)}`,
+    entryUntil:      ukTimeForET(et, half ? 13 : 16, 0),
     mustExitBy:      exitBy,
     totalSession:    totalSpan,
-    bestEntryWindow: `${dayPrefix}${ukTimeForET(et, 9, 30)} – ${ukTimeForET(et, 11, 30)} (opening drive — deepest liquidity)`,
-    avoidWindow:     `${ukTimeForET(et, 14, 0)} – ${ukTimeForET(et, 16, 0)} (final two hours)`,
+    bestEntryWindow: 'any time in the session — morning and afternoon have done the same',
+    avoidWindow:     'pre-market and after hours — wider spreads, and entering early tested no better',
     eventNote: ev
       ? (ev.kind === 'earnings'
           ? `Earnings ${ev.when} — enter before it, or wait until the reaction settles`

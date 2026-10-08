@@ -25,7 +25,7 @@ import { ALPACA_ENABLED } from './lib/alpaca.js';
 import { COINGECKO_KEYED } from './lib/cryptoContext.js';
 import { runLearning, getLearningState, resetLearning, learnedRecently } from './lib/learning.js';
 import { assessGoals } from './lib/goals.js';
-import { isMarketOpen, getSession, getEntryTiming } from './utils/market.js';
+import { isMarketOpen, getSession, getEntryTiming, marketClock } from './utils/market.js';
 import { startAutoPersist, persistAll } from './lib/persistentCache.js';
 import { hydrate, startDurableSync, flushDurable, getDurableStatus } from './lib/durableStore.js';
 import { flushSignalLog } from './lib/signalLog.js';
@@ -127,6 +127,8 @@ app.get('/api/market-status', (req, res) => {
     isOpen: isMarketOpen(),
     session: getSession(),
     entryTiming: getEntryTiming(),
+    // When the US market next opens or closes, as instants the page counts down to.
+    clock: marketClock(),
     timestamp: new Date().toISOString()
   });
 });

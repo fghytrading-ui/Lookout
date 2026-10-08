@@ -4,7 +4,7 @@ const SECTION_CONFIG = {
   enter: {
     icon: '⚡',
     label: 'ENTER NOW',
-    sub: 'Active momentum — enter at market or limit',
+    sub: 'Enter these now — each card shows the entry, the stop and the target',
     accent: 'text-green-400',
     border: 'border-green-500/20',
     bg: 'bg-green-500/5'
@@ -16,6 +16,23 @@ const SECTION_CONFIG = {
     accent: 'text-amber-400',
     border: 'border-amber-500/20',
     bg: 'bg-amber-500/5'
+  },
+  // Stocks, grouped by what to do right now (see DashboardPage).
+  later: {
+    icon: '⏳',
+    label: 'ENTER LATER',
+    sub: 'Not yet — each card shows exactly when, with a countdown. It moves up to ENTER NOW by itself.',
+    accent: 'text-amber-400',
+    border: 'border-amber-500/20',
+    bg: 'bg-amber-500/5'
+  },
+  off: {
+    icon: '✋',
+    label: "DON'T ENTER",
+    sub: 'Already past a level, or held back — each card says why.',
+    accent: 'text-[#888]',
+    border: 'border-[#2a2a2a]',
+    bg: 'bg-[#111]'
   },
   carry: {
     icon: '↗',
@@ -43,6 +60,9 @@ export default function TradeSection({ trades, type, onRefresh, newTickers, acco
     ? entryTiming.detail
     : cfg.sub;
 
+  // An empty "enter later" or "don't enter" group says nothing worth a box.
+  if ((type === 'later' || type === 'off') && trades.length === 0) return null;
+
   return (
     <section className="mb-8">
       {/* Section header */}
@@ -63,9 +83,9 @@ export default function TradeSection({ trades, type, onRefresh, newTickers, acco
       {trades.length === 0 ? (
         <div className={`border border-t-0 ${cfg.border} rounded-b px-5 py-8 text-center`}>
           <div className="text-[#2a2a2a] text-2xl mb-2">○</div>
-          <p className="text-[#333] text-xs font-mono">
-            No setups passed the analyst filter in this category
-          </p>
+          {!(type === 'enter' && emptyReason) && (
+            <p className="text-[#333] text-xs font-mono">No setups passed the analyst filter in this category</p>
+          )}
           {/* Say WHY nothing qualified — an unexplained empty section reads as
               a broken scanner, when the reason is usually actionable. */}
           {type === 'enter' && emptyReason && (

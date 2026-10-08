@@ -11,7 +11,7 @@
     "build": "cd frontend && npm install && npm run build && cd .. && rm -rf backend/public && cp -r frontend/dist backend/public",
     "postinstall": "npm install --prefix backend",
     "snapshot": "node backend/scripts/snapshot-record.js",
-    "test": "node backend/scripts/test-grader.js",
+    "test": "node backend/scripts/test-grader.js && node backend/scripts/test-entry-timing.mjs",
     "regrade": "node backend/scripts/regrade-record.js"
   },
   "devDependencies": {

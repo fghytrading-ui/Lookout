@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react';
+import { ukTime, ukDay } from '../utils/entryWindow.js';
 import Sparkline from './Sparkline.jsx';
 import ShareMenu from './ShareMenu.jsx';
 import { formatTradeText } from '../utils/share.js';
@@ -172,11 +173,13 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
       isNew ? 'ring-2 ring-amber-400/60' : ''
     }`}>
 
-      {/* TOP PICK badge */}
+      {/* Highest-scoring card. It was labelled TOP PICK, but the setup score
+          ranks how well the indicators line up and has not predicted which
+          trades do best, so it is not a pick. */}
       {trade.isTopPick && (
         <div className="ml-7 px-4 pt-2 -mb-1">
           <span className="inline-block bg-gradient-to-r from-yellow-400 to-amber-400 text-black text-[9px] font-bold px-2 py-0.5 rounded font-mono tracking-widest shadow">
-            👑 TOP PICK
+            👑 HIGHEST SCORE
           </span>
         </div>
       )}
@@ -232,10 +235,36 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
             </div>
           </div>
 
-          {/* Line 2 — the numbers you actually trade from */}
+          {/* When to enter — the first thing to know, visible without opening the card. */}
+          {trade.timing && (
+            <div className={`mt-2 px-2.5 py-1.5 rounded border text-[12px] font-mono font-bold flex items-center justify-between gap-2 flex-wrap ${
+              trade.timing.state === 'now'   ? 'bg-green-500/10 border-green-500/40 text-green-300' :
+              trade.timing.state === 'later' ? 'bg-amber-500/10 border-amber-500/40 text-amber-300' :
+                                              'bg-[#151515] border-red-500/30 text-red-300'
+            }`}>
+              <span>
+                {trade.timing.state === 'now' ? '⚡ ENTER NOW' : trade.timing.state === 'later' ? `⏳ ENTER ${trade.timing.when?.toUpperCase()}` : `✋ ${trade.timing.headline}`}
+              </span>
+              <span className="text-[10px] font-normal opacity-80">
+                {trade.timing.state === 'now'
+                  ? (trade.entryWindow?.kind === 'lastHalfHour' ? `last 30 min · until ${ukTime(trade.timing.closesAt)} UK` : `at market · until ${ukTime(trade.timing.closesAt)} UK`)
+                  : trade.timing.state === 'later'
+                    ? `in ${trade.timing.countIn}${trade.entryWindow?.kind === 'lastHalfHour' ? ' · not at the open' : ' · at the open'}`
+                    : trade.timing.detail.replace(/\.$/, '')}
+              </span>
+            </div>
+          )}
+
+          {/* Line 2 — the numbers you actually trade from. A stock card enters
+              at the live price shown above, so its old reference entry is not
+              repeated here — it read as a limit to wait for. */}
           <div className="flex items-center gap-x-3 gap-y-1 flex-wrap mt-1.5 text-[11px] font-mono">
-            <span className="text-[#666]">Entry <span className="text-[#ddd]">{priceFmt(trade.entry)}</span></span>
-            <span className="text-[#2a2a2a]">|</span>
+            {!trade.entryWindow && (
+              <>
+                <span className="text-[#666]">Entry <span className="text-[#ddd]">{priceFmt(trade.entry)}</span></span>
+                <span className="text-[#2a2a2a]">|</span>
+              </>
+            )}
             {trade.tp0 && (
               <span className="text-[#666]">1st <span className="text-green-400">{priceFmt(trade.tp0)}</span></span>
             )}
@@ -363,7 +392,7 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
         )}
 
         {/* Entry validity status — show only if not in zone */}
-        {trade.entryStatus && trade.entryStatus !== 'IN_ZONE' && (
+        {!trade.timing && trade.entryStatus && trade.entryStatus !== 'IN_ZONE' && (
           <div className={`text-[11px] font-mono px-2.5 py-1.5 rounded mb-2 border ${
             trade.entryStatus === 'MISSED'      ? 'bg-red-500/10 border-red-500/30 text-red-300' :
             trade.entryStatus === 'BELOW_ZONE'  ? 'bg-green-500/10 border-green-500/30 text-green-300' :
@@ -404,7 +433,9 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
         {/* Levels grid */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
           {marketEntry
-            ? <LevelBox label={trade.entryType === 'sessionClose' ? 'Enter near the close' : 'Enter at market'} value={trade.price ?? trade.entry} colorClass="bg-green-500/8 border-green-500/20" />
+            ? <LevelBox label={trade.entryWindow?.kind === 'lastHalfHour' || trade.entryType === 'sessionClose' ? 'Enter near the close'
+                             : trade.entryWindow?.kind === 'open' ? 'Enter at the open' : 'Enter at market'}
+                        value={trade.price ?? trade.entry} colorClass="bg-green-500/8 border-green-500/20" />
             : <LevelBox label="Entry" value={trade.entry} rangeLow={trade.entryLow} rangeHigh={trade.entryHigh} colorClass="bg-green-500/8 border-green-500/20" />}
           <LevelBox label={trade.tp0 ? 'TP1 — Safe' : 'Target'} value={trade.tp}  pct={trade.tpPct}  colorClass="bg-blue-500/8 border-blue-500/20" />
           {/* A second target only exists under the old scale-out plan. With
@@ -446,7 +477,13 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
                 <div className="text-[9px] uppercase tracking-widest text-green-500/70 mb-1">
                   {trade.tradeStyle === 'crypto' ? '✓ Peak Liquidity' : '✓ Enter Between'}
                 </div>
-                <div className="text-green-300 font-bold tabular-nums">{trade.intradayTiming.entryFrom}{trade.intradayTiming.entryUntil ? ` – ${trade.intradayTiming.entryUntil}` : ''}</div>
+                <div className="text-green-300 font-bold tabular-nums">
+                  {trade.timing && trade.entryWindow
+                    ? (trade.timing.state === 'now'
+                        ? `now – ${ukTime(Date.parse(trade.entryWindow.closesAt))} UK`
+                        : `${ukDay(Date.parse(trade.entryWindow.opensAt))} ${ukTime(Date.parse(trade.entryWindow.opensAt))} – ${ukTime(Date.parse(trade.entryWindow.closesAt))} UK`)
+                    : <>{trade.intradayTiming.entryFrom}{trade.intradayTiming.entryUntil ? ` – ${trade.intradayTiming.entryUntil}` : ''}</>}
+                </div>
                 <div className="text-[9px] text-green-500/60 mt-0.5">Best: {trade.intradayTiming.bestEntryWindow}</div>
                 {/* A scheduled event inside the window changes when to enter,
                     so it belongs next to the times rather than further down. */}
@@ -873,8 +910,29 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
           </div>
         )}
 
-        {/* Smart entry timing — replaces "ENTER NOW" when market is closed */}
-        {entryTiming && (
+        {/* When to enter — one answer, for this card, right now (utils/entryWindow.js). */}
+        {trade.timing && (
+          <div className={`rounded p-3 mb-3 border-2 ${
+            trade.timing.state === 'now'   ? 'bg-green-500/10 border-green-500/50' :
+            trade.timing.state === 'later' ? 'bg-amber-500/10 border-amber-500/40' :
+                                            'bg-[#151515] border-red-500/30'
+          }`}>
+            <div className="text-[9px] uppercase tracking-widest font-mono mb-0.5 text-[#888]">When to enter</div>
+            <div className="flex items-baseline justify-between gap-2 flex-wrap">
+              <div className={`font-bold text-[15px] font-mono ${
+                trade.timing.state === 'now' ? 'text-green-300' : trade.timing.state === 'later' ? 'text-amber-300' : 'text-red-300'
+              }`}>
+                {trade.timing.state === 'now' ? '⚡ ' : trade.timing.state === 'later' ? '⏳ ' : '✋ '}{trade.timing.headline}
+              </div>
+              {trade.timing.state === 'later' && (
+                <div className="text-[12px] font-mono text-amber-200 tabular-nums">in {trade.timing.countIn}</div>
+              )}
+            </div>
+            <div className="text-[11px] text-[#aaa] font-mono mt-1 leading-relaxed">{trade.timing.detail}</div>
+          </div>
+        )}
+        {/* Board-level timing, for cards without their own window (crypto). */}
+        {!trade.timing && entryTiming && (
           <div className={`rounded p-2.5 mb-3 border ${
             entryTiming.urgency === 'now'  ? 'bg-green-500/10 border-green-500/30' :
             entryTiming.urgency === 'soon' ? 'bg-amber-500/10 border-amber-500/30' :
@@ -1042,12 +1100,15 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
         </div>
 
         {/* TAKE THIS TRADE button — only shows if not MISSED */}
-        {trade.entryStatus !== 'MISSED' && trade.entryStatus !== 'WAIT_CLOSE' && recShares > 0 && onTakeTrade && (
+        {(trade.timing ? trade.timing.state === 'now' : (trade.entryStatus !== 'MISSED' && trade.entryStatus !== 'WAIT_CLOSE'))
+          && recShares > 0 && onTakeTrade && (
           <button
             onClick={() => onTakeTrade({
               ticker: trade.ticker,
               direction: trade.direction,
-              entry: trade.entry,
+              // A market or next-close entry is taken at the live price — the
+              // same price the shares were sized from — not the reference entry.
+              entry: marketEntry && Number.isFinite(trade.price) ? trade.price : trade.entry,
               shares: recShares,
               tp: trade.tp,
               sl: trade.sl,
@@ -1102,7 +1163,15 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
                 CARRY FORWARD
               </span>
             )}
-            {type === 'enter' && (
+            {trade.timing ? (
+              <span className={`text-[9px] px-2 py-0.5 rounded font-mono tracking-wider border ${
+                trade.timing.state === 'now'   ? 'bg-green-500/10 text-green-400 border-green-500/25 animate-pulse' :
+                trade.timing.state === 'later' ? 'bg-amber-500/10 text-amber-400 border-amber-500/25' :
+                                                'bg-[#1a1a1a] text-red-300 border-red-500/25'
+              }`}>
+                {trade.timing.state === 'now' ? 'ENTER NOW' : trade.timing.state === 'later' ? `ENTER ${trade.timing.when?.toUpperCase()}` : "DON'T ENTER"}
+              </span>
+            ) : type === 'enter' && (
               <span className={`text-[9px] px-2 py-0.5 rounded font-mono tracking-wider border ${
                 entryTiming?.urgency === 'now'
                   ? 'bg-green-500/10 text-green-400 border-green-500/25 animate-pulse'

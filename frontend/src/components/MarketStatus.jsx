@@ -1,4 +1,4 @@
-export default function MarketStatus({ status, lastUpdated, scanning }) {
+export default function MarketStatus({ status, lastUpdated, scanning, clock = null }) {
   const session = status?.session;
 
   const sessionConfig = {
@@ -18,6 +18,10 @@ export default function MarketStatus({ status, lastUpdated, scanning }) {
         <div className={`w-2 h-2 rounded-full ${cfg.dot}`} />
         <span className={`text-xs font-bold tracking-widest font-mono ${cfg.text}`}>{cfg.label}</span>
       </div>
+      {/* When that changes — so "closed" never leaves you guessing when you can trade. */}
+      {clock && (
+        <span className={`text-[11px] font-mono ${clock.open ? 'text-green-300' : 'text-[#888]'}`}>{clock.text}</span>
+      )}
       {/* Visible on a phone too. This was hidden below the small breakpoint,
           which is where the board is most often read and where a stale one is
           hardest to spot — the whole point of the line is to say whether the

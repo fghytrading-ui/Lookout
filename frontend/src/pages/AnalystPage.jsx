@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { useNow, entryState } from '../utils/entryWindow.js';
 import Sparkline from '../components/Sparkline.jsx';
 import ShareMenu from '../components/ShareMenu.jsx';
 import { formatAnalystText } from '../utils/share.js';
@@ -86,6 +87,13 @@ export default function AnalystPage() {
   }, [data?.ticker]);
 
   const verdictStyle = data ? (VERDICT_STYLES[data.verdict] || VERDICT_STYLES.WAIT) : null;
+  // When to enter, live — the same window and wording as the board's card.
+  const now = useNow(15_000);
+  const timing = data?.setup && data?.entryPlan?.window && ['BUY', 'SELL'].includes(data.verdict)
+    ? entryState({ direction: data.setup.direction, sl: data.setup.sl, tp: data.setup.tp, price: data.price,
+                   entryWindow: data.entryPlan.window, touchedToday: data.entryPlan.touchedToday,
+                   entryStatusText: data.entryPlan.text }, data.price, now)
+    : null;
 
   return (
     <div className="max-w-[1200px] mx-auto px-2 sm:px-4 py-3 sm:py-5">
@@ -207,6 +215,26 @@ export default function AnalystPage() {
             </div>
             <Sparkline data={data.sparkline} direction={data.verdictTone === 'bullish' ? 'LONG' : data.verdictTone === 'bearish' ? 'SHORT' : null} width={300} height={36} />
           </div>
+
+          {/* ── WHEN TO ENTER — live, as on the board's card ─────────────── */}
+          {timing && (
+            <div className={`rounded-lg p-4 border-2 ${
+              timing.state === 'now'   ? 'bg-green-500/10 border-green-500/50' :
+              timing.state === 'later' ? 'bg-amber-500/10 border-amber-500/40' :
+                                         'bg-[#151515] border-red-500/30'
+            }`}>
+              <div className="text-[10px] uppercase tracking-widest font-mono text-[#888] mb-1">When to enter</div>
+              <div className="flex items-baseline justify-between gap-2 flex-wrap">
+                <div className={`text-lg font-bold font-mono ${
+                  timing.state === 'now' ? 'text-green-300' : timing.state === 'later' ? 'text-amber-300' : 'text-red-300'
+                }`}>
+                  {timing.state === 'now' ? '⚡ ' : timing.state === 'later' ? '⏳ ' : '✋ '}{timing.headline}
+                </div>
+                {timing.state === 'later' && <div className="text-sm font-mono text-amber-200">in {timing.countIn}</div>}
+              </div>
+              <div className="text-[12px] text-[#aaa] font-mono mt-1 leading-relaxed">{timing.detail}</div>
+            </div>
+          )}
 
           {/* ── CRYPTO CONTEXT (only when ticker is crypto) ─────────────────── */}
           {data.market === 'crypto' && (data.cryptoContext || data.vwap) && (

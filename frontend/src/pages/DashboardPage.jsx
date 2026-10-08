@@ -12,6 +12,7 @@ import RiskControls from '../components/RiskControls.jsx';
 import PreMarketMovers from '../components/PreMarketMovers.jsx';
 import TradeJournal, { logTradeClose } from '../components/TradeJournal.jsx';
 import { evaluateRiskGuard, getTodaysPnL, loadGuardSettings } from '../utils/riskGuard.js';
+import { useNow, entryState, clockLine, ukTime } from '../utils/entryWindow.js';
 import LearningInsights from '../components/LearningInsights.jsx';
 import ForexSessionBar from '../components/ForexSessionBar.jsx';
 import CurrencyStrengthMeter from '../components/CurrencyStrengthMeter.jsx';
@@ -116,6 +117,14 @@ function isTradeInvalid(trade, livePrice) {
   return false;
 }
 
+// Every stock card with its live "when to enter" — used to group the board and
+// to alert when a card turns into ENTER NOW.
+function stockCardsWithTiming(trades, tickerPrices, now) {
+  return enrichTrades([...(trades.enterNow || []), ...(trades.waitForBounce || []), ...(trades.carryForward || [])],
+                      tickerPrices, false)
+    .map(t => ({ ...t, timing: entryState(t, t.price, now) }));
+}
+
 // Enrich each trade with live price + extended-hours price + dynamic entry status.
 // Drops trades that are no longer valid (TP hit / SL hit / drifted past zone).
 function enrichTrades(trades, livePrices, hasLiveData) {
@@ -164,6 +173,9 @@ export default function DashboardPage({ market = 'stocks', title = null }) {
     null
   );
   const isCrypto = market === 'crypto';
+  // Ticks so every card's "enter at 8:30pm" turns into "enter now" on time,
+  // and the market clock counts down, without waiting for the next scan.
+  const now = useNow(15_000);
   const [marketStatus, setMarketStatus]   = useState(null);
   const [trades, setTrades]               = useState({ enterNow: [], waitForBounce: [], carryForward: [] });
   const [tickerPrices, setTickerPrices]   = useState({});
@@ -288,7 +300,9 @@ export default function DashboardPage({ market = 'stocks', title = null }) {
       }
       prevTickersRef.current = currentTickers;
 
-      // Audio alert: only fire when a NEW high-prob PASS appears
+      // Audio alert for the other boards: a NEW high-prob PASS appears. Stocks
+      // alert when a card actually becomes ENTER NOW instead (effect below) —
+      // "HIGH + PASS" has not predicted results, and it fired whatever the time.
       const currentHighPassTickers = new Set(
         [...(nextTrades.enterNow || []), ...(nextTrades.waitForBounce || []), ...(nextTrades.carryForward || [])]
           .filter(t => t.probability === 'HIGH' && t.review?.verdict === 'PASS')
@@ -296,7 +310,7 @@ export default function DashboardPage({ market = 'stocks', title = null }) {
       );
       const prevHigh = prevPassPickRef.current;
       const newHighPasses = [...currentHighPassTickers].filter(t => !prevHigh.has(t));
-      if (prevHigh.size > 0 && newHighPasses.length > 0) {
+      if (market !== 'stocks' && prevHigh.size > 0 && newHighPasses.length > 0) {
         playAlertBeep();
         // Browser notification if permitted
         if ('Notification' in window && Notification.permission === 'granted') {
@@ -397,6 +411,30 @@ export default function DashboardPage({ market = 'stocks', title = null }) {
     };
     init();
   }, []);
+
+  // ── Alert when a stock card becomes ENTER NOW ─────────────────────────
+  // The moment to act: a card raised in the session, or an evening card whose
+  // last half hour has begun. Not on page load — only on a change after it.
+  const enterNowRef = useRef(null);
+  useEffect(() => {
+    if (isCrypto || market !== 'stocks') return;
+    const nowCards = stockCardsWithTiming(trades, tickerPrices, now).filter(t => t.timing?.state === 'now');
+    const current = new Set(nowCards.map(t => `${t.ticker}|${t.direction}`));
+    const prev = enterNowRef.current;
+    enterNowRef.current = current;
+    if (!prev) return;
+    const fresh = nowCards.filter(t => !prev.has(`${t.ticker}|${t.direction}`));
+    if (!fresh.length) return;
+    playAlertBeep();
+    if (soundEnabled && 'Notification' in window && Notification.permission === 'granted') {
+      const until = fresh[0].timing.closesAt ? ` — until ${ukTime(fresh[0].timing.closesAt)} UK` : '';
+      new Notification(`⚡ Enter now: ${fresh.map(t => t.ticker).join(', ')}`, {
+        body: (fresh[0].entryWindow?.kind === 'lastHalfHour' ? 'Last 30 minutes before the US close' : 'US market open — enter at market')
+            + `${until}. Keep the printed stop and target.`,
+        silent: false
+      });
+    }
+  }, [now, trades, tickerPrices, isCrypto, market, playAlertBeep, soundEnabled]);
 
   // ── Refresh prices: 10s during ANY live session (open, pre, post) ──────
 
@@ -548,6 +586,17 @@ export default function DashboardPage({ market = 'stocks', title = null }) {
             </button>
           </div>
         </div>
+
+        {/* The US market clock, on its own line so it reads in full on a phone:
+            when it opens or closes next, counting down. */}
+        {!isCrypto && (() => {
+          const c = clockLine(marketStatus?.clock, marketStatus?.session, now);
+          return c && (
+            <div className={`px-3 sm:px-4 pb-2 sm:text-right text-[11px] font-mono ${c.open ? 'text-green-300' : 'text-[#999]'}`}>
+              {c.open ? '🟢 ' : '🔴 '}{c.text}
+            </div>
+          );
+        })()}
 
         {/* Ticker tape */}
         <TickerTape prices={tickerPrices} />
@@ -704,6 +753,28 @@ export default function DashboardPage({ market = 'stocks', title = null }) {
                                                       : marketStatus?.entryTiming,
                 onTakeTrade: handleTakeTrade
               };
+              // Stocks: grouped by what to do RIGHT NOW, from each card's own
+              // entry window and the live price — not by which bucket the last
+              // scan put it in, so the board stays right between scans: a card
+              // due at 8:30pm moves into ENTER NOW at 8:30pm by itself.
+              if (!isCrypto && market === 'stocks') {
+                const all = stockCardsWithTiming(trades, tickerPrices, now);
+                const nowCards   = all.filter(t => t.timing?.state === 'now');
+                const laterCards = all.filter(t => t.timing?.state === 'later').sort((a, b) => a.timing.opensAt - b.timing.opensAt);
+                const offCards   = all.filter(t => !t.timing || t.timing.state === 'off');
+                const next = laterCards[0]?.timing;
+                const stockProps = { ...commonProps, entryTiming: null };
+                return (
+                  <>
+                    <TradeSection trades={nowCards} type="enter" {...stockProps}
+                      emptyReason={next
+                        ? `Nothing to enter right now. Next: ${laterCards[0].ticker} and ${laterCards.length - 1 > 0 ? `${laterCards.length - 1} more` : 'no others'} — ${next.when} (in ${next.countIn}). The cards are below.`
+                        : (scanStats.enterNowEmptyReason || 'Nothing to enter right now.')} />
+                    <TradeSection trades={laterCards} type="later" {...stockProps} />
+                    <TradeSection trades={offCards} type="off" {...stockProps} />
+                  </>
+                );
+              }
               // One list. Setups that are not ready to enter sit in their own
               // group rather than being hidden — the reason a trade is not
               // actionable yet is information, and a second place to click was

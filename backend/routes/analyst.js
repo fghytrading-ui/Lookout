@@ -11,7 +11,7 @@ import { fetchDailyBars, ALPACA_ENABLED } from '../lib/alpaca.js';
 import { classifySetup } from '../lib/setupClassifier.js';
 import { computeTradeGrade } from '../lib/tradeGrade.js';
 import { getPerformanceMetrics } from '../lib/performanceMetrics.js';
-import { ukTimeForET, volumeVsExpected, raisedAfterClose } from '../utils/market.js';
+import { ukTimeForET, volumeVsExpected, raisedAfterClose, stockEntryWindow } from '../utils/market.js';
 import { getLearnedParams } from '../lib/learning.js';
 import { getMarketRegime, shortAllowed, hourlyRefinement, stockEntryStatus } from '../lib/boardSetup.js';
 import { getSetupTypeStats, sessionRecord } from '../lib/signalLog.js';
@@ -675,7 +675,9 @@ function deriveVerdict(setup, review, weeklyTrend, { entryPlan = null, paused = 
   if (entryPlan?.type === 'missed') return { action: 'MISSED', tone: 'neutral', detail: entryPlan.text };
 
   const long = setup.direction === 'LONG';
-  const parts = ['The same trade the board offers', entryPlan?.text];
+  // When to enter is shown once, in its own live box (crypto, with no window,
+  // keeps it here).
+  const parts = ['The same trade the board offers', entryPlan?.window ? null : entryPlan?.text];
   if (trackRecord) parts.push(trackRecord.text);
   if (corroboration?.verdict === 'CONTRADICTED') {
     parts.push('Outside sources lean the other way (below) — on the tracked record they have not predicted results');
@@ -1001,11 +1003,13 @@ router.get('/:ticker', async (req, res) => {
         || sessionRecord(ticker, setup.direction, 'stocks')?.entryType === 'sessionClose';
       const st = stockEntryStatus({ direction: setup.direction, price: raw.price, sl: setup.sl, tp: setup.tp,
                                     closeEntry, dayHigh: raw.dayHigh, dayLow: raw.dayLow });
-      entryPlan = st.entryStatus === 'MISSED' ? { type: 'missed', text: st.entryStatusText }
+      // The same window the board's card carries, so the page can count down to it.
+      const window = stockEntryWindow({ closeEntry });
+      entryPlan = st.entryStatus === 'MISSED' ? { type: 'missed', text: st.entryStatusText, window, touchedToday: st.touchedToday }
         : st.entryStatus === 'WAIT_CLOSE'
-          ? { type: 'sessionClose', text: `Raised after the close — enter in the last 30 minutes of the session `
+          ? { type: 'sessionClose', window, text: `Raised after the close — enter in the last 30 minutes of the session `
               + `(from ${ukTimeForET(new Date(), 15, 30)}), not at the open. Skip it if the stop or target trades first` }
-          : { type: closeEntry ? 'sessionClose' : 'market', text: st.entryStatusText };
+          : { type: closeEntry ? 'sessionClose' : 'market', window, text: st.entryStatusText };
     }
 
     // Build a synthetic card so reviewer can score it

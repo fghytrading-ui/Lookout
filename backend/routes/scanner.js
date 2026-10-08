@@ -27,7 +27,8 @@ import {
   TIME_SPANS, getTimespanKey, getExitWindow, generateAnalystNotes
 } from '../utils/signals.js';
 import { getEntryTiming, buildIntradayTiming, volumeVsExpected, getForexEntryTiming,
-         getFuturesEntryTiming, getCommodityEntryTiming, getSession, raisedAfterClose } from '../utils/market.js';
+         getFuturesEntryTiming, getCommodityEntryTiming, getSession, raisedAfterClose,
+         stockEntryWindow } from '../utils/market.js';
 
 // getMarketRegime lives in lib/boardSetup.js, shared with the analyst page.
 
@@ -361,6 +362,8 @@ function buildCard(ticker, raw, quote, setup, signalData, historical, market = '
     timeStop: tradeStyle === 'crypto' ? { afterHours: 10, minProgress: 0.2 } : null,
     entryType: closeEntry ? 'sessionClose' : marketEntry ? 'market' : 'limit',
     touchedToday,
+    // Exactly when to enter, as absolute times the page counts down to.
+    entryWindow: marketEntry ? stockEntryWindow({ closeEntry }) : null,
     refPrice: price,            // the price when the card was shown — what a market entry starts from
     exitWindow: tradeStyle === 'crypto' ? 'Within the next 1–3 active sessions — 24/7 market'
               : (expectedDays2 != null)
@@ -1062,8 +1065,15 @@ router.get('/scan', async (req, res) => {
         const missed = card.entryStatus === 'MISSED';
         const waiting = card.entryStatus === 'WAIT_CLOSE' && getSession() === 'MARKET_OPEN';
         if (missed || waiting) { card.waitsForClose = waiting; demoted.push(card); return false; }
-        if (macroBlackout) { demoted.push(card); return false; }
-        if (card.expectedDays > MAX_HOLD_SESSIONS) { card.tooSlow = true; demoted.push(card); return false; }
+        if (macroBlackout) {
+          card.heldBack = macroBlackout.message;
+          demoted.push(card); return false;
+        }
+        if (card.expectedDays > MAX_HOLD_SESSIONS) {
+          card.tooSlow = true;
+          card.heldBack = `Expected to take about ${card.expectedDays} sessions — longer than this board's ${MAX_HOLD_SESSIONS}-session limit`;
+          demoted.push(card); return false;
+        }
         return true;
       }
       // Crypto: 24/7 means daily candles are arbitrary cuts — confirmation candle isn't a hard gate

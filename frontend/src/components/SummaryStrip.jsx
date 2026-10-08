@@ -37,7 +37,7 @@ export default function SummaryStrip({ trades, scanStats, tickerPrices }) {
         </div>
 
         <Stat
-          label="Top Pick"
+          label="Highest score"
           value={topPick ? `${topPick.ticker} ${topPick.direction}` : '—'}
           valueClass={topPick?.direction === 'LONG' ? 'text-green-400' : topPick ? 'text-red-400' : 'text-[#444]'}
           sub={topPick ? `R:R ${topPick.rrRatio}:1` : undefined}

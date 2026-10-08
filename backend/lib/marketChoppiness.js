@@ -28,21 +28,27 @@ export async function getMarketChoppiness() {
     if (efficiency >= 0.55) {
       regime = 'STRONG_TREND';
       label  = netMovePct > 0 ? 'Strong Uptrend' : 'Strong Downtrend';
-      advice = 'Trend-following setups have the highest win rate right now';
+      advice = 'The market is trending strongly';
     } else if (efficiency >= 0.35) {
       regime = 'TRENDING';
       label  = netMovePct > 0 ? 'Uptrend' : 'Downtrend';
-      advice = 'Healthy trend — standard setups work';
+      advice = 'The market is trending';
     } else if (efficiency >= 0.20) {
       regime = 'MIXED';
       label  = 'Mixed / Drifting';
-      advice = 'Be selective — only take A+ setups';
+      advice = 'The market is drifting without a clear trend';
     } else {
       regime = 'CHOPPY';
       label  = 'Choppy / Range-Bound';
-      advice = 'High false-signal rate — consider sitting on hands';
+      advice = 'The market is moving sideways';
     }
 
+    // Described, not advised. These lines used to say "sit on hands" or
+    // "only take A+ setups", which no test on the record has supported and
+    // which contradicted the board's own ENTER NOW. The regime is recorded on
+    // every card from 2026-10-08 so the claim can be tested; until then it is
+    // shown as context.
+    advice = `${advice} — not yet shown to change how the cards do (being measured)`;
     return {
       regime,
       label,
