@@ -11,7 +11,12 @@ import { fetchDailyBars, ALPACA_ENABLED } from '../lib/alpaca.js';
 import { classifySetup } from '../lib/setupClassifier.js';
 import { computeTradeGrade } from '../lib/tradeGrade.js';
 import { getPerformanceMetrics } from '../lib/performanceMetrics.js';
-import { ukTimeForET, volumeVsExpected } from '../utils/market.js';
+import { ukTimeForET, volumeVsExpected, raisedAfterClose } from '../utils/market.js';
+import { getLearnedParams } from '../lib/learning.js';
+import { getMarketRegime, shortAllowed, hourlyRefinement, stockEntryStatus } from '../lib/boardSetup.js';
+import { getSetupTypeStats, sessionRecord } from '../lib/signalLog.js';
+import { assessSetupExpectancy } from '../lib/evidence.js';
+import { marketPause } from '../lib/marketPause.js';
 import { analyzeSignals, generateTradeSetup, calculateSMA, calculateMACD, TIME_SPANS, getTimespanKey, getExitWindow } from '../utils/signals.js';
 import { reviewTrade } from '../utils/reviewer.js';
 import { fetchCryptoCandles, computeSessionVWAP } from '../lib/cryptoCandles.js';
@@ -183,59 +188,27 @@ function generateBullsBearsCase(signalData, card, weeklyTrend, levels) {
 
 // ── INVALIDATION TRIGGERS ────────────────────────────────────────────────
 // Explicit rules: if any of these happen, the trade is invalidated.
-function generateInvalidationTriggers(setup, signalData, levels) {
+// The exit plan, and the warning signs worth watching.
+//
+// This used to list six "exit if ANY of these happen" rules — a close under
+// the 50-day, a MACD cross, two days of thin volume, three red days, and "exit
+// at break-even" after five days. Only the stop is part of the plan the cards
+// are graded on, the breakeven exit was tested on the record and did worse,
+// and stock trades expire before five days anyway. Exiting on an untested rule
+// turns a measured plan into an unmeasured one, so the plan is stated first
+// and the rest are shown as what they are.
+function generateInvalidationTriggers(setup, signalData, levels, { horizonText = '5 days' } = {}) {
   if (!setup) return [];
-
-  const triggers = [];
   const isLong = setup.direction === 'LONG';
-
-  // Hard stop
-  triggers.push({
-    severity: 'hard',
-    text: `Price hits $${setup.sl?.toFixed(2)} (your stop loss) — exit immediately, no questions asked`
-  });
-
-  // Below/above SMA50
-  if (signalData.sma50) {
-    if (isLong && setup.sl < signalData.sma50) {
-      triggers.push({
-        severity: 'hard',
-        text: `Daily close below 50 SMA ($${signalData.sma50.toFixed(2)}) — trend has shifted`
-      });
-    }
-  }
-
-  // MACD reversal
-  triggers.push({
-    severity: 'medium',
-    text: `MACD ${isLong ? 'crosses bearish (signal > MACD line)' : 'crosses bullish (MACD > signal line)'} — momentum has flipped`
-  });
-
-  // Volume drop
-  triggers.push({
-    severity: 'medium',
-    text: `Daily volume drops below 70% of 3-month average for 2 consecutive days — conviction gone`
-  });
-
-  // Time stop
-  triggers.push({
-    severity: 'soft',
-    text: `Trade hasn't moved 1× ATR in your favour after 5 trading days — exit at break-even, reassess`
-  });
-
-  // Reverse momentum
-  if (isLong) {
-    triggers.push({
-      severity: 'medium',
-      text: `Stock closes red 3 days in a row while broader market is green — relative weakness, exit`
-    });
-  } else {
-    triggers.push({
-      severity: 'medium',
-      text: `Stock closes green 3 days in a row while broader market is red — relative strength, cover`
-    });
-  }
-
+  const triggers = [
+    { severity: 'hard', text: `Price hits $${setup.sl?.toFixed(2)} (your stop loss) — exit immediately, no questions asked` },
+    { severity: 'target', text: `Price reaches $${setup.tp?.toFixed(2)} — close the whole position. There is one exit, at the target` },
+    { severity: 'time', text: `Neither level hit ${horizonText} after the card — the trade has expired; close at market` }
+  ];
+  const watch = (text) => triggers.push({ severity: 'watch', text: `${text} — a warning sign, not tested as an exit rule` });
+  if (signalData.sma50 && isLong && setup.sl < signalData.sma50) watch(`Daily close below the 50-day average ($${signalData.sma50.toFixed(2)})`);
+  watch(`MACD ${isLong ? 'crosses bearish (signal above the MACD line)' : 'crosses bullish (MACD above the signal line)'}`);
+  watch(isLong ? 'Three red closes in a row while the market is green' : 'Three green closes in a row while the market is red');
   return triggers;
 }
 
@@ -488,13 +461,22 @@ function computeReliability({ setup, signalData, review, weeklyTrend, sentiment,
     text: safetyText, points: safetyPts, max: 10
   });
 
-  // Final label
-  const label = score >= 80 ? 'HIGH RELIABILITY'
-              : score >= 65 ? 'MODERATE RELIABILITY'
-              : score >= 50 ? 'LOW RELIABILITY'
-              : 'UNRELIABLE — DO NOT TRADE';
+  return { score, label: checklistLabel(score), components, note: CHECKLIST_NOTE };
+}
 
-  return { score, label, components };
+// What the score is. It was labelled "HIGH RELIABILITY" down to "UNRELIABLE —
+// DO NOT TRADE" and set the position size, but replayed on 325 tracked stock
+// cards under the current entry rules none of its parts predicted the result:
+// weekly trend z=0.45, news sentiment z=0.33, volume z=-0.35, today's move
+// z=0.68, VIX z=0.00, reviewer z=-0.05, analyst ratings z=0.51, signal count
+// z=0.17, and the total z=0.81. It describes the setup; it does not forecast it.
+const CHECKLIST_NOTE = 'Tested on 325 tracked stock cards: neither this score nor any of its checks predicted '
+                     + 'results (all within chance). It describes the setup; it is not a forecast.';
+function checklistLabel(score) {
+  return score >= 80 ? 'MOST CHECKS AGREE'
+       : score >= 65 ? 'MORE AGREE THAN NOT'
+       : score >= 50 ? 'MIXED'
+       : 'MOST CHECKS DISAGREE';
 }
 
 // ── INDEPENDENT CORROBORATION ─────────────────────────────────────────
@@ -522,8 +504,8 @@ export function assessCorroboration({ setup, backtest, wallStreet, analystRating
 
   // 1. This pattern's own record on this instrument (-10 .. +8)
   // Scored on what the comparable sessions RETURNED, under this trade's own
-  // geometry and the real staged exit — the same measure the scanner and the
-  // goal tracker use, so the two pages can finally be compared.
+  // geometry and the single exit at the target — the same measure the scanner
+  // and the goal tracker use, so the two pages can be compared.
   if (backtest && backtest.expectancy != null && backtest.sampleSize >= 5) {
     const e = backtest.expectancy;
     const pts = e >= 0.30 ? 8 : e >= 0.10 ? 4 : e >= -0.10 ? 0 : e >= -0.30 ? -4 : -10;
@@ -601,9 +583,13 @@ export function assessCorroboration({ setup, backtest, wallStreet, analystRating
   };
 }
 
-// ── BEST PLAY synthesis — one clear actionable recommendation ─────────
-function generateBestPlay({ setup, review, weeklyTrend, reliability, price, verdict, targets, earnings, vix }) {
-  // Strong reject conditions first
+// ── BEST PLAY — the trade in one instruction ─────────────────────────
+// It used to say "BUY between X and Y" (the limit entry stocks dropped on
+// 2026-10-05), "same session — exit by the close" (trades run several sessions
+// to one target), quote the target's distance from a different, generic
+// projection, and size from the checklist score ("full position" at 75+),
+// which predicts nothing. It now says what the board says.
+function generateBestPlay({ setup, review, weeklyTrend, price, verdict, targets, earnings, vix, entryPlan, paused, boardNote, blocked }) {
   if (vix && vix > 30) {
     return {
       headline: '🛑 SIT THIS ONE OUT',
@@ -618,21 +604,12 @@ function generateBestPlay({ setup, review, weeklyTrend, reliability, price, verd
       timeframe: 'After earnings + 1 day'
     };
   }
-  if (reliability.score < 45) {
-    return {
-      headline: '⏳ NO TRADE — WAIT',
-      action: `Reliability ${reliability.score}/100. Too many conflicting signals. Wait for cleaner conditions.`,
-      timeframe: 'Re-check in 1–2 days'
-    };
-  }
-  if (reliability.score < 55) {
-    return {
-      headline: '👀 WATCH — small position only',
-      action: `Reliability ${reliability.score}/100. Borderline. If you take it, size at ¼ position.`,
-      timeframe: '1–3 days'
-    };
-  }
 
+  if (paused) {
+    return { headline: '⏸ PAUSED ON THE BOARD',
+             action: `${paused.reason}${setup ? ' The levels below are for information, not a trade.' : ''}`,
+             timeframe: paused.progress };
+  }
   if (!setup) {
     if (weeklyTrend === 'UP') {
       return {
@@ -647,108 +624,86 @@ function generateBestPlay({ setup, review, weeklyTrend, reliability, price, verd
       timeframe: 'Re-scan next week'
     };
   }
+  if (verdict === 'AVOID') {
+    return { headline: '🚫 AVOID', action: blocked || review?.summary || 'The reviewer rejected this setup.', timeframe: 'Wait for a fresh setup' };
+  }
+  if (boardNote) return { headline: '⏸ NOT ON THE BOARD', action: boardNote, timeframe: 'Re-check next session' };
+  if (entryPlan?.type === 'missed') return { headline: '⏭ MISSED', action: entryPlan.text, timeframe: 'Wait for a fresh setup' };
 
-  // Setup exists — build the actionable instruction
-  const dir = setup.direction;
-  const isLong = dir === 'LONG';
-  const targetPrice = isLong ? targets.bullish.price : targets.bearish.price;
-  const targetPct = isLong ? targets.bullish.pct : targets.bearish.pct;
-  const conviction = reliability.score >= 80 ? 'HIGH conviction'
-                   : reliability.score >= 65 ? 'MODERATE conviction'
-                   : 'LOW conviction';
-
-  let headline;
-  if (verdict === 'STRONG BUY' || verdict === 'STRONG SELL') headline = `🚀 ${verdict} — ${conviction}`;
-  else if (verdict === 'BUY' || verdict === 'SELL')           headline = `✅ ${verdict} — ${conviction}`;
-  else                                                          headline = `⏸ ${verdict} — ${conviction}`;
-
-  const action = `${isLong ? 'BUY' : 'SHORT'} between $${setup.entryLow?.toFixed(2)}–$${setup.entryHigh?.toFixed(2)}. Target $${setup.tp?.toFixed(2)} (~${targetPct >= 0 ? '+' : ''}${targetPct}%). Stop at $${setup.sl?.toFixed(2)}. R:R ${setup.rrRatio}:1.`;
-
+  const isLong = setup.direction === 'LONG';
+  const from = (x) => {
+    const pct = (x - price) / price * 100;
+    return `${pct >= 0 ? '+' : ''}${pct.toFixed(1)}% from here`;
+  };
+  const how = entryPlan?.type === 'sessionClose' ? 'near the next close'
+            : entryPlan?.type === 'limit' ? 'on a limit' : 'at market';
   return {
-    headline, action,
-    timeframe: `Same session — exit by ${ukTimeForET(new Date(), 16, 0)}`,   // US close, DST-correct
-    sizing: reliability.score >= 75 ? 'Full position (1% risk)' :
-            reliability.score >= 60 ? 'Half position (0.5% risk)' :
-            'Quarter position (0.25% risk)'
+    headline: `${isLong ? '📈' : '📉'} ${verdict} — ${how}`,
+    action: `${isLong ? 'BUY' : 'SHORT'}: ${entryPlan?.text || 'enter at market'}. Target $${setup.tp?.toFixed(2)} (${from(setup.tp)}). `
+          + `Stop $${setup.sl?.toFixed(2)} (${from(setup.sl)}).`,
+    timeframe: setup.expectedDays
+      ? `Close the whole position at the target — usually within ~${setup.expectedDays} session${setup.expectedDays === 1 ? '' : 's'}`
+      : 'Close the whole position at the target',
+    sizing: 'Your normal risk per trade. Nothing on this page has been shown to pick bigger winners, so size every trade the same.'
   };
 }
 
-// INDEPENDENCE MODE — Analyst is intentionally MORE skeptical than the Dashboard.
-// Defaults to HOLD/WAIT. Only flashes BUY/SELL when sources overwhelmingly agree.
-function deriveVerdict(setup, review, weeklyTrend, reliability, corroboration = null) {
+// ── THE VERDICT ──────────────────────────────────────────────────────
+// This used to grade the setup STRONG BUY to WAIT on the checklist score and
+// the outside-opinion modifier, with thresholds from the old 2:1 targets
+// (STRONG needed R:R 2.2 against today's ~1.25). None of those inputs has
+// predicted a result on the tracked record (see CHECKLIST_NOTE), so the grade
+// was noise with a confident label, and it could disagree with the board on
+// the same stock. It now says what the board would do and why: the same
+// trade, the same entry rule, the setup type's own track record, and every
+// reason the board would hold it back. The context panels stay below it.
+function deriveVerdict(setup, review, weeklyTrend, { entryPlan = null, paused = null, boardNote = null,
+                                                    blocked = null, trackRecord = null, corroboration = null } = {}) {
+  // A paused market is paused whatever this one chart looks like.
+  if (paused) {
+    return { action: 'PAUSED', tone: 'neutral',
+             detail: `${paused.reason} ${paused.progress}${setup ? '' : ' No setup on this chart right now either.'}` };
+  }
   if (!setup) {
     if (weeklyTrend === 'UP')   return { action: 'HOLD',  tone: 'neutral', detail: 'No setup. Weekly trend up — wait for clean pullback before considering.' };
     if (weeklyTrend === 'DOWN') return { action: 'AVOID', tone: 'bearish', detail: 'No setup. Weekly trend down — avoid long exposure.' };
     return { action: 'WAIT', tone: 'neutral', detail: 'No clear setup. Sit in cash until clarity emerges.' };
   }
-  if (review.verdict === 'REJECT') {
-    return { action: 'AVOID', tone: 'bearish', detail: review.summary };
+  if (review.verdict === 'REJECT') return { action: 'AVOID', tone: 'bearish', detail: review.summary };
+  if (blocked) return { action: 'AVOID', tone: 'bearish', detail: blocked };
+  if (boardNote) return { action: 'WAIT', tone: 'neutral', detail: boardNote };
+  if (entryPlan?.type === 'missed') return { action: 'MISSED', tone: 'neutral', detail: entryPlan.text };
+
+  const long = setup.direction === 'LONG';
+  const parts = ['The same trade the board offers', entryPlan?.text];
+  if (trackRecord) parts.push(trackRecord.text);
+  if (corroboration?.verdict === 'CONTRADICTED') {
+    parts.push('Outside sources lean the other way (below) — on the tracked record they have not predicted results');
   }
+  return {
+    action: long ? 'BUY' : 'SELL',
+    tone: long ? 'bullish' : 'bearish',
+    detail: parts.filter(Boolean).join('. ') + '.'
+  };
+}
 
-  const isPass = review.verdict === 'PASS';
-  const isHighProb = setup.probability === 'HIGH';
-  const direction = setup.direction;
-  const score = reliability?.score || 0;
-
-  // Independent evidence now carries weight. Without this the verdict was
-  // decided entirely by the same engine that produced the setup, so agreeing
-  // with the dashboard was guaranteed rather than meaningful.
-  const corr = corroboration?.adjustment ?? 0;
-  const contradicted = corroboration?.verdict === 'CONTRADICTED';
-  const corrNote = corroboration?.counted
-    ? ` · ${corroboration.verdict.toLowerCase()} by ${corroboration.counted} independent source${corroboration.counted === 1 ? '' : 's'}`
-    : ' · no independent evidence available';
-
-  // Outside sources pointing the other way cap the call, however clean the
-  // chart looks. This is the whole point of a second opinion.
-  if (contradicted) {
-    return {
-      action: 'WAIT',
-      tone: 'neutral',
-      detail: `Setup is technically sound (reliability ${score}/100) but independent sources disagree: `
-            + corroboration.items.filter(i => i.points < 0).map(i => i.text).join('; ')
-            + '. Wait for them to line up.'
-    };
-  }
-
-  // ── BALANCED THRESHOLDS — gives BUY/SELL more readily, still safe ──
-  // STRONG BUY/SELL now also requires the outside evidence to back it.
-  if (isPass && isHighProb && setup.rrRatio >= 2.2 && score >= 75 && corr >= 5) {
-    return {
-      action: direction === 'LONG' ? 'STRONG BUY' : 'STRONG SELL',
-      tone: direction === 'LONG' ? 'bullish' : 'bearish',
-      detail: `Reliability ${score}/100 · ${setup.confirming} signals aligned · R:R ${setup.rrRatio}:1${corrNote}.`
-    };
-  }
-
-  // BUY/SELL: solid confluence, and outside evidence not actively against it.
-  if (isPass && score >= 60 && corr > -5) {
-    return {
-      action: direction === 'LONG' ? 'BUY' : 'SELL',
-      tone: direction === 'LONG' ? 'bullish' : 'bearish',
-      detail: `Reliability ${score}/100 · R:R ${setup.rrRatio}:1${corrNote}. Take with discipline.`
-    };
-  }
-
-  // BUY/SELL with caveats: CAUTION review but decent reliability
-  if (review.verdict === 'CAUTION' && score >= 55 && setup.rrRatio >= 1.8) {
-    return {
-      action: direction === 'LONG' ? 'BUY' : 'SELL',
-      tone: direction === 'LONG' ? 'bullish' : 'bearish',
-      detail: `Reliability ${score}/100 with one caveat: ${review.issues[0]?.text || 'minor warning'}. Smaller size advised.`
-    };
-  }
-
-  // HOLD: middling reliability
-  if (score >= 45) {
-    return {
-      action: 'HOLD',
-      tone: 'neutral',
-      detail: `Reliability ${score}/100 — borderline. Wait for stronger confluence or smaller position.`
-    };
-  }
-
-  return { action: 'WAIT', tone: 'neutral', detail: `Reliability ${score}/100 — too many conflicts. Wait for a cleaner setup.` };
+// The board's record for this setup type, and whether the board holds the
+// type back as a proven loser — the same test, the same window.
+function boardEvidence(setupType, market) {
+  const label = setupType?.label;
+  const hist = label ? getSetupTypeStats(label, { market, lookbackDays: 90, minSamples: 8 }) : null;
+  if (!hist) return { trackRecord: null, blocked: null };
+  const evidence = assessSetupExpectancy({ trades: hist.trades || [] });
+  const exp = hist.expectancy;
+  const trackRecord = {
+    label, sampleSize: hist.sampleSize, greenRate: hist.greenRate, expectancy: exp,
+    text: `On the board, ${label} has ended in profit ${Math.round((hist.greenRate || 0) * 100)}% of the time over `
+        + `${hist.sampleSize} tracked trades${exp != null ? ` (${exp >= 0 ? '+' : ''}${exp.toFixed(2)}R per trade)` : ''}`
+  };
+  const blocked = evidence.proven
+    ? `The board holds ${label} back: its tracked record is proven to lose (${exp.toFixed(2)}R per trade over ${hist.sampleSize}).`
+    : null;
+  return { trackRecord, blocked };
 }
 
 // INTRADAY price targets — bullish/bearish scenarios reachable WITHIN ONE SESSION.
@@ -842,7 +797,14 @@ router.get('/:ticker', async (req, res) => {
       const raw = full.quote;
       const quote = adaptQuote(raw);
       const signalData = analyzeSignals(quote, candles, null);
-      const setup = generateTradeSetup(quote, candles, signalData, { market: 'crypto', tradeStyle: 'crypto' });
+      const learnedC = getLearnedParams('crypto');
+      const setup = generateTradeSetup(quote, candles, signalData,
+        { market: 'crypto', tradeStyle: 'crypto', targetR: learnedC.targetR, maxStopPct: learnedC.maxStopPct });
+      const paused = marketPause('crypto');
+      // Crypto keeps its limit entry and the 10-hour time stop, as on its cards.
+      const entryPlan = setup ? { type: 'limit',
+        text: `Limit order between $${setup.entryLow?.toFixed(2)} and $${setup.entryHigh?.toFixed(2)}; close it if it has `
+            + 'not gone a fifth of the way to target 10 hours after it fills' } : null;
       const vwap = computeSessionVWAP(candles);
       const fundingRate = cryptoContext?.funding?.rates?.[tickerToBinanceSymbol(ticker)] ?? null;
 
@@ -886,16 +848,18 @@ router.get('/:ticker', async (req, res) => {
         setup, backtest: null, wallStreet: null,
         mtfAlignment: null, price: raw.price
       });
-      const verdict = deriveVerdict(setup, review, 'NEUTRAL', reliability, cryptoCorroboration);
+      const setupType = setup ? classifySetup(quote, candles, { ...signalData, direction: setup.direction }) : null;
+      const { trackRecord, blocked } = boardEvidence(setupType, 'crypto');
+      const verdict = deriveVerdict(setup, review, 'NEUTRAL',
+        { entryPlan, paused, blocked, trackRecord, corroboration: cryptoCorroboration });
       const bestPlay = generateBestPlay({
-        setup, review, weeklyTrend: 'NEUTRAL', reliability,
+        setup, review, weeklyTrend: 'NEUTRAL',
         price: raw.price, verdict: verdict.action, targets,
-        earnings: null, vix: null
+        earnings: null, vix: null, entryPlan, paused, blocked
       });
       const keyLevels = findKeyLevels(candles, raw.price, atrSafe);
       const bullsBears = generateBullsBearsCase(signalData, card, 'NEUTRAL', keyLevels);
-      const invalidation = setup ? generateInvalidationTriggers(setup, signalData, keyLevels) : [];
-      const setupType = setup ? classifySetup(quote, candles, { ...signalData, direction: setup.direction }) : null;
+      const invalidation = setup ? generateInvalidationTriggers(setup, signalData, keyLevels, { horizonText: '48 hours' }) : [];
 
       return res.json({
         market: 'crypto',
@@ -909,8 +873,9 @@ router.get('/:ticker', async (req, res) => {
         bestPlay, reliability, forecast, keyLevels, bullsBears, invalidation,
         sectorContext: null, backtest: null, wallStreet: null,
         mtfTrends: null, mtfAlignment: null, performance: null,
-        tradeGrade: computeTradeGrade({ setup, review, reliability, mtfAlignment: null, backtest: null, weeklyTrend: 'NEUTRAL', sentiment: news.sentiment }),
-        setupType,
+        tradeGrade: (() => { const g = computeTradeGrade({ setup, review, reliability, mtfAlignment: null, backtest: null, weeklyTrend: 'NEUTRAL', sentiment: news.sentiment });
+                             return g ? { ...g, note: 'Built from the checklist — not shown to predict results' } : null; })(),
+        setupType, entryPlan, trackRecord, paused,
         // Crypto-specific extras
         cryptoContext: { btcTrend, fearGreed: cryptoContext?.fearGreed || null, session: cryptoContext?.session || null, btcDominance: cryptoContext?.global?.btcDominance || null, funding: fundingRate, fundingTier: cryptoContext?.funding?.tier || null },
         vwap,
@@ -925,8 +890,9 @@ router.get('/:ticker', async (req, res) => {
           expectedDays: setup.expectedDays, expectedDays2: setup.expectedDays2,
           expectedHours: setup.expectedHours, expectedHours2: setup.expectedHours2,
           trendStrength: setup.trendStrength, trendStrengthLabel: setup.trendStrengthLabel,
-          timeSpan: 'Intraday — Next Session (4–12h)',
-          exitWindow: 'Within next active session (24/7 market)'
+          // As the crypto cards say it.
+          timeSpan: 'Short-term — 1 to 3 sessions (12–60h)',
+          exitWindow: 'Close the whole position at the target — within the next 1–3 active sessions'
         } : null,
         review, weeklyTrend: null,
         news: news.news, sentiment: news.sentiment, earnings: null,
@@ -954,7 +920,7 @@ router.get('/:ticker', async (req, res) => {
   // ── STOCK / FOREX / COMMODITY BRANCH (existing logic, unchanged) ──────
   try {
     // Parallel fetch of all data sources
-    const [full, weeklyTrend, news, earningsRaw, vix, wallStreet, fullForBacktest, analystConsensus, extendedHours, hourlyCandles] = await Promise.all([
+    const [full, weeklyTrend, news, earningsRaw, vix, wallStreet, fullForBacktest, analystConsensus, extendedHours, hourlyCandles, marketRegime, alpacaDaily] = await Promise.all([
       fetchFull(ticker, '3mo'),
       getWeeklyTrend(ticker),
       enrichTicker(ticker),
@@ -981,7 +947,14 @@ router.get('/:ticker', async (req, res) => {
       // the scanner already warms, so this is usually free — and on a 24-48h
       // hold the 4h trend is the most relevant of the four timeframes, which
       // is exactly the one that was missing.
-      fetchIntradayCandles(ticker, { interval: '60m', range: '3mo' }).catch(() => null)
+      fetchIntradayCandles(ticker, { interval: '60m', range: '3mo' }).catch(() => null),
+      // The board reads every stock against the market's last few sessions;
+      // without it the same stock could come out in a different direction here.
+      getMarketRegime(),
+      // The board builds its setups on 200 days of Alpaca bars where it has
+      // them; three months of Yahoo cannot even form a 200-day average, which
+      // was enough to give SNOW a setup on the board and none here.
+      ALPACA_ENABLED ? fetchDailyBars(ticker, { days: 200 }).catch(() => null) : Promise.resolve(null)
     ]);
 
     if (!full.candles || full.candles.length < 30) {
@@ -994,8 +967,46 @@ router.get('/:ticker', async (req, res) => {
     // the open. This is the same treatment the scanner gives every card.
     const candles = withLiveBar(full.candles, raw, extendedHours);
     const quote = adaptQuote(raw);
-    const signalData = analyzeSignals(quote, candles, null);
-    const setup = generateTradeSetup(quote, candles, signalData, { tradeStyle: 'sameDay' });
+    // The setup the board would build for this stock: same market regime,
+    // same learned stop ceiling and target, same hourly refinement, same rule
+    // on shorts (lib/boardSetup.js). This page used to build its own, so the
+    // same name could show different levels here and on the board.
+    const setupSeries = alpacaDaily?.length >= full.candles.length ? alpacaDaily : full.candles;
+    const setupCandles = withLiveBar(setupSeries, raw, extendedHours);
+    const signalData = analyzeSignals(quote, setupCandles, marketRegime);
+    const learned = getLearnedParams('stocks');
+    let setup = generateTradeSetup(quote, setupCandles, signalData,
+      { market: 'stocks', tradeStyle: 'sameDay', targetR: learned.targetR, maxStopPct: learned.maxStopPct });
+    let boardNote = null;
+    if (setup?.direction === 'SHORT' && !shortAllowed({ changePercent: raw.changePercent, price: raw.price, signalData, marketRegime }).allowed) {
+      boardNote = 'The board would not offer this short: the market is not risk-off and the stock is not breaking down '
+                + 'on its own (down 1.5–3% today under its 20 and 50-day averages).';
+    }
+    if (setup) {
+      const h = hourlyRefinement(quote, hourlyCandles, {
+        direction: setup.direction, market: 'stocks', marketRegime, dailyAtr: signalData.atr, maxStopPct: learned.maxStopPct
+      });
+      if (h) {
+        setup = { ...setup,
+          entry: h.entry, entryLow: h.entryLow, entryHigh: h.entryHigh, tp: h.tp, tp2: h.tp2, tp0: h.tp0, sl: h.sl,
+          rrRatio: h.rrRatio, rrRatio2: h.rrRatio2, expectedDays: h.expectedDays, expectedDays2: h.expectedDays2,
+          expectedHours: h.expectedHours, expectedHours2: h.expectedHours2, confirmation: h.confirmation,
+          timingSource: 'hourly' };
+      }
+    }
+    // How to enter, exactly as the board's card would say it.
+    let entryPlan = null;
+    if (setup) {
+      const closeEntry = raisedAfterClose()
+        || sessionRecord(ticker, setup.direction, 'stocks')?.entryType === 'sessionClose';
+      const st = stockEntryStatus({ direction: setup.direction, price: raw.price, sl: setup.sl, tp: setup.tp,
+                                    closeEntry, dayHigh: raw.dayHigh, dayLow: raw.dayLow });
+      entryPlan = st.entryStatus === 'MISSED' ? { type: 'missed', text: st.entryStatusText }
+        : st.entryStatus === 'WAIT_CLOSE'
+          ? { type: 'sessionClose', text: `Raised after the close — enter in the last 30 minutes of the session `
+              + `(from ${ukTimeForET(new Date(), 15, 30)}), not at the open. Skip it if the stop or target trades first` }
+          : { type: closeEntry ? 'sessionClose' : 'market', text: st.entryStatusText };
+    }
 
     // Build a synthetic card so reviewer can score it
     const card = {
@@ -1029,7 +1040,7 @@ router.get('/:ticker', async (req, res) => {
     // Support/resistance, bulls/bears, invalidation triggers, sector context
     const keyLevels = findKeyLevels(candles, raw.price, atrSafe);
     const bullsBears = generateBullsBearsCase(signalData, card, weeklyTrend, keyLevels);
-    const invalidation = setup ? generateInvalidationTriggers(setup, signalData, keyLevels) : [];
+    const invalidation = setup ? generateInvalidationTriggers(setup, signalData, keyLevels, { horizonText: '5 days' }) : [];
     const sectorContext = await getSectorContext(ticker, fetchFull);
 
     // Backtest: run only if we have a setup direction
@@ -1059,7 +1070,7 @@ router.get('/:ticker', async (req, res) => {
       : null;
 
     // Classify setup type
-    const setupType = setup ? classifySetup(quote, candles, { ...signalData, direction: setup.direction }) : null;
+    const setupType = setup ? classifySetup(quote, setupCandles, { ...signalData, direction: setup.direction }) : null;
 
     // Multi-timeframe alignment (4h / daily / weekly / monthly)
     let mtfTrends = null, mtfAlignment = null;
@@ -1087,18 +1098,16 @@ router.get('/:ticker', async (req, res) => {
       reliability.components = [...(reliability.components || []), ...corroboration.items.map(i => ({
         name: i.name, verdict: i.verdict, text: i.text, points: i.points, max: 8, independent: true
       }))];
-      reliability.label = reliability.score >= 80 ? 'HIGH RELIABILITY'
-                        : reliability.score >= 65 ? 'MODERATE RELIABILITY'
-                        : reliability.score >= 50 ? 'LOW RELIABILITY'
-                        : 'UNRELIABLE — DO NOT TRADE';
+      reliability.label = checklistLabel(reliability.score);
     }
 
-    const verdict = deriveVerdict(setup, review, weeklyTrend, reliability, corroboration);
+    const { trackRecord, blocked } = boardEvidence(setupType, 'stocks');
+    const verdict = deriveVerdict(setup, review, weeklyTrend, { entryPlan, boardNote, blocked, trackRecord, corroboration });
 
     const bestPlay = generateBestPlay({
-      setup, review, weeklyTrend, reliability,
+      setup, review, weeklyTrend,
       price: raw.price, verdict: verdict.action, targets,
-      earnings: card.earnings, vix
+      earnings: card.earnings, vix, entryPlan, boardNote, blocked
     });
 
     // Trade quality grade (synthesis of everything)
@@ -1115,7 +1124,8 @@ router.get('/:ticker', async (req, res) => {
       price: raw.price,
       change: raw.change,
       changePercent: raw.changePercent,
-      open: raw.dayHigh, dayHigh: raw.dayHigh, dayLow: raw.dayLow,
+      // This was raw.dayHigh. The forming bar carries the session's real open.
+      open: candles[candles.length - 1]?.open ?? null, dayHigh: raw.dayHigh, dayLow: raw.dayLow,
       // raw.preMarketPrice is always null — the daily chart meta does not carry
       // it, which is why fetchExtendedHours exists. Report the real thing.
       preMarketPrice: extendedHours?.session === 'pre' ? extendedHours.price : null,
@@ -1162,8 +1172,12 @@ router.get('/:ticker', async (req, res) => {
       mtfTrends,
       mtfAlignment,
       performance,
-      tradeGrade,
+      tradeGrade: tradeGrade ? { ...tradeGrade, note: 'Built from the checklist — not shown to predict results' } : null,
       setupType,
+      entryPlan,
+      trackRecord,
+      boardNote,
+      marketRegime,
 
       vix,
       targets,
@@ -1185,8 +1199,14 @@ router.get('/:ticker', async (req, res) => {
         expectedDays2: setup.expectedDays2,
         trendStrength: setup.trendStrength,
         trendStrengthLabel: setup.trendStrengthLabel,
-        timeSpan: TIME_SPANS[getTimespanKey(setup.atr, raw.price)].label,
-        exitWindow: getExitWindow(getTimespanKey(setup.atr, raw.price))
+        timingSource: setup.timingSource || 'daily',
+        // The board's wording: one exit, at the target, on the setup's own estimate.
+        timeSpan: setup.expectedDays != null
+          ? `Short-term — about ${setup.expectedDays} session${setup.expectedDays === 1 ? '' : 's'}`
+          : TIME_SPANS[getTimespanKey(setup.atr, raw.price)].label,
+        exitWindow: setup.expectedDays != null
+          ? `Close the whole position at the target — usually within ~${setup.expectedDays} session${setup.expectedDays === 1 ? '' : 's'}`
+          : getExitWindow(getTimespanKey(setup.atr, raw.price))
       } : null,
 
       review,

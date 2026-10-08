@@ -13,10 +13,11 @@
 // Two things changed. It now matches on how similar a past bar was to TODAY
 // rather than to a fixed template, so it tests the setup actually being
 // proposed. And it scores those matches with the trade's own geometry and the
-// real staged exit — a third at TP0, a third at TP1, a runner, stop to
-// breakeven once TP0 fills — reported in R, the same measure the scanner and
-// the goal tracker use. The old all-or-nothing win rate could not be compared
-// with anything else in the system.
+// exit plan in force, reported in R, the same measure the scanner and the goal
+// tracker use. That plan is one exit — the whole position at the target —
+// since 2026-08-31; this kept simulating the retired thirds plan (a third at
+// TP0, stop to breakeven, a runner to TP2) until 2026-10-08, which banked
+// partial wins the cards no longer take.
 
 import { calculateRSI, calculateATR, calculateSMA } from '../utils/signals.js';
 
@@ -49,9 +50,10 @@ function similar(a, b) {
 }
 
 /**
- * Walk forward from a matched bar under the real scale-out plan and return the
- * realised result in R. Mirrors lib/realisedR.js, computed from candles rather
- * than from a closed record.
+ * Walk forward from a matched bar under the single exit and return the
+ * realised result in R: the target pays the full reward, the stop loses 1R,
+ * and a trade that runs out of horizon settles at that close. Mirrors
+ * lib/realisedR.js, computed from candles rather than from a closed record.
  */
 function simulate(candles, startIdx, direction, stopDist, targetDist, horizonBars) {
   const entry = candles[startIdx].close;
@@ -59,37 +61,22 @@ function simulate(candles, startIdx, direction, stopDist, targetDist, horizonBar
   const long = direction === 'LONG';
   const rr   = targetDist / stopDist;
   const dir  = long ? 1 : -1;
-
-  const tp0 = entry + dir * targetDist * 0.30;
-  const tp1 = entry + dir * targetDist;
-  const tp2 = entry + dir * targetDist * 1.2;
-  let stop  = entry - dir * stopDist;
-
-  let scaled = false;
+  const tp   = entry + dir * targetDist;
+  const stop = entry - dir * stopDist;
   const last = Math.min(startIdx + horizonBars, candles.length - 1);
 
   for (let i = startIdx + 1; i <= last; i++) {
     const { high, low } = candles[i];
     const hitStop = long ? low <= stop : high >= stop;
-    const hitTp0  = long ? high >= tp0 : low <= tp0;
-    const hitTp1  = long ? high >= tp1 : low <= tp1;
-    const hitTp2  = long ? high >= tp2 : low <= tp2;
-
+    const hitTp   = long ? high >= tp  : low <= tp;
     // Within a bar the order is unknown. Resolve against the trade, so this
-    // never flatters itself: the stop is taken first unless the first scale
-    // had already filled on an earlier bar.
-    if (hitStop && !scaled) return -1.0;
-    if (!scaled && hitTp0) scaled = true;   // stop moves to breakeven with it
-    if (scaled) stop = entry;
-    if (hitTp2) return (0.3 * rr) / 3 + rr / 3 + (1.2 * rr) / 3;
-    if (hitTp1) return (0.3 * rr) / 3 + rr / 3;
-    if (hitStop && scaled) return (0.3 * rr) / 3;
+    // never flatters itself: the stop is taken first.
+    if (hitStop) return -1.0;
+    if (hitTp) return rr;
   }
 
   // Ran out of horizon: settle where it closed, as the live monitor does.
-  const close = candles[last].close;
-  const move = ((close - entry) * dir) / stopDist;
-  return scaled ? (0.3 * rr) / 3 + (move * 2) / 3 : move;
+  return ((candles[last].close - entry) * dir) / stopDist;
 }
 
 /**
@@ -146,14 +133,14 @@ export function backtestSetup(candles, direction, geometry = {}) {
   const expectancy = rs.reduce((a, b) => a + b, 0) / rs.length;
   const green      = rs.filter(r => r > 0).length;
   const greenRate  = Math.round((green / rs.length) * 100);
-  const reachedTp  = rs.filter(r => r >= (targetDist / stopDist) / 3).length;
+  const reachedTp  = rs.filter(r => r >= (targetDist / stopDist) - 1e-9).length;
   const winRate    = Math.round((reachedTp / rs.length) * 100);
 
   const confidence = results.length >= 12 ? 'high' : results.length >= 8 ? 'medium' : 'low';
 
   return {
     sampleSize: results.length,
-    winRate,                                   // reached the first target or better
+    winRate,                                   // reached the target
     greenRate,                                 // finished in profit
     expectancy: parseFloat(expectancy.toFixed(3)),
     confidence,

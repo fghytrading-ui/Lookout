@@ -1,3 +1,8 @@
+// The 'action' line on each pattern describes the pattern. It used to give
+// exit and sizing advice — trail the stop, exit by the close, smaller size —
+// none of which is the plan the cards are graded on (printed stop, one exit
+// at the target, a fixed horizon), and the trailing and breakeven variants
+// were tested on the record and did worse. (2026-10-08)
 // Setup Type Classifier — identifies WHAT KIND of swing trade this is.
 // Each setup type has different characteristics and behavior.
 //
@@ -81,7 +86,7 @@ export function classifySetup(quote, historical, signalData) {
         idealHold: 'Typically 8–24 hours',
         risk: 'medium-high',
         reasoning: `Price within 2% of 20-day high (${high20.toFixed(2)}). Volume is ${volRatio.toFixed(1)}× average — institutions are buying.`,
-        action: 'Enter on confirmed break. Tight stop. Bigger winners possible if momentum holds.'
+        action: 'A breakout with momentum behind it — the printed stop and single target apply as on every card.'
       };
     }
   }
@@ -102,7 +107,7 @@ export function classifySetup(quote, historical, signalData) {
         idealHold: 'Typically 12–24 hours',
         risk: 'high',
         reasoning: `RSI ${rsi.toFixed(0)} is oversold. ${nearLow52 ? 'Near 52-week low.' : ''} ${isBullishToday ? 'Today closing above its open shows buyers stepping in.' : ''}`,
-        action: 'Mean-reversion trade — tighter stop, smaller size. Quick win or quick exit.'
+        action: 'Mean-reversion trade — it tends to work quickly or not at all.'
       };
     }
   }
@@ -116,7 +121,7 @@ export function classifySetup(quote, historical, signalData) {
       idealHold: 'Typically 18–36 hours',
       risk: 'medium',
       reasoning: `Price above 20 SMA, 20 above 50 (clean uptrend). RSI ${rsi.toFixed(0)} shows momentum without exhaustion.`,
-      action: 'Trail behind the trend. Most consistent intraday setup — exit by close.'
+      action: 'Riding an established uptrend — one exit at the target, no trailing.'
     };
   }
 
@@ -137,7 +142,7 @@ export function classifySetup(quote, historical, signalData) {
         idealHold: 'Typically 8–24 hours',
         risk: 'medium-high',
         reasoning: `Price within 2% of 20-day low (${low20.toFixed(2)}). Volume ${volRatio.toFixed(1)}× average — selling pressure confirmed.`,
-        action: 'Short on confirmed break. Tight stop above breakout level.'
+        action: 'A breakdown short — the printed stop sits above the broken level.'
       };
     }
   }
@@ -173,7 +178,7 @@ export function classifySetup(quote, historical, signalData) {
         idealHold: 'Typically 12–24 hours',
         risk: 'high',
         reasoning: `RSI ${rsi.toFixed(0)} is overbought. Today closing below its open shows sellers stepping in.`,
-        action: 'Counter-trend short — tighter stop, smaller size.'
+        action: 'Counter-trend short — against the prevailing move.'
       };
     }
   }
@@ -187,7 +192,7 @@ export function classifySetup(quote, historical, signalData) {
       idealHold: 'Typically 18–36 hours',
       risk: 'medium',
       reasoning: `Price below 20 SMA, 20 below 50 (clean downtrend). RSI ${rsi.toFixed(0)} confirms selling pressure.`,
-      action: 'Ride the downtrend. Trail stop above recent highs.'
+      action: 'Riding an established downtrend — one exit at the target, no trailing.'
     };
   }
 

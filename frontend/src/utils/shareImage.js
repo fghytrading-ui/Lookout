@@ -252,7 +252,7 @@ export async function captureAnalystShareImage(data, filename) {
     ${data.reliability ? `
     <div style="background:${C.page}; border:1px solid ${C.border}; border-radius:12px; padding:20px; margin-bottom:14px;">
       <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
-        <div style="font-family:${F.sans}; font-size:11px; color:${C.textMute}; letter-spacing:2px; font-weight:700;">⚖ RELIABILITY SCORE</div>
+        <div style="font-family:${F.sans}; font-size:11px; color:${C.textMute}; letter-spacing:2px; font-weight:700;">⚖ SETUP CHECKLIST</div>
         <div style="font-family:${F.sans}; font-weight:800; font-size:28px; color:${relColor}; line-height:1;">${data.reliability.score}/100</div>
       </div>
       <div style="height:10px; background:${C.border}; border-radius:5px; overflow:hidden; margin-bottom:8px;">
@@ -264,12 +264,12 @@ export async function captureAnalystShareImage(data, filename) {
     <!-- Targets -->
     <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:14px;">
       <div style="background:${C.greenBg}; border:2px solid ${C.greenBd}; border-radius:10px; padding:18px;">
-        <div style="font-family:${F.sans}; font-size:10px; color:${C.green}; letter-spacing:2px; margin-bottom:8px; font-weight:700;">🎯 BULLISH TARGET</div>
+        <div style="font-family:${F.sans}; font-size:10px; color:${C.green}; letter-spacing:2px; margin-bottom:8px; font-weight:700;">📈 UPSIDE SCENARIO</div>
         <div style="font-family:${F.mono}; font-size:24px; font-weight:700; color:${C.green};">$${data.targets.bullish.price?.toFixed(2)}</div>
         <div style="font-family:${F.mono}; font-size:12px; color:${C.green}; margin-top:4px; font-weight:600;">+${data.targets.bullish.pct}% · ${data.targets.bullish.timeframe}</div>
       </div>
       <div style="background:${C.redBg}; border:2px solid ${C.redBd}; border-radius:10px; padding:18px;">
-        <div style="font-family:${F.sans}; font-size:10px; color:${C.red}; letter-spacing:2px; margin-bottom:8px; font-weight:700;">🎯 BEARISH TARGET</div>
+        <div style="font-family:${F.sans}; font-size:10px; color:${C.red}; letter-spacing:2px; margin-bottom:8px; font-weight:700;">📉 DOWNSIDE SCENARIO</div>
         <div style="font-family:${F.mono}; font-size:24px; font-weight:700; color:${C.red};">$${data.targets.bearish.price?.toFixed(2)}</div>
         <div style="font-family:${F.mono}; font-size:12px; color:${C.red}; margin-top:4px; font-weight:600;">${data.targets.bearish.pct}% · ${data.targets.bearish.timeframe}</div>
       </div>
@@ -280,10 +280,10 @@ export async function captureAnalystShareImage(data, filename) {
     <div style="background:${C.page}; border:1px solid ${C.border}; border-radius:10px; padding:16px; margin-bottom:14px;">
       <div style="font-family:${F.sans}; font-size:11px; color:${C.textMute}; letter-spacing:2px; margin-bottom:10px; font-weight:700;">💡 RECOMMENDED ${data.setup.direction} SETUP</div>
       <div style="display:flex; justify-content:space-between; flex-wrap:wrap; gap:12px;">
-        <div><div style="font-size:10px; color:${C.textMute};">ENTRY</div><div style="font-family:${F.mono}; font-size:15px; font-weight:700; color:${C.green};">$${data.setup.entryLow?.toFixed(2)}–$${data.setup.entryHigh?.toFixed(2)}</div></div>
+        <div><div style="font-size:10px; color:${C.textMute};">${data.entryPlan && data.entryPlan.type !== 'limit' ? (data.entryPlan.type === 'sessionClose' ? 'ENTER NEAR THE CLOSE' : 'ENTER AT MARKET') : 'ENTRY'}</div><div style="font-family:${F.mono}; font-size:15px; font-weight:700; color:${C.green};">${data.entryPlan && data.entryPlan.type !== 'limit' ? `$${data.price?.toFixed(2)}` : `$${data.setup.entryLow?.toFixed(2)}–$${data.setup.entryHigh?.toFixed(2)}`}</div></div>
         <div><div style="font-size:10px; color:${C.textMute};">TARGET</div><div style="font-family:${F.mono}; font-size:15px; font-weight:700; color:${C.blue};">$${data.setup.tp?.toFixed(2)}</div></div>
         <div><div style="font-size:10px; color:${C.textMute};">STOP</div><div style="font-family:${F.mono}; font-size:15px; font-weight:700; color:${C.red};">$${data.setup.sl?.toFixed(2)}</div></div>
-        <div><div style="font-size:10px; color:${C.textMute};">R:R · CONF</div><div style="font-family:${F.mono}; font-size:15px; font-weight:700; color:${C.text};">${data.setup.rrRatio}:1 · ${data.setup.confidence}%</div></div>
+        <div><div style="font-size:10px; color:${C.textMute};">R:R · SETUP SCORE</div><div style="font-family:${F.mono}; font-size:15px; font-weight:700; color:${C.text};">${data.setup.rrRatio}:1 · ${data.setup.confidence}/100</div></div>
       </div>
     </div>` : ''}
 

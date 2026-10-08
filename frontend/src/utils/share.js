@@ -128,24 +128,17 @@ export function formatAnalystText(data) {
   }
 
   if (data.reliability) {
-    lines.push(`⚖ Reliability: ${data.reliability.score}/100 — ${data.reliability.label}`);
-    lines.push('');
-  }
-
-  if (data.targets) {
-    lines.push(`🎯 Bullish target: $${data.targets.bullish.price?.toFixed(2)} (+${data.targets.bullish.pct}%)`);
-    lines.push(`🎯 Bearish target: $${data.targets.bearish.price?.toFixed(2)} (${data.targets.bearish.pct}%)`);
+    lines.push(`⚖ Checklist: ${data.reliability.score}/100 — ${data.reliability.label} (context, not a forecast)`);
     lines.push('');
   }
 
   if (data.setup) {
     lines.push(`Setup (${data.setup.direction}):`);
-    lines.push(`  Entry zone: $${data.setup.entryLow?.toFixed(2)} – $${data.setup.entryHigh?.toFixed(2)}`);
-    lines.push(`  TP1 (Safe):     $${data.setup.tp?.toFixed(2)}  R:R ${data.setup.rrRatio}:1`);
-    if (data.setup.tp2 != null) {
-      lines.push(`  TP2 (Extended): $${data.setup.tp2.toFixed(2)}  R:R ${data.setup.rrRatio2}:1`);
-    }
-    lines.push(`  Stop Loss:      $${data.setup.sl?.toFixed(2)}`);
+    if (data.entryPlan && data.entryPlan.type !== 'limit') lines.push(`  Entry: ${data.entryPlan.text}`);
+    else lines.push(`  Entry zone: $${data.setup.entryLow?.toFixed(2)} – $${data.setup.entryHigh?.toFixed(2)}`);
+    lines.push(`  Target:    $${data.setup.tp?.toFixed(2)}  R:R ${data.setup.rrRatio}:1`);
+    lines.push(`  Stop Loss: $${data.setup.sl?.toFixed(2)}`);
+    if (data.trackRecord) lines.push(`  ${data.trackRecord.text}`);
     lines.push('');
   }
 

@@ -17,6 +17,7 @@ import { fetchRecommendationTrend, fetchCompanySector } from '../lib/finnhubData
 import { fetchRecentFilings } from '../lib/secFilings.js';
 import { getLearnedParams } from '../lib/learning.js';
 import { marketPause } from '../lib/marketPause.js';
+import { getMarketRegime, shortAllowed, hourlyRefinement, stockEntryStatus } from '../lib/boardSetup.js';
 import { buildThesis } from '../lib/thesis.js';
 import { getUpcomingMacro, buildEventTimeline } from '../lib/upcomingEvents.js';
 import { getMarketUniverse } from '../lib/marketUniverse.js';
@@ -26,41 +27,9 @@ import {
   TIME_SPANS, getTimespanKey, getExitWindow, generateAnalystNotes
 } from '../utils/signals.js';
 import { getEntryTiming, buildIntradayTiming, volumeVsExpected, getForexEntryTiming,
-         getFuturesEntryTiming, getCommodityEntryTiming, getSession, raisedAfterClose,
-         inLastHalfHour } from '../utils/market.js';
+         getFuturesEntryTiming, getCommodityEntryTiming, getSession, raisedAfterClose } from '../utils/market.js';
 
-// Determine broad market regime from SPY's trend
-// Market regime on the horizon this software actually trades.
-//
-// This used to require SPY below its 50-day average AND the 50-day below the
-// 200-day — a structural bear market that takes months to form. Measured over
-// the last 2 years that was true on 0 of 300 sessions, so the SHORT gate below
-// was not a filter at all: it was an off switch.
-//
-// It is also the wrong question. A trade held 24-72 hours does not care where
-// price sits against a 200-day average; it cares what the market has done in
-// the last few sessions. The same rule on a 1-5 day window reads BEARISH on
-// about 30% of sessions, which is what a day-trading system needs.
-async function getMarketRegime() {
-  try {
-    const spy = await fetchFull('SPY', '3mo');
-    const closes = spy.candles.map(c => c.close);
-    const price  = spy.quote.price;
-    if (closes.length < 12) return 'NEUTRAL';
-
-    const ret = (n) => ((price - closes[closes.length - 1 - n]) / closes[closes.length - 1 - n]) * 100;
-    const d1 = ret(1);          // today
-    const d3 = ret(3);          // this week so far
-    const sma10 = calculateSMA(closes, 10);
-
-    // A sharp single session, a sustained three-day slide, or trading under the
-    // 10-day average while still drifting down — any of those is risk-off for a
-    // position measured in hours.
-    if (d1 <= -1.0 || d3 <= -1.5 || (sma10 && price < sma10 && d3 < -0.3)) return 'BEARISH';
-    if (d1 >=  1.0 || d3 >=  1.5 || (sma10 && price > sma10 && d3 >  0.3)) return 'BULLISH';
-    return 'NEUTRAL';
-  } catch { return 'NEUTRAL'; }
-}
+// getMarketRegime lives in lib/boardSetup.js, shared with the analyst page.
 
 // Fetch current VIX value for market volatility context
 async function getVIX() {
@@ -271,34 +240,6 @@ function adaptQuote(raw) {
     marketState:             raw.marketState,
     sector:                  null
   };
-}
-
-// Where a stock card stands right now. Market entries are off only once price
-// is past a printed level. A card raised after the close (closeEntry) also
-// waits for the last half hour of its session, and is off if that session
-// has already traded through a level — the grader records that as never taken.
-// Called again after hourly refinement moves the levels.
-function stockEntryStatus({ direction, price, sl, tp, closeEntry, dayHigh, dayLow }) {
-  const L = direction === 'LONG';
-  const past = L ? (price <= sl ? 'stop' : price >= tp ? 'target' : null)
-                 : (price >= sl ? 'stop' : price <= tp ? 'target' : null);
-  const touched = closeEntry && getSession() === 'MARKET_OPEN' && Number.isFinite(dayHigh) && Number.isFinite(dayLow)
-    ? (L ? (dayLow <= sl ? 'stop' : dayHigh >= tp ? 'target' : null)
-         : (dayHigh >= sl ? 'stop' : dayLow <= tp ? 'target' : null))
-    : null;
-  if (past || touched) {
-    return { entryStatus: 'MISSED', touchedToday: !past && !!touched,
-             entryStatusText: past ? `Price is already beyond the ${past} — this trade is off`
-                                   : `The ${touched} already traded today — this trade is off` };
-  }
-  if (closeEntry && !inLastHalfHour()) {
-    return { entryStatus: 'WAIT_CLOSE', touchedToday: false,
-             entryStatusText: 'Raised after the close — enter in the last 30 minutes of the session, not at the open. '
-                            + 'Skip it if the stop or target trades first.' };
-  }
-  return { entryStatus: 'IN_ZONE', touchedToday: false,
-           entryStatusText: closeEntry ? 'Last half hour — enter at market now, keep the printed stop and target'
-                                       : 'Enter at market — keep the printed stop and target' };
 }
 
 function buildCard(ticker, raw, quote, setup, signalData, historical, market = 'stocks', opts = {}) {
@@ -682,17 +623,9 @@ router.get('/scan', async (req, res) => {
       // the 52-week-low squeeze guard all still apply afterwards; this only
       // decides whether the setup is allowed to be considered at all.
       if (setup.direction === 'SHORT' && !isCrypto) {
-        const chgToday = raw.changePercent ?? 0;
-        const below20  = signalData.sma20 && raw.price < signalData.sma20;
-        const below50  = signalData.sma50 && raw.price < signalData.sma50;
-        // Falling hard today and trading under its own short-term trend.
-        const stockBreakingDown = chgToday <= -3 && below20 && below50;
-        // Or a slower bleed that is still clearly one-directional.
-        const sustainedWeakness = chgToday <= -1.5 && below20 && below50
-                                  && signalData.rsi != null && signalData.rsi < 45;
-
-        if (marketRegime !== 'BEARISH' && !stockBreakingDown && !sustainedWeakness) continue;
-        if (marketRegime !== 'BEARISH') shortsOnOwnMerit++;
+        const gate = shortAllowed({ changePercent: raw.changePercent, price: raw.price, signalData, marketRegime });
+        if (!gate.allowed) continue;
+        if (gate.onOwnMerit) shortsOnOwnMerit++;
       }
 
       // Regime filter is now a confidence-boost signal (added in analyzeSignals),
@@ -816,21 +749,14 @@ router.get('/scan', async (req, res) => {
       let refined = 0;
       for (const card of refineTargets) {
         const hourly = hourlyMap[card.ticker];
-        if (!hourly || hourly.length < 120) continue;
         try {
           const quote = card._quote;
-          if (!quote) continue;
-          const hSignals = analyzeSignals(quote, hourly, marketRegime);
-          const hSetup = generateTradeSetup(quote, hourly, hSignals, {
-            market, tradeStyle: 'intradayStock', dailyAtr: card._dailyAtr,
+          // Same direction, still a short-term trade — or the daily setup stands.
+          const hSetup = hourlyRefinement(quote, hourly, {
+            direction: card.direction, market, marketRegime, dailyAtr: card._dailyAtr,
             maxStopPct: getLearnedParams(market).maxStopPct
           });
-          if (!hSetup || hSetup.direction !== card.direction) continue;
-          // Reject a refinement that turns a short-term trade into a
-          // multi-week hold. Hourly bars can place a target far enough out
-          // that the duration estimate runs to 20+ sessions — accurate, but
-          // no longer the trade being offered. Keep the daily setup instead.
-          if (!(hSetup.expectedDays > 0) || hSetup.expectedDays > 8) continue;
+          if (!hSetup) continue;
           card.entry = hSetup.entry;   card.entryLow = hSetup.entryLow; card.entryHigh = hSetup.entryHigh;
           card.tp = hSetup.tp;         card.tp2 = hSetup.tp2;           card.tp0 = hSetup.tp0;
           card.sl = hSetup.sl;         card.rrRatio = hSetup.rrRatio;   card.rrRatio2 = hSetup.rrRatio2;

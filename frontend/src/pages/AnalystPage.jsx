@@ -10,7 +10,9 @@ const VERDICT_STYLES = {
   'WAIT':        { bg: 'bg-blue-500/10',  border: 'border-blue-500/30',  text: 'text-blue-300',  icon: '⏳', glow: '' },
   'SELL':        { bg: 'bg-red-500/10',   border: 'border-red-500/30',   text: 'text-red-400',   icon: '📉', glow: '' },
   'STRONG SELL': { bg: 'bg-red-500/15',   border: 'border-red-500/50',   text: 'text-red-300',   icon: '⬇',  glow: 'shadow-[0_0_30px_rgba(255,51,85,0.3)]' },
-  'AVOID':       { bg: 'bg-[#1a1a1a]',    border: 'border-red-500/40',   text: 'text-red-300',   icon: '🚫', glow: '' }
+  'AVOID':       { bg: 'bg-[#1a1a1a]',    border: 'border-red-500/40',   text: 'text-red-300',   icon: '🚫', glow: '' },
+  'PAUSED':      { bg: 'bg-[#1a1a1a]',    border: 'border-amber-500/30', text: 'text-amber-300', icon: '⏸',  glow: '' },
+  'MISSED':      { bg: 'bg-[#1a1a1a]',    border: 'border-[#333]',       text: 'text-[#aaa]',    icon: '⏭',  glow: '' }
 };
 
 function fmtDollar(n)   { return n != null ? `$${n.toFixed(2)}` : '—'; }
@@ -93,7 +95,7 @@ export default function AnalystPage() {
             🔍 ASSET ANALYST
           </h1>
           <span className="text-[10px] font-mono font-bold px-2 py-1 rounded border border-cyan-500/40 bg-cyan-500/10 text-cyan-300 tracking-widest">
-            ⚖ BALANCED MODE
+            ⚖ SAME AS THE BOARD
           </span>
           {data?.market === 'crypto' && (
             <span className="text-[10px] font-mono font-bold px-2 py-1 rounded border border-purple-500/40 bg-purple-500/10 text-purple-300 tracking-widest">
@@ -104,7 +106,7 @@ export default function AnalystPage() {
         <p className="text-[11px] text-[#444] font-mono">
           {data?.market === 'crypto'
             ? '4h candles · crypto calibration · BTC trend + Fear & Greed + funding · VWAP'
-            : 'Decisive when conviction is there — flashes BUY/SELL when sources agree. Still rejects clearly bad setups.'}
+            : 'The same trade the board would offer, with the evidence behind it and every reason it would be held back.'}
         </p>
       </div>
 
@@ -315,7 +317,7 @@ export default function AnalystPage() {
             }`}>
               <div className="flex items-start justify-between mb-3 flex-wrap gap-3">
                 <div>
-                  <div className="text-[10px] uppercase tracking-widest text-[#666] font-mono mb-1">📋 Overall Trade Grade</div>
+                  <div className="text-[10px] uppercase tracking-widest text-[#666] font-mono mb-1">📋 Checklist Grade</div>
                   <div className={`text-6xl font-condensed font-bold tracking-wider leading-none ${
                     data.tradeGrade.color === 'green'  ? 'text-green-300' :
                     data.tradeGrade.color === 'amber'  ? 'text-amber-300' :
@@ -323,6 +325,7 @@ export default function AnalystPage() {
                                                           'text-red-300'
                   }`}>{data.tradeGrade.grade}</div>
                   <div className="text-[13px] font-mono text-[#bbb] mt-1">{data.tradeGrade.label} · {data.tradeGrade.score}/100</div>
+                  {data.tradeGrade.note && <div className="text-[10px] font-mono text-[#666] mt-1">{data.tradeGrade.note}</div>}
                 </div>
               </div>
               {/* Breakdown bars */}
@@ -443,7 +446,9 @@ export default function AnalystPage() {
                     }`}>{Math.round(data.historicalStats.winRate * 100)}%</span>
                     <span className="text-[#555]"> (n={data.historicalStats.sampleSize})</span></span>
                   )}
-                  <span><span className="text-[#555]">Hold:</span> <span className="text-[#ccc]">{data.setupType.idealHold}</span></span>
+                  <span><span className="text-[#555]">Hold:</span> <span className="text-[#ccc]">{data.setup?.expectedDays
+                    ? `about ${data.setup.expectedDays} session${data.setup.expectedDays === 1 ? '' : 's'}`
+                    : data.setupType.idealHold}</span></span>
                   <span><span className="text-[#555]">Risk:</span> <span className={`font-bold ${
                     data.setupType.risk === 'high' ? 'text-red-400' :
                     data.setupType.risk?.includes('high') ? 'text-orange-400' :
@@ -475,7 +480,7 @@ export default function AnalystPage() {
             <div className="bg-[#0e0e0e] border border-[#1f1f1f] rounded p-5">
               <div className="flex items-center justify-between mb-3">
                 <div>
-                  <div className="text-[10px] uppercase tracking-widest text-[#555] font-mono">⚖ Reliability Score</div>
+                  <div className="text-[10px] uppercase tracking-widest text-[#555] font-mono">⚖ Setup Checklist</div>
                   <div className={`text-2xl font-condensed font-bold tracking-wider ${
                     data.reliability.score >= 80 ? 'text-green-400' :
                     data.reliability.score >= 65 ? 'text-amber-400' :
@@ -485,8 +490,8 @@ export default function AnalystPage() {
                     {data.reliability.score}/100 — {data.reliability.label}
                   </div>
                 </div>
-                <div className="text-[10px] text-[#444] font-mono text-right">
-                  Cross-validates 7 independent<br />sources against direction
+                <div className="text-[10px] text-[#555] font-mono text-right max-w-xs">
+                  {data.reliability.note || 'Seven checks against the trade direction'}
                 </div>
               </div>
               <div className="h-2 bg-[#1a1a1a] rounded overflow-hidden mb-4">
@@ -582,13 +587,13 @@ export default function AnalystPage() {
           {/* ── PRICE TARGETS ────────────────────────────────────────────────── */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <div className="bg-green-500/8 border border-green-500/30 rounded p-4">
-              <div className="text-[10px] uppercase tracking-widest text-green-500/70 font-mono mb-1">🎯 Bullish Target</div>
+              <div className="text-[10px] uppercase tracking-widest text-green-500/70 font-mono mb-1">📈 Upside scenario — not the trade's target</div>
               <div className="text-2xl font-bold font-mono tabular-nums text-green-400 mb-1">{fmtDollar(data.targets.bullish.price)}</div>
               <div className="text-sm font-mono text-green-300/80">+{data.targets.bullish.pct}% upside · {data.targets.bullish.timeframe}</div>
               <div className="text-[10px] text-[#666] font-mono mt-2">{data.targets.bullish.reasoning}</div>
             </div>
             <div className="bg-red-500/8 border border-red-500/30 rounded p-4">
-              <div className="text-[10px] uppercase tracking-widest text-red-500/70 font-mono mb-1">🎯 Bearish Target</div>
+              <div className="text-[10px] uppercase tracking-widest text-red-500/70 font-mono mb-1">📉 Downside scenario</div>
               <div className="text-2xl font-bold font-mono tabular-nums text-red-400 mb-1">{fmtDollar(data.targets.bearish.price)}</div>
               <div className="text-sm font-mono text-red-300/80">{data.targets.bearish.pct}% downside · {data.targets.bearish.timeframe}</div>
               <div className="text-[10px] text-[#666] font-mono mt-2">{data.targets.bearish.reasoning}</div>
@@ -601,8 +606,22 @@ export default function AnalystPage() {
               <div className="text-[10px] uppercase tracking-widest text-[#555] font-mono mb-3">💡 Recommended Trade Setup ({data.setup.direction})</div>
               <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-3">
                 <div>
-                  <div className="text-[9px] uppercase tracking-widest text-[#444] font-mono">Entry Zone</div>
-                  <div className="font-mono font-bold text-green-400 text-sm tabular-nums">${data.setup.entryLow?.toFixed(2)}–${data.setup.entryHigh?.toFixed(2)}</div>
+                  {/* Stocks enter at market (or, raised after the close, in the
+                      last half hour of the next session) — the zone is only
+                      the entry for crypto's limit orders. */}
+                  {data.entryPlan && data.entryPlan.type !== 'limit' ? (
+                    <>
+                      <div className="text-[9px] uppercase tracking-widest text-[#444] font-mono">
+                        {data.entryPlan.type === 'sessionClose' ? 'Enter near the close' : data.entryPlan.type === 'missed' ? 'Entry — missed' : 'Enter at market'}
+                      </div>
+                      <div className="font-mono font-bold text-green-400 text-sm tabular-nums">{fmtDollar(data.price)}</div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="text-[9px] uppercase tracking-widest text-[#444] font-mono">Entry Zone</div>
+                      <div className="font-mono font-bold text-green-400 text-sm tabular-nums">${data.setup.entryLow?.toFixed(2)}–${data.setup.entryHigh?.toFixed(2)}</div>
+                    </>
+                  )}
                 </div>
                 <div>
                   <div className="text-[9px] uppercase tracking-widest text-[#444] font-mono">{data.setup.tp0 != null ? 'TP1 — Safe' : 'Target'}</div>
@@ -622,13 +641,28 @@ export default function AnalystPage() {
                   <div className="font-mono font-bold text-red-400 text-sm tabular-nums">${data.setup.sl?.toFixed(2)}</div>
                 </div>
                 <div>
-                  <div className="text-[9px] uppercase tracking-widest text-[#444] font-mono">Same-Day Probability</div>
+                  <div className="text-[9px] uppercase tracking-widest text-[#444] font-mono" title="How well the indicators line up — not a chance of winning">Setup score</div>
                   <div className={`font-mono font-bold text-sm ${
                     data.setup.confidence >= 75 ? 'text-green-400' :
                     data.setup.confidence >= 60 ? 'text-amber-400' : 'text-orange-400'
-                  }`}>{data.setup.confidence}%</div>
+                  }`}>{data.setup.confidence}/100</div>
                 </div>
               </div>
+
+              {/* How and when to enter, and what the board's own record says —
+                  the same instruction and evidence the board's card carries. */}
+              {(data.entryPlan || data.boardNote || data.trackRecord) && (
+                <div className="text-[11px] font-mono mb-3 space-y-1">
+                  {data.entryPlan && (
+                    <div className={data.entryPlan.type === 'missed' ? 'text-red-300'
+                                  : data.entryPlan.type === 'sessionClose' ? 'text-amber-300' : 'text-green-300'}>
+                      {data.entryPlan.type === 'missed' ? '✗ ' : data.entryPlan.type === 'sessionClose' ? '⏳ ' : '✓ '}{data.entryPlan.text}
+                    </div>
+                  )}
+                  {data.boardNote && <div className="text-amber-300">⏸ {data.boardNote}</div>}
+                  {data.trackRecord && <div className="text-[#888]">📊 {data.trackRecord.text}</div>}
+                </div>
+              )}
 
               {data.setup.trendStrengthLabel && (
                 <div className="text-[11px] font-mono mb-2 flex items-center gap-2 flex-wrap">
@@ -639,7 +673,7 @@ export default function AnalystPage() {
                     data.setup.trendStrength >= 0.5 ? 'bg-amber-500/10 border-amber-500/30 text-amber-400' :
                                                        'bg-red-500/10 border-red-500/30 text-red-400'
                   }`}>{data.setup.trendStrengthLabel}</span>
-                  <span className="text-[10px] text-[#666]">→ {data.setup.trendStrengthLabel === 'Very Strong' || data.setup.trendStrengthLabel === 'Strong' ? 'TPs scaled wider (let it run)' : 'TPs scaled tighter (cautious)'}</span>
+                  <span className="text-[10px] text-[#666]">→ {data.setup.trendStrengthLabel === 'Very Strong' || data.setup.trendStrengthLabel === 'Strong' ? 'target set wider' : 'target set tighter'}</span>
                 </div>
               )}
               {/* Only under the retired thirds plan, which is the only one with a tp0. */}
@@ -895,16 +929,18 @@ export default function AnalystPage() {
           {/* ── INVALIDATION TRIGGERS (explicit exit rules) ─────────────────── */}
           {data.invalidation?.length > 0 && (
             <div className="bg-[#0e0e0e] border-2 border-amber-500/30 rounded p-5">
-              <div className="text-[10px] uppercase tracking-widest text-amber-400 font-mono font-bold mb-1">🛑 Invalidation Triggers — Exit If ANY of These Happen</div>
-              <div className="text-[10px] text-[#444] font-mono mb-3">If any of these conditions are met, the trade premise is broken. Exit without second-guessing.</div>
+              <div className="text-[10px] uppercase tracking-widest text-amber-400 font-mono font-bold mb-1">🛑 Exit Plan — Stop, Target, Time</div>
+              <div className="text-[10px] text-[#555] font-mono mb-3">The plan every card is graded on. Warning signs below it are worth watching, but exiting on them has not been tested.</div>
               <ul className="space-y-2">
                 {data.invalidation.map((t, i) => (
                   <li key={i} className="flex items-start gap-2 text-[11px] font-mono">
                     <span className={`text-[10px] font-bold flex-shrink-0 px-1.5 py-0.5 rounded ${
                       t.severity === 'hard'   ? 'bg-red-500/20 text-red-300'    :
+                      t.severity === 'target' ? 'bg-green-500/20 text-green-300' :
+                      t.severity === 'time'   ? 'bg-blue-500/20 text-blue-300'   :
                       t.severity === 'medium' ? 'bg-amber-500/20 text-amber-300' :
-                                                 'bg-blue-500/20 text-blue-300'
-                    }`}>{t.severity === 'hard' ? 'HARD' : t.severity === 'medium' ? 'MED' : 'SOFT'}</span>
+                                                 'bg-[#1a1a1a] text-[#777]'
+                    }`}>{{ hard: 'STOP', target: 'TARGET', time: 'TIME', medium: 'MED', soft: 'SOFT' }[t.severity] || 'WATCH'}</span>
                     <span className="text-[#bbb] leading-relaxed">{t.text}</span>
                   </li>
                 ))}

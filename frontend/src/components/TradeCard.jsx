@@ -539,7 +539,9 @@ export default function TradeCard({ trade, type, isNew, accountSize = 10000, ris
                   the card asserted two different win rates at once. Only the
                   measured one, rendered below, is shown now. */}
               <span className="text-[9px] font-mono text-[#444]">
-                {trade.setupType.idealHold}
+                {/* The card's own estimate, not the pattern's fixed blurb, so the
+                    two hold times on one card cannot disagree. */}
+                {trade.expectedDays ? `about ${trade.expectedDays} session${trade.expectedDays === 1 ? '' : 's'}` : trade.setupType.idealHold}
               </span>
             </div>
             <p className="text-[10px] text-[#888] font-mono leading-snug">{trade.setupType.description}</p>

@@ -11,7 +11,7 @@ export function computeTradeGrade({ setup, review, reliability, mtfAlignment, ba
   const relScore = (reliability?.score || 0) * 0.4;
   score += relScore;
   breakdown.push({
-    factor: 'Reliability',
+    factor: 'Checklist',
     points: Math.round(relScore),
     max: 40,
     detail: `${reliability?.score || 0}/100 → ${reliability?.label || '–'}`
@@ -96,13 +96,17 @@ export function computeTradeGrade({ setup, review, reliability, mtfAlignment, ba
 
   // Convert score to letter grade
   let grade, label, color;
-  if (score >= 90)      { grade = 'A+'; label = 'Elite setup';        color = 'green'; }
-  else if (score >= 80) { grade = 'A';  label = 'Excellent setup';    color = 'green'; }
-  else if (score >= 70) { grade = 'B+'; label = 'Strong setup';       color = 'green'; }
-  else if (score >= 60) { grade = 'B';  label = 'Solid setup';        color = 'amber'; }
-  else if (score >= 50) { grade = 'C';  label = 'Mediocre setup';     color = 'amber'; }
-  else if (score >= 40) { grade = 'D';  label = 'Weak setup';         color = 'orange';}
-  else                  { grade = 'F';  label = 'Avoid';              color = 'red';   }
+  // Labelled for what it measures — how many checks line up — not for how the
+  // trade will go. "Elite setup" and "Avoid" read as forecasts, and none of the
+  // inputs predicted results on the tracked record (see CHECKLIST_NOTE in
+  // routes/analyst.js). Whether to take it is the verdict's job.
+  if (score >= 90)      { grade = 'A+'; label = 'Almost every check agrees'; color = 'green'; }
+  else if (score >= 80) { grade = 'A';  label = 'Nearly all checks agree';   color = 'green'; }
+  else if (score >= 70) { grade = 'B+'; label = 'Most checks agree';         color = 'green'; }
+  else if (score >= 60) { grade = 'B';  label = 'More agree than not';       color = 'amber'; }
+  else if (score >= 50) { grade = 'C';  label = 'Mixed';                     color = 'amber'; }
+  else if (score >= 40) { grade = 'D';  label = 'More disagree than agree';  color = 'orange';}
+  else                  { grade = 'F';  label = 'Most checks disagree';      color = 'red';   }
 
   return { grade, score, label, color, breakdown };
 }
