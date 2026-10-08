@@ -6,6 +6,10 @@
 # its ENTER NOW recommendations make money, waits on that record. These runs
 # wake the service and scan on a timetable instead.
 #
+# Off the hour on purpose. GitHub delays scheduled runs at the start of every
+# hour and drops some when busy. On :00/:30 and :15 only 2 of 18 stock scans a
+# day actually ran (measured 2026-10-06 to 10-08).
+#
 # Budget: about 190 of the workspace's 750 free Render hours a month (stocks
 # every 30 min through the US session on weekdays; crypto every 4 hours). Free
 # for a public repository. GitHub pauses scheduled workflows after 60 days with
@@ -14,8 +18,8 @@ name: Scheduled scans
 
 on:
   schedule:
-    - cron: '*/30 13-21 * * 1-5'   # US session, covering both EST and EDT (UTC)
-    - cron: '15 */4 * * *'         # crypto, around the clock
+    - cron: '7,37 13-21 * * 1-5'   # US session, covering both EST and EDT (UTC)
+    - cron: '23 */4 * * *'         # crypto, around the clock
   workflow_dispatch: {}
 
 jobs:
@@ -30,8 +34,8 @@ jobs:
             sleep 20
           done
       - name: Scan stocks
-        if: github.event.schedule != '15 */4 * * *'
+        if: github.event.schedule != '23 */4 * * *'
         run: curl -fsS --max-time 240 -o /dev/null -w "stocks scan HTTP %{http_code} in %{time_total}s\n" "https://lookout-jae6.onrender.com/api/scanner/scan?market=stocks"
       - name: Scan crypto
-        if: github.event.schedule != '*/30 13-21 * * 1-5'
+        if: github.event.schedule != '7,37 13-21 * * 1-5'
         run: curl -fsS --max-time 240 -o /dev/null -w "crypto scan HTTP %{http_code} in %{time_total}s\n" "https://lookout-jae6.onrender.com/api/scanner/scan?market=crypto"
